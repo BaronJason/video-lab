@@ -1,0 +1,131 @@
+/* 灰橙 —— 基于黑橙模板，深灰背景 + 橙色品牌强调 */
+html[data-skin="Gray_Orange"] {
+  /* 背景层：深灰（比黑橙更亮一档） */
+  --bg-base-default: #2B2B2E;
+  --bg-base-secondary: #333336;
+  --bg-base-tertiary: #3D3D40;
+  --bg-overlay-l1: rgba(255, 255, 255, 0.04);
+  --bg-overlay-l2: rgba(255, 255, 255, 0.08);
+  --bg-overlay-l3: rgba(255, 255, 255, 0.12);
+  --bg-overlay-l4: rgba(255, 255, 255, 0.16);
+  --bg-white: #2B2B2E;
+  --bg-menu: #333336;
+  --bg-tooltip: #404044;
+  --bg-invert: #F0F0F0;
+  --bg-invert-hover: #FFFFFF;
+  --bg-invert-active: #E0E0E0;
+  --bg-invert-disabled: rgba(240, 240, 240, 0.20);
+
+  /* 品牌色：橙色 */
+  --bg-brand: #FF6600;
+  --bg-brand-hover: #FF8533;
+  --bg-brand-active: #CC5200;
+  --bg-brand-disabled: rgba(255, 102, 0, 0.25);
+  --bg-brand-popup: rgba(255, 102, 0, 0.22);
+
+  /* 文字层：灰底亮度更高，次级文字提亮以保持可读 */
+  --text-default: #F0F0F0;
+  --text-default-hover: #FFFFFF;
+  --text-default-active: #FFFFFF;
+  --text-secondary: #B8B8B8;
+  --text-secondary-hover: #F0F0F0;
+  --text-secondary-active: #F0F0F0;
+  --text-tertiary: #858585;
+  --text-disabled: #656565;
+  --text-onbrand: #2B2B2E;
+  --text-onaccent: #2B2B2E;
+  --text-white: #F0F0F0;
+  --text-brand: #FF6600;
+  --text-brand-hover: #FF8533;
+
+  /* 图标层 */
+  --icon-default: #F0F0F0;
+  --icon-default-hover: #FFFFFF;
+  --icon-default-active: #FFFFFF;
+  --icon-secondary: #B8B8B8;
+  --icon-secondary-hover: #F0F0F0;
+  --icon-secondary-active: #F0F0F0;
+  --icon-tertiary: #858585;
+  --icon-disabled: #656565;
+  --icon-onbrand: #2B2B2E;
+  --icon-onaccent: #2B2B2E;
+  --icon-white: #F0F0F0;
+  --icon-brand: #FF6600;
+  --icon-brand-hover: #FF8533;
+
+  /* 边框层：灰底上适当提亮以保持分隔感 */
+  --border-neutral-l1: rgba(255, 255, 255, 0.10);
+  --border-neutral-l2: rgba(255, 255, 255, 0.14);
+  --border-neutral-l3: rgba(255, 255, 255, 0.26);
+  --border-contrast: #F0F0F0;
+  --border-brand: #FF6600;
+
+  /* 强调色：以橙色为主 */
+  --accent-coral: #FF6B45;
+  --accent-amber: #FF9900;
+  --accent-cyan: #FF8533;
+
+  /* 状态色 */
+  --status-primary-default: #FF6600;
+  --status-primary-hover: #FF8533;
+  --status-primary-active: #CC5200;
+  --status-primary-surface-l1: rgba(255, 102, 0, 0.12);
+  --status-primary-surface-l2: rgba(255, 102, 0, 0.18);
+  --status-primary-surface-l3: rgba(255, 102, 0, 0.36);
+
+  /* 品牌色阶（橙色系） */
+  --brand-50: #FFF4EB;
+  --brand-100: #FFE5D0;
+  --brand-200: #FFC9A3;
+  --brand-300: #FFA06B;
+  --brand-400: #FF7A3D;
+  --brand-500: #FF6600;
+  --brand-600: #E55A00;
+  --brand-700: #B34400;
+  --brand-800: #7A2E00;
+  --brand-900: #421900;
+  --brand-950: #1F0B00;
+
+  /* 灰阶：以灰底为基准重新分布 */
+  --brand-grey-50: #1E1E20;
+  --brand-grey-100: #242426;
+  --brand-grey-200: #2E2E30;
+  --brand-grey-300: #3D3D40;
+  --brand-grey-400: #525254;
+  --brand-grey-500: #737376;
+  --brand-grey-600: #A0A0A2;
+  --brand-grey-700: #C7C7C9;
+  --brand-grey-800: #E0E0E0;
+  --brand-grey-900: #F0F0F0;
+  --brand-grey-950: #FAFAFA;
+
+  /* 可视化图表 */
+  --viz-series-brand: var(--bg-brand);
+  --viz-series-brand-soft: var(--brand-300);
+  --viz-series-brand-mid: var(--brand-500);
+  --viz-series-brand-deep: var(--brand-700);
+  --viz-series-neutral: var(--brand-grey-500);
+  --viz-series-coral: #FF6B45;
+  --viz-series-amber: #FF9900;
+  --viz-ui-bg-chart: var(--bg-base-secondary);
+  --viz-ui-bg-tooltip: var(--bg-tooltip);
+  --viz-ui-chart-title: var(--text-default);
+  --viz-ui-chart-subtitle: var(--text-secondary);
+  --viz-ui-chart-axis: var(--border-neutral-l2);
+  --viz-ui-chart-tick: var(--text-secondary);
+  --viz-ui-legend-label: var(--text-secondary);
+  --viz-ui-legend-value: var(--text-default);
+
+  /* 代码高亮：灰底上保持对比 */
+  --code-text: #F0F0F0;
+  --code-doc: #9AABB8;
+  --code-link: #FF8533;
+  --code-number: #FF6B9D;
+  --code-action: #C084FC;
+  --code-instruction: #D4A5FF;
+  --code-function: #FF7A3D;
+  --code-constant: #6B9FFF;
+  --code-parameter: #7ED957;
+  --code-attribute: #FFB347;
+  --code-tag: #FF5C5C;
+}

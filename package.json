@@ -1,0 +1,41 @@
+{
+  "name": "video-lab",
+  "version": "1.0",
+  "description": "Video Lab — 批量成片项目管理",
+  "main": "main.js",
+  "scripts": {
+    "start": "node run.js",
+    "dist": "electron-builder --win portable --x64"
+  },
+  "build": {
+    "appId": "com.videolab.manager",
+    "productName": "Video Lab",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "backend.js",
+      "frontend/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "${productName}.exe",
+      "signAndEditExecutable": false
+    },
+    "portable": {
+      "artifactName": "${productName}.exe"
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  }
+}

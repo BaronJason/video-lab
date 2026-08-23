@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-skin="white_blue">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Video Lab</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="skins/white_blue.css">
+  <link rel="stylesheet" href="skins/Black_Orange.css">
+  <link rel="stylesheet" href="skins/Gray_Orange.css">
+</head>
+<body>
+  <!-- 工作路径扫描时的载入遮罩 -->
+  <div id="busyOverlay" class="busy-overlay" style="display:none">
+    <div class="busy-box">
+      <div class="busy-spinner"></div>
+      <div id="busyText" class="busy-text">正在检测…</div>
+    </div>
+  </div>
+  <div class="app-shell">
+
+    <!-- ═══ Main Content ═══ -->
+    <div class="main-content">
+
+      <!-- Left Sidebar -->
+      <div class="sidebar">
+        <div class="sidebar__header">
+          <span class="sidebar__header-title">项目列表</span>
+          <button class="sidebar__recheck" id="btnRecheckProject" title="重新检测项目列表">
+            <i data-icon="refresh-cw" data-size="12"></i>重新检测
+          </button>
+          <div class="sidebar__sort">
+            <button class="sort-toggle sort-toggle--active" id="btnSortName" title="按名称排序">名称</button>
+            <button class="sort-toggle" id="btnSortTime" title="按时间排序">时间</button>
+          </div>
+        </div>
+        <div class="sidebar__search">
+          <div class="ds-input">
+            <i data-icon="search" data-size="14"></i>
+            <input type="text" placeholder="搜索配置名..." id="searchInput">
+          </div>
+        </div>
+        <div class="sidebar__tree-wrap">
+          <div class="sidebar__az-index" id="azIndexBar" title="拖动字母快速跳转"></div>
+          <div class="sidebar__tree" id="sidebarTree"></div>
+        </div>
+        <div class="sidebar__actions">
+          <button class="btn-full btn-open-file" id="btnOpenFile">
+            <i data-icon="file" data-size="14"></i>打开文件
+          </button>
+          <button class="btn-full btn-open-folder" id="btnOpenFolder">
+            <i data-icon="folder-open" data-size="14"></i>打开文件夹
+          </button>
+          <button class="btn-full btn-open-folder" id="btnChoosePath" title="选择工作路径">
+            <i data-icon="folder" data-size="14"></i>选择路径
+          </button>
+        </div>
+      </div>
+
+      <!-- 侧栏宽度调节 -->
+      <div class="workspace-resizer" id="workspaceResizer" title="拖拽调整项目列表宽度"></div>
+
+      <!-- Workspace -->
+      <div class="workspace">
+        <div class="workspace-body">
+
+          <!-- Center Panel -->
+          <div class="center-panel" id="centerPanel">
+            <div class="center-global-search" id="centerGlobalSearch">
+              <div class="ds-input">
+                <i data-icon="search" data-size="14"></i>
+                <input type="text" placeholder="搜索成片名..." id="logSearchInput">
+              </div>
+            </div>
+            <div class="center-top" id="centerTop">
+              <div class="center-top__header">
+                <span class="center-top__title">日期分支</span>
+                <div class="center-top__toggles">
+                  <button class="mode-toggle mode-toggle--active" data-mode="filelist" id="modeFilelist">
+                    <i data-icon="list" data-size="12"></i>配置列表
+                  </button>
+                  <button class="mode-toggle" data-mode="log" id="modeLog">
+                    <i data-icon="scroll-text" data-size="12"></i>日志
+                  </button>
+                </div>
+              </div>
+              <div class="center-top__dates" id="dateBranches"></div>
+            </div>
+            <div class="center-bottom" id="centerBottom"></div>
+          </div>
+
+          <!-- 预览宽度调节 -->
+          <div class="workspace-resizer" id="workspaceVResizer" title="拖拽调整预览宽度"></div>
+
+          <!-- Right Panel: 预览 -->
+          <div class="right-panel" id="rightPanel">
+            <div class="right-panel__header">
+              <div class="right-panel__toggle">
+                <button class="preview-toggle preview-toggle--active" id="btnPreviewModified" title="显示修改后的 TXT 预览">
+                  <i data-icon="save" data-size="12"></i>修改后
+                </button>
+                <button class="preview-toggle" id="btnPreviewRaw" title="显示原始 TXT 内容">
+                  <i data-icon="file-text" data-size="12"></i>原始
+                </button>
+              </div>
+              <div class="right-panel__header-right">
+                <button class="right-panel__edit" id="btnExternalEdit" title="外部编辑">
+                  <i data-icon="pencil" data-size="13"></i>外部编辑
+                </button>
+              </div>
+            </div>
+            <div class="right-panel__subtitle" id="rightPanelSubtitle">请选择一个日期分支</div>
+            <div class="right-panel__content" id="rightPanelContent">
+              <div class="right-panel__line-numbers" id="rightLineNumbers"></div>
+              <div class="right-panel__code" id="rightCode"></div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- 配置栏：横跨除左侧项目列表外的整个底部 -->
+        <div class="config-bar" id="configBar"></div>
+      </div>
+
+    </div>
+
+    <!-- ═══ Status Bar ═══ -->
+    <div class="status-bar">
+      <span class="status-bar__left">
+        <label class="skin-select" title="切换皮肤">
+          <select id="skinSelect"></select>
+        </label>
+        <span id="statusLeft">就绪</span>
+      </span>
+      <span class="status-bar__right">
+        <button class="status-bar__tasks-btn" id="btnOpenTasks" title="打开任务列表，查看脚本实时输出">
+          <i data-icon="list" data-size="12"></i>任务<span class="status-bar__tasks-count" id="tasksCount" style="display:none"></span>
+        </button>
+        <span id="envWarnMark" class="status-bar__envwarn"></span>
+      </span>
+    </div>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

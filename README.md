@@ -10,8 +10,6 @@
 
 [![版本](https://img.shields.io/badge/版本-1.1-0078D7?style=flat-square)](https://github.com/BaronJason/video-lab/releases)
 ![Platform](https://img.shields.io/badge/平台-Windows%2010%2F11-00A4EF?style=flat-square)
-![Electron](https://img.shields.io/badge/Electron-33-47848F?style=flat-square)
-![Node](https://img.shields.io/badge/Node-Node.js%2018+-339933?style=flat-square)
 ![PowerShell](https://img.shields.io/badge/运行时-PowerShell%207-5391FE?style=flat-square)
 ![FFmpeg](https://img.shields.io/badge/FFmpeg-必需-FF7F2A?style=flat-square)
 

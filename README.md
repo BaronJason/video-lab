@@ -8,7 +8,7 @@
 
 <br>
 
-[![Release](https://img.shields.io/github/v/release/BaronJason/video-lab?style=flat-square&label=版本&color=0078D7)](https://github.com/BaronJason/video-lab/releases)
+[![Release](https://img.shields.io/github/v/tag/BaronJason/video-lab?sort=date&style=flat-square&label=版本&color=0078D7)](https://github.com/BaronJason/video-lab/releases)
 ![Platform](https://img.shields.io/badge/平台-Windows%2010%2F11-00A4EF?style=flat-square)
 ![Electron](https://img.shields.io/badge/Electron-33-47848F?style=flat-square)
 ![Node](https://img.shields.io/badge/Node-Node.js%2018+-339933?style=flat-square)
@@ -89,11 +89,3 @@ npm run dist     # 打包
 ## 更新日志
 
 详见 [CHANGELOG.md](./CHANGELOG.md)。
-
----
-
-<div align="center">
-
-Made with ❤️ · Windows 11
-
-</div>

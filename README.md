@@ -1,6 +1,6 @@
 <div align="center">
 
-# <img src="app-icon.png" width="30" height="30" style="vertical-align:-6px"> Video Lab
+# <img src="icon/app-icon.png" width="30" height="30" style="vertical-align:-6px"> Video Lab
 
 **批量成片项目管理器 · Electron 桌面应用**
 

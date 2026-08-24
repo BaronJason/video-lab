@@ -8,7 +8,9 @@ const os = require('os');
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu, Tray, nativeImage } = require('electron');
 const { Api, DEFAULT_CONFIG } = require('./backend');
 
-// 单实例锁：同一时刻仅允许一个主进程实例运行（跨盘共享同一 userData 的锁），重复打开时唤出现有实例主窗口
+// 单实例锁：统一 userData 到固定全局路径（跨盘 / 开发版与打包版共享同一把锁），
+// 使"同一时刻仅允许一个主进程实例"真正生效；重复打开时唤出现有实例主窗口
+app.setPath('userData', path.join(os.homedir(), '.video-lab'));
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();

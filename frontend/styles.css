@@ -1906,13 +1906,13 @@ body {
   transition: background 0.12s ease;
 }
 .mode-toggle:hover { background: var(--brand-600); color: var(--text-onbrand); border-color: var(--brand-600); }
-.mode-toggle--active:hover { background: var(--bg-brand); color: var(--text-onbrand); border-color: var(--bg-brand); }
+.mode-toggle--active:hover { background: var(--brand-600); color: var(--text-onbrand); border-color: var(--brand-600); }
 .mode-toggle:disabled { opacity: .5; cursor: not-allowed; color: var(--text-disabled); background: var(--bg-base-secondary); }
 .mode-toggle:disabled:hover { background: var(--bg-base-secondary); }
 .mode-toggle--active {
-  background: var(--bg-brand);
+  background: var(--brand-500);
   color: var(--text-onbrand);
-  border-color: var(--bg-brand);
+  border-color: var(--brand-500);
 }
 .center-top__dates {
   flex: 1;
@@ -2631,7 +2631,6 @@ body {
   border-color: var(--brand-500);
   background: var(--brand-100);
 }
-.log-log-configbar__check,
 .log-entry__check {
   width: 14px;
   height: 14px;
@@ -2639,8 +2638,6 @@ body {
   accent-color: var(--brand-500);
   cursor: pointer;
 }
-/* 选择模式下片段右侧复刻按钮保留，允许单独复刻单个成片 */
-
 /* Log mode */
 .log-list {
   flex: 1;

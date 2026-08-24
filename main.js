@@ -8,6 +8,14 @@ const os = require('os');
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu, Tray, nativeImage } = require('electron');
 const { Api, DEFAULT_CONFIG } = require('./backend');
 
+// 单实例锁：同一时刻仅允许一个主进程实例运行（跨盘共享同一 userData 的锁），重复打开时唤出现有实例主窗口
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => showMainWindow());
+}
+
 try {
   const rootDir = path.dirname(process.execPath);
   const bins = [path.join(rootDir, 'tools', 'pwsh'), path.join(rootDir, 'tools', 'ffmpeg')].filter((d) => fs.existsSync(d));
@@ -54,18 +62,20 @@ const cacheDir = (() => {
   try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
   return dir;
 })();
-// 两个缓存统一命名(下划线)且统一存放于 Cache 子文件夹：
+// 三个缓存统一命名(下划线)且统一存放于 Cache 子文件夹：
 //   scan_cache.json   —— TXT 指纹缓存
 //   video_cache.json  —— 预检测(ffprobe)缓存
+//   log_cache.json    —— 日志 txt 缓存（刷新配置时一并收集）
 const scanCachePath = path.join(cacheDir, app.isPackaged ? 'scan_cache.json' : 'video_lab_scan_cache.json');
 const videoCachePath = path.join(cacheDir, 'video_cache.json');
+const logCachePath = path.join(cacheDir, app.isPackaged ? 'log_cache.json' : 'video_lab_log_cache.json');
 // 迁移旧 scan 缓存命名（同目录内把旧的连字符命名改为下划线）；不含脚本目录缓存——脚本目录属用户个人数据，应用绝不读写
 (function migrateOldScanCache() {
   const oldScan = path.join(cacheDir, app.isPackaged ? 'scan-cache.json' : 'video-lab-scan-cache.json');
   if (oldScan === scanCachePath || !fs.existsSync(oldScan) || fs.existsSync(scanCachePath)) return;
   try { fs.copyFileSync(oldScan, scanCachePath); fs.unlinkSync(oldScan); } catch (e) {}
 })();
-const api = new Api(root, config, scanCachePath, videoCachePath);
+const api = new Api(root, config, scanCachePath, videoCachePath, logCachePath);
 
 // 主窗口与任务窗口：主窗口仅在原生模态对话框/载入遮罩时被禁用；任务列表窗口不随父窗口禁用
 let mainWin = null;
@@ -124,7 +134,8 @@ function registerIpc() {
   ipcMain.handle('reset_precheck', (e) => { const sender = e.sender; return api.resetPrecheck((s) => { try { sender.send('reset_progress', s); } catch (err) {} }); });
   ipcMain.handle('list_logs', (e, project, name, versionPath) => api.listLogs(project, name, versionPath));
   ipcMain.handle('search_logs', (e, query) => api.searchLogs(query));
-  ipcMain.handle('get_log_content', (e, fromPath) => api.logContent(fromPath));
+  ipcMain.handle('get_log_content', (e, fromPath, configName) => api.logContent(fromPath, configName));
+  ipcMain.handle('list_log_files', (e, fromPath, configName) => api.listLogFiles(fromPath, configName));
   ipcMain.handle('check_exists', (e, paths) => api.checkExists(paths));
   ipcMain.handle('run_batch', (e, p, count, group) => api.runBatch(p, count, group));
   ipcMain.handle('run_replica', (e, logPath, mode) => api.runReplica(logPath, mode));

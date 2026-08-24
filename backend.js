@@ -16,6 +16,10 @@ const EXCLUDED_TOP_DIRS = new Set([
 
 // 日志文件名特征（用于区分配置与日志）
 const LOG_NAME_RE = /(拼接日志|复刻日志)/;
+// 复刻模式名称，按 视频复刻.ps1 的 mode 映射；两种模式在侧栏各作一个配置名，仅含日志无配置
+const REPLICA_MODES = ['原片复刻', '去重复刻'];
+const REPLICA_PROJECT = '复刻'; // 侧栏中的虚拟项目名（仅含日志，无配置）
+const REPLICA_MARK = 'REPLICA:'; // 复刻项目虚拟版本的 path 前缀，用于路由 list_logs / logContent
 
 // 默认配置
 const DEFAULT_CONFIG = {
@@ -97,12 +101,38 @@ function walkFiles(dir) {
   return out;
 }
 
+// 按内容 hash 去重（保留排序后的第一个），用于同类别（成片内/成片外）配置 txt 合并
+function dedupeByHash(list) {
+  const seen = new Set();
+  const out = [];
+  for (const it of list.slice().sort((a, b) => a.full.localeCompare(b.full))) {
+    if (seen.has(it.hash)) continue;
+    seen.add(it.hash);
+    out.push(it);
+  }
+  return out;
+}
+
+// 按「成片文件夹」目录去重：每个成片文件夹取一份配置。目录名含时间，升序即旧→新
+function dedupeByDir(list) {
+  const seen = new Set();
+  const out = [];
+  for (const it of list.slice().sort((a, b) => a.full.localeCompare(b.full))) {
+    const d = path.dirname(it.full);
+    if (seen.has(d)) continue;
+    seen.add(d);
+    out.push(it);
+  }
+  return out;
+}
+
 class Api {
-  constructor(root, config, cachePath, videoCachePath) {
+  constructor(root, config, cachePath, videoCachePath, logCachePath) {
     this.root = root;
     this.config = Object.assign({}, DEFAULT_CONFIG, config || {});
     this.cachePath = cachePath || '';
     this.videoCachePath = videoCachePath || '';
+    this.logCachePath = logCachePath || '';
     // ffprobe 探测并发上限：保持低值，避免占用过多 CPU/IO 拖慢整机
     this.probeConcurrency = 4;
     this._videoCache = null;
@@ -115,6 +145,9 @@ class Api {
     this._scanLoadedRoot = '';
     this._scanDirty = false;
     this._logsEntryCache = null;
+    // 日志 txt 缓存：刷新配置时一次性收集全部日志，供日期分支/对应关系直接使用
+    this._logCache = null;
+    this._logCacheRoot = '';
     // 任务管理：实时捕获 ps1 输出并推送，支持多任务与停止排队任务
     this.tasks = new Map();
     this.taskSeq = 0;
@@ -149,6 +182,8 @@ class Api {
     this._projectsCache = null;
     this._versionsCache.clear();
     this._logsEntryCache = null;
+    this._logCache = null;
+    this._logCacheRoot = '';
   }
 
   // ── 扫描指纹缓存：文件 (mtime,size) 未变则复用已算的 hash，变了才重读 ──
@@ -172,6 +207,63 @@ class Api {
     const entries = {};
     for (const [k, v] of this._scanCache) entries[k] = v;
     try { fs.writeFileSync(this.cachePath, JSON.stringify({ entries }), 'utf-8'); } catch (e) {}
+  }
+
+  // ── 日志 txt 缓存：与配置缓存分开独立文件，刷新配置时一并收集 ──
+  _loadLogCache() {
+    if (this._logCacheRoot === this.root || !this.logCachePath) return;
+    this._logCacheRoot = this.root;
+    this._logCache = { files: [] };
+    try {
+      const data = JSON.parse(fs.readFileSync(this.logCachePath, 'utf-8'));
+      if (data && Array.isArray(data.files) && data.root === this.root) this._logCache.files = data.files;
+    } catch (e) {}
+  }
+
+  _saveLogCache() {
+    if (!this.logCachePath) return;
+    try { fs.writeFileSync(this.logCachePath, JSON.stringify({ root: this.root, files: this._logCache.files }), 'utf-8'); } catch (e) {}
+  }
+
+  // 一次性收集根目录下所有非复刻日志 txt（刷新时写入日志缓存）
+  // 返回 { files:[{ project, name, path, date, config }] }
+  // 归属规则：date 取文件路径中「最近的 4 位 MMdd 目录」（日志绝不会存在于别的日期文件夹），
+  //           project 取路径第一级目录（即左侧项目名）。配置与日志都按此规则归一后匹配。
+  _collectLogFiles(force = false) {
+    if (!force && this._logCache && this._logCacheRoot === this.root) return this._logCache;
+    this._loadLogCache();
+    const files = [];
+    if (this.root && fs.existsSync(this.root)) {
+      const skip = new Set(EXCLUDED_TOP_DIRS);
+      for (const full of walkFiles(this.root)) {
+        const base = path.basename(full);
+        if (!base.toLowerCase().endsWith('.txt')) continue;
+        if (!LOG_NAME_RE.test(base)) continue;
+        const config = this._configNameFromLog(full);
+        if (!config) continue; // 复刻/无归属日志单独处理
+        const rel = path.relative(this.root, full).split(path.sep);
+        if (skip.has(rel[0])) continue;
+        files.push({ project: rel[0], name: base, path: full, date: this._dateBranchOf(full), config });
+      }
+    }
+    this._logCache = { files };
+    this._logCacheRoot = this.root;
+    this._saveLogCache();
+    return this._logCache;
+  }
+
+  // 文件所属日期分支：取相对根目录各路径段中「最近的 4 位 MMdd 目录」，否则返回空串
+  _dateBranchOf(full) {
+    const rel = path.relative(this.root, full).split(path.sep);
+    let d = '';
+    for (const seg of rel) if (/^\d{4}$/.test(seg)) d = seg;
+    return d;
+  }
+
+  // 文件所属项目：取相对根目录的第一段目录名
+  _projectOf(p) {
+    try { return path.relative(this.root, path.resolve(String(p))).split(path.sep)[0]; }
+    catch (e) { return ''; }
   }
 
   _scanKey(full) { return this.root + '\u0000' + full; }
@@ -232,6 +324,7 @@ class Api {
   listProjects(force = false) {
     if (force) this._invalidateCaches();
     if (!force && this._projectsCache) return this._projectsCache;
+    this._collectLogFiles(); // 刷新配置时一并收集日志 txt 缓存
     const data = this._buildProjectsData();
     this._projectsCache = data;
     return data;
@@ -259,7 +352,18 @@ class Api {
       projects.push({ name: path.basename(pdir), mtime, txts });
     }
     projects.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+    // 追加“复刻”虚拟项目：其下两个配置名对应两种复刻模式，仅含日志无配置
+    projects.push(this._buildReplicaProject());
     return projects;
+  }
+
+  _buildReplicaProject() {
+    const txts = REPLICA_MODES.map((mode) => {
+      const files = this._replicaLogFiles(mode);
+      const latest = files.length ? path.basename(files[files.length - 1]).slice(0, 4) : '';
+      return { name: mode, latest, count: files.length, dup: false, replica: true };
+    });
+    return { name: REPLICA_PROJECT, mtime: 0, txts, replica: true };
   }
 
   _dupNames() {
@@ -281,8 +385,23 @@ class Api {
     const key = this.root + '\u0000' + project + '\u0000' + name;
     if (this._versionsCache.has(key)) return this._versionsCache.get(key);
     const versions = this._buildVersions(pdir, name);
+    // 每版本是否有可跳日志：配对锚点是「成片文件夹」
+    //   - 成片内配置：仅当同一成片文件夹内存在对应日志才可跳
+    //   - 外部(label含*)配置：当日有任何日志即可跳（多成片跳 -1、单成片跳唯一）
+    const logs = this._collectLogFiles().files;
+    versions.forEach((v) => { v.hasLog = this._versionHasLog(v, project, name, logs); });
     this._versionsCache.set(key, versions);
     return versions;
+  }
+
+  _versionHasLog(v, project, name, logs) {
+    const d = String(v.label || '').slice(0, 4);
+    if (!/^\d{4}$/.test(d)) return false;
+    const match = (f) => f.project === project && f.config === name && f.date === d;
+    if (v.isExternal) return logs.some(match);
+    // 成片内：必须与配置位于同一成片文件夹的日志才能跳
+    const cfgDir = path.dirname(v.path);
+    return logs.some((f) => match(f) && path.dirname(f.path) === cfgDir);
   }
 
   _buildVersions(projectDir, name) {
@@ -314,26 +433,18 @@ class Api {
     const labels = [...groups.keys()].sort((a, b) => compareDateSortKey(b, a));
     for (const label of labels) {
       const g = groups.get(label);
-      const base = g.source;
-      if (base) {
-        versions.push({ label, path: base.full });
-        let extraIdx = 1;
-        for (const c of g.copies.slice().sort((a, b) => a.full.localeCompare(b.full))) {
-          if (c.hash === base.hash) continue;
-          versions.push({ label: `${label}-${extraIdx}`, path: c.full });
-          extraIdx++;
-        }
-      } else if (g.copies.length) {
-        const seen = new Set();
-        let extraIdx = 1;
-        for (const c of g.copies.slice().sort((a, b) => a.full.localeCompare(b.full))) {
-          if (seen.has(c.hash)) continue;
-          seen.add(c.hash);
-          if (extraIdx === 1) versions.push({ label, path: c.full });
-          else versions.push({ label: `${label}-${extraIdx - 1}`, path: c.full });
-          extraIdx++;
-        }
+      // 同一日期分支下，按「成片文件夹」去重（每夹一份配置，目录含时间，升序即旧→新）：
+      //   - 多个成片文件夹 → 全部序号化，最旧 = <MMdd>-1，依次 -2…（无无后缀正本）
+      //   - 单个成片文件夹 → 无后缀正本 <MMdd>
+      //   - 成片文件夹外的单独配置 → <MMdd>*（isExternal）
+      const chengpian = dedupeByDir(g.copies);
+      const outside = g.source ? [g.source] : [];
+      if (chengpian.length > 1) {
+        chengpian.forEach((c, i) => versions.push({ label: `${label}-${i + 1}`, path: c.full, isExternal: false }));
+      } else if (chengpian.length === 1) {
+        versions.push({ label, path: chengpian[0].full, isExternal: false });
       }
+      outside.forEach((s) => versions.push({ label: `${label}*`, path: s.full, isExternal: true }));
     }
     versions.forEach((v, i) => { v.is_latest = i === 0; });
     return versions;
@@ -662,8 +773,60 @@ class Api {
     return entries;
   }
 
+  // 从日志文件名提取其所归属的配置名（批量拼接日志形如 MMdd-HH时MM分-配置名-拼接日志.txt）
+  _configNameFromLog(logPath) {
+    const m = /^\d{4}-\d+时\d+分-(.+)-(?:拼接|复刻)日志\.txt$/i.exec(path.basename(logPath || ''));
+    return m ? m[1].trim() : '';
+  }
+
+  // 收集根目录下所有属于某复刻模式的日志文件（命名形如 MMdd-模式名日志.txt）
+  _replicaLogFiles(modeName) {
+    const esc = String(modeName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pat = new RegExp('^\\d{4}-' + esc + '日志\\.txt$');
+    const out = [];
+    if (!this.root || !fs.existsSync(this.root)) return out;
+    for (const full of walkFiles(this.root)) {
+      if (!path.basename(full).toLowerCase().endsWith('.txt')) continue;
+      if (pat.test(path.basename(full))) out.push(full);
+    }
+    return out.sort();
+  }
+
+  _replicaLogs(modeName) {
+    let entries = [];
+    for (const lp of this._replicaLogFiles(modeName)) entries = entries.concat(this._parseLog(lp));
+    return entries;
+  }
+
+  // 复刻模式对应的完整日志行内容（与 logContent 同结构，便于右侧继续跳转高亮）
+  _replicaLogContent(modeName) {
+    const files = []; const entries = []; let running = 1;
+    for (const lp of this._replicaLogFiles(modeName)) {
+      let text;
+      try { text = readText(lp); } catch (e) { continue; }
+      const lines = text.split(/\r?\n/);
+      files.push({ path: lp, name: path.basename(lp), lines });
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].trim() !== '使用片段列表：') continue;
+        if (i < 1) continue;
+        let name = lines[i - 1].trim();
+        const m = /第\s*\d+\s*个成片\s*[：:]\s*(.+?)\s*$/.exec(name);
+        if (m) name = m[1].trim().replace(/=+$/, '').trim();
+        entries.push({ video: name, logPath: lp, lineStart: running + i });
+      }
+      running += lines.length;
+    }
+    return { files, entries };
+  }
+
   listLogs(project, name, versionPath) {
-    return this._collectLogEntries(path.dirname(path.resolve(versionPath)));
+    if (versionPath && String(versionPath).startsWith(REPLICA_MARK)) {
+      return this._replicaLogs(String(versionPath).slice(REPLICA_MARK.length));
+    }
+    const all = this._collectLogEntries(path.dirname(path.resolve(versionPath)));
+    const target = String(name == null ? '' : name).trim();
+    if (!target) return all;
+    return all.filter((e) => this._configNameFromLog(e.log_path) === target);
   }
 
   _logsForTxt(txtFull) {
@@ -707,9 +870,30 @@ class Api {
     return out;
   }
 
-  // 返回某配置目录下所有日志 txt 的完整行内容，以及每个成片对应的全局行号（跨文件累加，1 基）
-  logContent(fromPath) {
+  // 返回某配置对应的日志文件列表（日志模式下日期分支使用）
+  // 与配置同一判定规则：取 fromPath(配置) 路径中最近的 4 位 MMdd 目录作为日期分支，日志按同项目+同日期+同名匹配
+  listLogFiles(fromPath, configName) {
+    if (fromPath && String(fromPath).startsWith(REPLICA_MARK)) {
+      const mode = String(fromPath).slice(REPLICA_MARK.length);
+      return this._replicaLogFiles(mode).map((f) => ({ path: f, name: path.basename(f), date: path.basename(f).slice(0, 4) }));
+    }
+    // 使用刷新时写入的日志缓存，按项目 + 日期分支 + 配置名过滤
+    const project = this._projectOf(fromPath);
+    const date = this._dateBranchOf(fromPath);
+    const target = String(configName == null ? '' : configName).trim();
+    const files = this._collectLogFiles().files
+      .filter((f) => f.project === project && f.date === date && (!target || f.config === target))
+      .map((f) => ({ path: f.path, name: f.name, date: f.date }));
+    files.sort((a, b) => (b.date.localeCompare(a.date) || a.name.localeCompare(b.name)));
+    return files;
+  }
+
+  logContent(fromPath, configName) {
+    if (fromPath && String(fromPath).startsWith(REPLICA_MARK)) {
+      return this._replicaLogContent(String(fromPath).slice(REPLICA_MARK.length));
+    }
     const baseDir = path.dirname(path.resolve(fromPath));
+    const target = String(configName == null ? '' : configName).trim();
     const candidates = new Set();
     try {
       for (const f of fs.readdirSync(baseDir)) {
@@ -727,6 +911,7 @@ class Api {
     const entries = [];
     let running = 1;
     for (const lp of [...candidates].sort()) {
+      if (target && this._configNameFromLog(lp) !== target) continue;
       let text;
       try { text = readText(lp); } catch (e) { continue; }
       const lines = text.split(/\r?\n/);

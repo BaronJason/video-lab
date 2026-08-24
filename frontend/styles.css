@@ -1504,6 +1504,7 @@ body {
   overflow: hidden;
 }
 .config-bar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--spacer-12);
@@ -1625,6 +1626,7 @@ body {
 }
 .sidebar__tree {
   flex: 1;
+  position: relative;
   overflow-y: auto;
   overflow-x: hidden;
   padding: var(--spacer-4) 0;
@@ -1686,6 +1688,14 @@ body {
   margin-bottom: var(--spacer-4);
 }
 .tree-project__name:hover { background: var(--bg-base-tertiary); }
+/* 配置展开时项目名置顶固定，切换项目时无需大幅滚动；z-index 低于 azbar 高亮，避免互相遮挡 */
+.tree-project__name--sticky {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-base-secondary);
+  box-shadow: 0 1px 0 0 var(--border-neutral-l1);
+}
 .tree-project__name .tree-arrow {
   width: var(--icon-size-16);
   height: var(--icon-size-16);
@@ -1895,7 +1905,10 @@ body {
   line-height: var(--body-md-strong-line-height);
   transition: background 0.12s ease;
 }
-.mode-toggle:hover { background: var(--bg-overlay-l2); }
+.mode-toggle:hover { background: var(--brand-600); color: var(--text-onbrand); border-color: var(--brand-600); }
+.mode-toggle--active:hover { background: var(--bg-brand); color: var(--text-onbrand); border-color: var(--bg-brand); }
+.mode-toggle:disabled { opacity: .5; cursor: not-allowed; color: var(--text-disabled); background: var(--bg-base-secondary); }
+.mode-toggle:disabled:hover { background: var(--bg-base-secondary); }
 .mode-toggle--active {
   background: var(--bg-brand);
   color: var(--text-onbrand);
@@ -2510,6 +2523,123 @@ body {
   font-weight: var(--font-weight-strong);
   white-space: nowrap;
 }
+
+/* ── 日志模式：批量复刻成片配置栏 ── */
+.config-bar__left--log {
+  gap: var(--spacer-10);
+}
+/* 日志模式：完全复刻/去重复刻按钮组，右对齐至软件最右下角 */
+.config-bar__replica {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-8);
+  margin-left: auto;
+}
+/* 选择模式开关：手机 App 风格动画切换 */
+.log-configbar__switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-6);
+  cursor: pointer;
+  user-select: none;
+  flex-shrink: 0;
+}
+.log-configbar__switch-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.log-configbar__switch-track {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
+  background: var(--bg-overlay-l3);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-full);
+  transition: background 0.25s ease, border-color 0.25s ease;
+}
+.log-configbar__switch-thumb {
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform 0.28s cubic-bezier(0.68, -0.35, 0.3, 1.45);
+}
+.log-configbar__switch-input:checked + .log-configbar__switch-track {
+  background: var(--brand-500);
+  border-color: var(--brand-600);
+}
+.log-configbar__switch-input:checked + .log-configbar__switch-track .log-configbar__switch-thumb {
+  transform: translateY(-50%) translateX(16px);
+}
+.log-configbar__switch-text {
+  font-size: var(--body-md-font-size);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.config-btn--replica-full {
+  background: var(--status-success-default);
+  color: var(--text-onaccent);
+}
+.config-btn--replica-full:hover {
+  background: var(--status-success-hover);
+}
+.config-btn--replica-dedup {
+  background: var(--status-warning-default);
+  color: var(--text-onaccent);
+}
+.config-btn--replica-dedup:hover {
+  background: var(--status-warning-hover);
+}
+/* 日志模式：全选/已选/选择按钮区 */
+.log-configbar__selall {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-6);
+  font-size: var(--body-md-font-size);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  user-select: none;
+}
+.log-configbar__selall input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--brand-500);
+  cursor: pointer;
+}
+.log-configbar__selall input:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+.log-configbar__count {
+  font-size: var(--body-md-font-size);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+/* 选择模式下成片行呈可勾选态 */
+.log-list--selecting .log-entry__header {
+  cursor: default;
+}
+.log-list--selecting .log-entry--selected {
+  border-color: var(--brand-500);
+  background: var(--brand-100);
+}
+.log-log-configbar__check,
+.log-entry__check {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  accent-color: var(--brand-500);
+  cursor: pointer;
+}
+/* 选择模式下片段右侧复刻按钮保留，允许单独复刻单个成片 */
 
 /* Log mode */
 .log-list {

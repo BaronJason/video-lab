@@ -109,8 +109,12 @@
     projects: [], activeProject: null, activeTxt: null, versions: [], activeVersion: null,
     configData: null, mode: 'filelist', highlightDup: false, searchQuery: '', logSearchQuery: '',
     expandedProject: null, sortMode: 'name', sortAsc: true, sortTimeDesc: true, rightPreview: true, precheckInvalid: false, logContent: null,
+    logFiles: [], activeLogDate: null, selectMode: false, selectedLogPaths: {},
     focusVideo: null, _searchTimer: null
   };
+  // 复刻虚拟项目：仅含日志无配置，配置名对应复刻模式；REPLICA_MARK 为路由标记，透传回后端
+  var REPLICA_PROJECT = '复刻';
+  var REPLICA_MARK = 'REPLICA:';
   function $(id) { return document.getElementById(id); }
 
   function branchNum(s) { var m = /^(\d{2})(\d{2})$/.exec(s || ''); return m ? parseInt(m[1], 10) * 100 + parseInt(m[2], 10) : 0; }
@@ -155,7 +159,7 @@
     sortedProjects().forEach(function (proj) {
       var expanded = (proj.name === state.expandedProject);
       html += '<div class="tree-project">';
-      html += '<div class="tree-project__name" data-project="' + escapeHtml(proj.name) + '">';
+      html += '<div class="tree-project__name' + (expanded ? ' tree-project__name--sticky' : '') + '" data-project="' + escapeHtml(proj.name) + '">';
       html += '<span class="tree-arrow' + (expanded ? ' tree-arrow--open' : '') + '"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
       html += icon('folder', 16, 'tree-project__icon');
       html += escapeHtml(proj.name);
@@ -278,11 +282,14 @@
     }
     if (!target) { syncAzHighlight(); return; }
     var items = tree.querySelectorAll('.tree-txt-item');
+    // 展开项目名置顶会遮挡列表顶端，按被粘性头部高度偏移滚动，避免与 azbar 跳转冲突
+    var header = tree.querySelector('.tree-project__name--sticky');
+    var headerH = header ? header.offsetHeight : 0;
     for (var k = 0; k < items.length; k++) {
       items[k].classList.remove('tree-txt-item--az');
       if (items[k].getAttribute('data-name') === target) {
         items[k].classList.add('tree-txt-item--az');
-        items[k].scrollIntoView({ block: 'start', behavior: 'auto' });
+        tree.scrollTop = items[k].offsetTop - headerH;
       }
     }
     syncAzHighlight();
@@ -313,27 +320,119 @@
     bar.style.display = show ? 'flex' : 'none';
     if (show) syncAzHighlight();
   }
+  // 仅当配置分支名/日期为严格 4 位 MMdd 时返回该日期，否则返回空串
+  function mmddOf(label) { var s = String(label || ''); return /^\d{4}$/.test(s.slice(0, 4)) ? s.slice(0, 4) : ''; }
+
+  // 返回去除项目名后的展示相对路径（如 8月\0819\...\xxx.txt）
+  function relToProject(p) {
+    var s = String(p || '').replace(/[\\/]+/g, '\\');
+    var proj = String(state.activeProject || '').replace(/[\\/]+/g, '\\');
+    if (!proj) return s;
+    var i = s.indexOf('\\' + proj + '\\');
+    return (i === -1) ? s : s.slice(i + proj.length + 2);
+  }
+  function dirnamePath(p) {
+    var s = String(p || '').replace(/[\\/]+/g, '\\').replace(/\\$/, '');
+    var i = s.lastIndexOf('\\');
+    return i === -1 ? s : s.slice(0, i);
+  }
+  // 某日志文件对应的可跳配置版本：优先「同一成片文件夹内的正本/序号」，否则回退「当日外部 * 配置」
+  function versionForLogFile(f) {
+    var versions = state.versions || [];
+    var date = f.date;
+    for (var i = 0; i < versions.length; i++) {
+      var v = versions[i];
+      if (v.isExternal) continue;
+      if (mmddOf(v.label) !== date) continue;
+      if (dirnamePath(v.path) === dirnamePath(f.path)) return v;
+    }
+    for (var j = 0; j < versions.length; j++) {
+      var v2 = versions[j];
+      if (mmddOf(v2.label) === date && v2.isExternal) return v2;
+    }
+    return null;
+  }
+  // 日志模式当下所选日期是否「有可跳配置」：任一该日期日志能在版本中找到正本/序号 或 外部 *
+  function logDateHasConfig() {
+    var logs = (state.logFiles || []).filter(function (f) { return f.date === state.activeLogDate; });
+    if (!logs.length) return false;
+    return logs.some(function (f) { return versionForLogFile(f) != null; });
+  }
+  // 依据当前所在视角与所选日期，启用/禁用「配置列表/日志」切换按钮并附带悬浮提示
+  function updateModeToggle() {
+    var ml = $('modeLog'), mf = $('modeFilelist');
+    if (!ml || !mf) return;
+    ml.disabled = false; ml.title = '';
+    mf.disabled = false; mf.title = '';
+    if (state.activeProject === REPLICA_PROJECT) {
+      mf.disabled = true; mf.title = '复刻模式无配置文件';
+      return;
+    }
+    if (state.mode === 'filelist') {
+      if (!state.activeVersion) { ml.disabled = true; ml.title = '该配置文件没有对应日志'; return; }
+      var d = mmddOf(state.activeVersion.label);
+      if (!d || !state.activeVersion.hasLog) { ml.disabled = true; ml.title = '该配置文件没有对应日志'; }
+    } else if (state.mode === 'log') {
+      if (!state.activeLogDate) { mf.disabled = true; mf.title = '该日志没有对应日期的配置'; return; }
+      if (!logDateHasConfig()) { mf.disabled = true; mf.title = '该日志没有对应日期的配置'; }
+    }
+  }
   function buildDateBranches() {
     var c = $('dateBranches');
+    if (state.activeProject === REPLICA_PROJECT) {
+      c.innerHTML = '<span class="date-branch-btn">全部日志</span>';
+      updateModeToggle();
+      return;
+    }
+    if (state.mode === 'log') { buildLogDateBranches(c); return; }
     if (!state.activeTxt || state.versions.length === 0) {
       c.innerHTML = '<div class="center-empty" style="padding:var(--spacer-16)">' + icon('arrow-left', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">从左侧选择一个 TXT</span></div>';
+      updateModeToggle();
       return;
     }
     var html = '';
     state.versions.forEach(function (v) {
       var active = v.label === state.activeVersion.label;
-      html += '<button class="date-branch-btn' + (active ? ' date-branch-btn--active' : '') + '" data-label="' + escapeHtml(v.label) + '">' + escapeHtml(v.label);
+      html += '<button class="date-branch-btn' + (active ? ' date-branch-btn--active' : '') + '" data-label="' + escapeHtml(v.label) + '" title="' + escapeHtml(v.path) + '">' + escapeHtml(v.label);
       if (v.is_latest) html += '<span class="date-branch-btn__latest">最新</span>';
       html += '</button>';
     });
     c.innerHTML = html;
+    updateModeToggle();
+  }
+  // 日志模式下：顶部展示该配置的日志文件日期分支（每日期一个），按钮带 data-date 与 data-file
+  function buildLogDateBranches(c) {
+    if (!state.activeTxt || !state.activeVersion) { c.innerHTML = ''; return; }
+    c.innerHTML = '<span class="date-branch-btn">…</span>';
+    var token = state.activeProject + '\u0000' + state.activeTxt;
+    state._logBranchToken = token;
+    call('list_log_files', state.activeVersion.path, state.activeTxt).then(function (files) {
+      if (state._logBranchToken !== token) return;
+      files = files || [];
+      state.logFiles = files;
+      var firstOfDate = {};
+      files.forEach(function (f) { if (!firstOfDate[f.date]) firstOfDate[f.date] = f; });
+      var dates = Object.keys(firstOfDate);
+      if (!dates.length) { state.activeLogDate = null; c.innerHTML = '<span class="date-branch-btn">无日志</span>'; updateModeToggle(); return; }
+      var hadDate = !(state.activeLogDate === null || dates.indexOf(state.activeLogDate) < 0);
+      if (!hadDate) state.activeLogDate = dates[0];
+      var html = '';
+      dates.forEach(function (date) {
+        var active = date === state.activeLogDate;
+        html += '<button class="date-branch-btn' + (active ? ' date-branch-btn--active' : '') + '" data-date="' + escapeHtml(date) + '" data-file="' + escapeHtml(firstOfDate[date].path) + '" title="' + escapeHtml(firstOfDate[date].path) + '">' + escapeHtml(date) + '</button>';
+      });
+      c.innerHTML = html;
+      updateModeToggle();
+      if (!hadDate && state.mode === 'log' && state.activeTxt) buildCenterBottom();
+    }).catch(function () { c.innerHTML = '<span class="date-branch-btn">无日志</span>'; updateModeToggle(); });
   }
   function buildCenterBottom() {
     if (!state.activeTxt || !state.activeVersion) {
       $('centerBottom').innerHTML = '<div class="center-empty">' + icon('file-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">请选择一个日期分支查看内容</span></div>';
       return;
     }
-    if (state.mode === 'log') buildLogList(); else buildConfigEditor();
+    if (state.mode === 'log') { buildLogConfigBar(); buildLogList(); }
+    else { buildConfigEditor(); }
   }
   function buildConfigEditor() {
     var container = $('centerBottom');
@@ -406,6 +505,97 @@
     ['btnSaveConfig', 'btnSaveToday', 'btnRunScript'].forEach(function (id) { var b = $(id); if (b) b.disabled = invalid; });
     var warn = $('configWarnMark');
     if (warn) warn.style.display = invalid ? '' : 'none';
+  }
+  // ── 日志模式：底部批量复刻成片配置栏 ──
+  function toggleLogSelect(entry, force) {
+    var lp = entry.getAttribute('data-log-path');
+    var key = normalizePath(lp);
+    if (force === true) state.selectedLogPaths[key] = lp;
+    else if (force === false) delete state.selectedLogPaths[key];
+    else { if (state.selectedLogPaths[key]) delete state.selectedLogPaths[key]; else state.selectedLogPaths[key] = lp; }
+    var cb = entry.querySelector('.log-entry__check');
+    if (cb) cb.checked = !!state.selectedLogPaths[key];
+    entry.classList.toggle('log-entry--selected', !!state.selectedLogPaths[key]);
+    refreshLogConfigBar();
+  }
+  function selectedLogCount() {
+    var n = 0; for (var k in (state.selectedLogPaths || {})) { if (state.selectedLogPaths[k]) n++; }
+    return n;
+  }
+  function buildLogConfigBar() {
+    var bar = $('configBar');
+    if (!bar) return;
+    var sel = !!state.selectMode;
+    // 左侧：全选(复选框) + 已选计数 + 选择按钮(在已选文字右侧)；复刻模式按钮放最右侧(软件最右下角)
+    var html = '<div class="config-bar__left config-bar__left--log">';
+    html += '<label class="log-configbar__selall"><input type="checkbox" id="chkLogAll">全选</label>';
+    html += '<span class="log-configbar__count" id="logSelCount">已选 0</span>';
+    html += '<label class="log-configbar__switch" title="切换选择模式，选择成片进行批量复刻"><input type="checkbox" class="log-configbar__switch-input" id="btnLogSelect"' + (sel ? ' checked' : '') + '><span class="log-configbar__switch-track"><span class="log-configbar__switch-thumb"></span></span><span class="log-configbar__switch-text">选择</span></label>';
+    html += '</div>';
+    html += '<div class="config-bar__replica" id="logReplicaBtns">';
+    html += '<button class="config-btn config-btn--replica-full" id="btnBatchReplica1" title="对所选成片执行完全复刻">' + icon('repeat', 14) + '完全复刻</button>';
+    html += '<button class="config-btn config-btn--replica-dedup" id="btnBatchReplica2" title="对所选成片执行去重复刻">' + icon('copy', 14) + '去重复刻</button>';
+    html += '</div>';
+    bar.innerHTML = html;
+    $('btnLogSelect').addEventListener('change', toggleLogSelectMode);
+    var all = $('chkLogAll');
+    if (all) all.addEventListener('change', function () { setLogAll(this.checked); });
+    $('btnBatchReplica1').addEventListener('click', function () { batchReplica('1'); });
+    $('btnBatchReplica2').addEventListener('click', function () { batchReplica('2'); });
+    refreshLogConfigBar();
+  }
+  // 仅刷新批量栏的状态（计数/按钮可用性/全选框）而不重建
+  function refreshLogConfigBar() {
+    var n = selectedLogCount();
+    var cnt = $('logSelCount');
+    if (cnt) cnt.textContent = '已选 ' + n;
+    var btn1 = $('btnBatchReplica1'), btn2 = $('btnBatchReplica2');
+    var canRun = !!state.selectMode && n > 0;
+    if (btn1) btn1.disabled = !canRun;
+    if (btn2) btn2.disabled = !canRun;
+    var all = $('chkLogAll');
+    if (all) all.checked = !!state.selectMode && n > 0;
+  }
+  function toggleLogSelectMode() {
+    state.selectMode = !state.selectMode;
+    if (!state.selectMode) state.selectedLogPaths = {};
+    buildLogConfigBar();
+    buildLogList();
+  }
+  function setLogAll(checked) {
+    // 任何情况下都可勾选：勾选全选自动进入选择模式并全选，取消则退出选择模式并清空
+    if (checked && !state.selectMode) state.selectMode = true;
+    else if (!checked) { state.selectMode = false; state.selectedLogPaths = {}; }
+    if (state.selectMode) {
+      state.selectedLogPaths = {};
+      var container = $('centerBottom');
+      if (container) container.querySelectorAll('.log-entry').forEach(function (en) {
+        var og = en.getAttribute('data-log-path');
+        if (og) state.selectedLogPaths[normalizePath(og)] = og;
+      });
+    }
+    buildLogList();
+    var selBtn = $('btnLogSelect');
+    if (selBtn) selBtn.checked = !!state.selectMode;
+    refreshLogConfigBar();
+  }
+  function batchReplica(mode) {
+    if (!state.selectMode) return;
+    var paths = [];
+    for (var k in (state.selectedLogPaths || {})) { if (state.selectedLogPaths[k]) paths.push(state.selectedLogPaths[k]); }
+    if (!paths.length) { setStatus('请先勾选要复刻的成片'); return; }
+    var cnt = paths.length, done = 0;
+    setStatus('已对 ' + cnt + ' 个成片启动批量' + (mode === '1' ? '完全' : '去重') + '复刻…');
+    paths.forEach(function (p) {
+      call('run_replica', p, mode).then(function (r) {
+        done++;
+        if (!(r && r.ok)) setStatus('启动失败：' + ((r && r.error) || '未知错误'));
+        else if (done === cnt) { setStatus('已全部启动 ' + cnt + ' 个批量复刻脚本'); }
+      }).catch(function () { done++; });
+    });
+    // 批量启动完成后退出选择模式
+    state.selectMode = false; state.selectedLogPaths = {};
+    buildLogList();
   }
   function bindResizers(scope) {
     scope.querySelectorAll('.config-resizer').forEach(function (rz) {
@@ -700,20 +890,33 @@
     container.innerHTML = '<div class="center-empty">' + icon('scroll-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">正在加载日志…</span></div>';
     call('list_logs', state.activeProject, state.activeTxt, state.activeVersion.path).then(function (entries) {
       entries = entries || [];
+      // 按所选日志日期过滤：仅显示属于该日期日志文件的成片条目
+      if (state.activeLogDate) {
+        var fileSet = {};
+        (state.logFiles || []).forEach(function (f) { if (f.date === state.activeLogDate) fileSet[normalizePath(f.path)] = 1; });
+        entries = entries.filter(function (en) { return fileSet[normalizePath(en.log_path)]; });
+      }
       var q = state.logSearchQuery.trim().toLowerCase();
       if (q) entries = entries.filter(function (en) { return (en.video || '').toLowerCase().indexOf(q) >= 0; });
       if (entries.length === 0) {
         container.innerHTML = '<div class="center-empty">' + icon('scroll-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">' + (q ? '未找到匹配 "' + escapeHtml(state.logSearchQuery) + '" 的成片' : '暂无日志数据') + '</span></div>';
         return;
       }
-      var html = '<div class="log-list">';
+      var sel = !!state.selectMode;
+      var curSel = state.selectedLogPaths || {};
+      var html = '<div class="log-list' + (sel ? ' log-list--selecting' : '') + '">';
       entries.forEach(function (entry) {
         var clips = entry.clips || [];
-        html += '<div class="log-entry" data-log-path="' + escapeHtml(entry.log_path || '') + '" data-video="' + escapeHtml(entry.video || '') + '">';
-        html += '<div class="log-entry__header"><span class="log-entry__arrow">' + icon('chevron-right', 14) + '</span>' + icon('video', 14);
+        var lp = entry.log_path || '';
+        var checked = sel && curSel[normalizePath(lp)];
+        html += '<div class="log-entry' + (checked ? ' log-entry--selected' : '') + '" data-log-path="' + escapeHtml(lp) + '" data-video="' + escapeHtml(entry.video || '') + '">';
+        html += '<div class="log-entry__header">';
+        if (sel) html += '<input type="checkbox" class="log-entry__check"' + (checked ? ' checked' : '') + ' title="选择该成片进行批量复刻">';
+        html += '<span class="log-entry__arrow">' + icon('chevron-right', 14) + '</span>' + icon('video', 14);
         html += '<span class="log-entry__video-name" title="' + escapeHtml(entry.video) + '">' + escapeHtml(entry.video || '（未命名成片）') + '</span>';
         html += '<span class="log-entry__clip-count">' + clips.length + ' 片段</span>';
-        html += '<button class="log-entry__replica" title="调用复刻脚本处理该日志">' + icon('repeat', 13) + '复刻</button></div>';
+        html += '<button class="log-entry__replica" title="调用复刻脚本处理该日志">' + icon('repeat', 13) + '复刻</button>';
+        html += '</div>';
         html += '<div class="log-entry__clips" style="display:none">';
         clips.forEach(function (clip) { html += '<div class="log-entry__clip" data-path="' + escapeHtml(clip) + '">' + icon('video', 12) + '<span class="log-entry__clip-path" title="' + escapeHtml(clip) + '">' + escapeHtml(clip) + '</span></div>'; });
         html += '</div></div>';
@@ -750,6 +953,16 @@
         });
         return;
       }
+      // 选择模式下点击成片行用于勾选/取消，不做展开
+      if (state.selectMode) {
+        var sEl = e.target.closest('.log-entry');
+        if (sEl) {
+          e.stopPropagation();
+          if (e.target && e.target.classList && e.target.classList.contains('log-entry__check')) return; // 复选事件单独处理
+          toggleLogSelect(sEl);
+        }
+        return;
+      }
       var header = e.target.closest('.log-entry__header');
       if (header) {
         var entry = header.closest('.log-entry');
@@ -761,6 +974,12 @@
         return;
       }
     };
+    container.addEventListener('change', function (e) {
+      var cb = e.target.closest('.log-entry__check');
+      if (!cb) return;
+      var entry = cb.closest('.log-entry');
+      if (entry) toggleLogSelect(entry, cb.checked);
+    });
   }
   // 全局成片名搜索：渲染受限高度的下拉列表，点击跳转到目标日期分支并高亮成片
   function closeLogDropdown() {
@@ -864,7 +1083,8 @@
     if (state.mode === 'log') { buildLogRightPanel(); return; }
     if (!state.configData) { lineNumbers.innerHTML = ''; code.innerHTML = ''; subtitle.textContent = '请选择一个日期分支'; return; }
     var lines = state.rightPreview ? buildModifiedLines() : (state.configData.lines || []);
-    subtitle.textContent = (state.rightPreview ? '修改后' : '原始') + ' — ' + state.activeTxt + ' / ' + state.activeVersion.label;
+    subtitle.textContent = (state.rightPreview ? '实时' : '原始') + ':"' + relToProject(state.activeVersion.path) + '"';
+    subtitle.title = subtitle.textContent;
     var numHtml = ''; var codeHtml = '';
     lines.forEach(function (line, idx) {
       numHtml += '<span class="right-panel__line-num">' + (idx + 1) + '</span>';
@@ -885,7 +1105,7 @@
     var subtitle = $('rightPanelSubtitle');
     if (state.logContent) { renderLogRightPanel(); return; }
     subtitle.textContent = '正在加载日志…';
-    call('get_log_content', state.activeVersion.path).then(function (d) {
+    call('get_log_content', state.activeVersion.path, state.activeTxt).then(function (d) {
       state.logContent = d; renderLogRightPanel();
     }).catch(function () {
       cleanLogRight(); subtitle.textContent = '加载日志失败 — ' + state.activeTxt + ' / ' + state.activeVersion.label;
@@ -899,6 +1119,7 @@
     var nums = $('rightLineNumbers'); var code = $('rightCode'); var subtitle = $('rightPanelSubtitle');
     var d = state.logContent; var files = (d && d.files) || [];
     subtitle.textContent = '日志 — ' + state.activeTxt + ' / ' + state.activeVersion.label;
+    subtitle.title = subtitle.textContent;
     if (files.length === 0) { nums.innerHTML = ''; code.innerHTML = '<div style="padding:8px 12px;color:var(--text-tertiary)">暂无日志文件</div>'; return; }
     var numHtml = ''; var codeHtml = ''; var row = 0;
     files.forEach(function (f) {
@@ -1087,6 +1308,22 @@
     }).catch(function (e) { setStatus('数据加载失败：' + e.message); if (busyText) hideBusy(); });
   }
   function selectTxt(project, name, keepVersion) {
+    state.activeLogDate = null;
+    // 复刻虚拟项目：仅含日志无配置，点击直接进入日志视图
+    if (project === REPLICA_PROJECT) {
+      state.activeProject = project; state.activeTxt = name;
+      state.versions = [{ label: '全部日志', path: REPLICA_MARK + name, is_latest: true }];
+      state.activeVersion = state.versions[0];
+      state.configData = null; state.logContent = null;
+      state.mode = 'log';
+      var ml = $('modeLog'), mf = $('modeFilelist');
+      if (ml) ml.classList.add('mode-toggle--active');
+      if (mf) mf.classList.remove('mode-toggle--active');
+      state.expandedProject = project;
+      buildSidebar(); buildDateBranches(); buildCenterBottom(); buildRightPanel();
+      setStatus('日志模式：' + name);
+      return;
+    }
     var prevLabel = keepVersion && state.activeVersion ? state.activeVersion.label : null;
     state.activeProject = project; state.activeTxt = name;
     call('list_versions', project, name).then(function (versions) {
@@ -1102,7 +1339,7 @@
     state.logContent = null;
     call('read_config', path).then(function (data) {
       state.configData = data; buildCenterBottom(); buildRightPanel();
-      setStatus('已选择 "' + state.activeProject + ' / ' + state.activeTxt + ' / ' + state.activeVersion.label + '"');
+      setStatus('已选择:"' + (state.activeVersion && state.activeVersion.path || path) + '"');
     }).catch(function (e) { setStatus('读取配置失败：' + e.message); });
   }
   function bindStaticEvents() {
@@ -1115,12 +1352,20 @@
     });
     $('btnSortName').addEventListener('click', function () { if (state.sortMode === 'name') state.sortAsc = !state.sortAsc; else state.sortMode = 'name'; updateSortButtons(); buildSidebar(); });
     $('btnSortTime').addEventListener('click', function () { if (state.sortMode === 'time') state.sortTimeDesc = !state.sortTimeDesc; else state.sortMode = 'time'; updateSortButtons(); buildSidebar(); });
-    $('dateBranches').addEventListener('click', function (e) { var btn = e.target.closest('.date-branch-btn'); if (btn) selectVersion(btn.getAttribute('data-label')); });
-    $('dateBranches').addEventListener('dblclick', function (e) { var btn = e.target.closest('.date-branch-btn'); if (!btn) return; var label = btn.getAttribute('data-label'); var v = state.versions.find(function (x) { return x.label === label; }); if (v) call('open_parent', v.path); });
+    $('dateBranches').addEventListener('click', function (e) { var btn = e.target.closest('.date-branch-btn'); if (!btn) return; if (btn.getAttribute('data-date') != null) { state.activeLogDate = btn.getAttribute('data-date'); buildDateBranches(); buildCenterBottom(); return; } selectVersion(btn.getAttribute('data-label')); });
+    $('dateBranches').addEventListener('dblclick', function (e) { var btn = e.target.closest('.date-branch-btn'); if (!btn) return; var fp = btn.getAttribute('data-file'); if (fp) { call('open_parent', fp); return; } var label = btn.getAttribute('data-label'); var v = state.versions.find(function (x) { return x.label === label; }); if (v) call('open_parent', v.path); });
     $('dateBranches').addEventListener('contextmenu', function (e) {
       var btn = e.target.closest('.date-branch-btn');
       if (!btn) return;
       e.preventDefault();
+      var fp = btn.getAttribute('data-file');
+      if (fp) {
+        showMenu(e.clientX, e.clientY, [
+          { label: '打开文件', action: function () { call('open_path', fp); } },
+          { label: '打开路径', action: function () { call('open_parent', fp); } }
+        ]);
+        return;
+      }
       var label = btn.getAttribute('data-label');
       var v = state.versions.find(function (x) { return x.label === label; });
       if (!v) return;
@@ -1129,8 +1374,8 @@
         { label: '打开路径', action: function () { call('open_parent', v.path); } }
       ]);
     });
-    $('modeFilelist').addEventListener('click', function () { state.mode = 'filelist'; $('modeFilelist').classList.add('mode-toggle--active'); $('modeLog').classList.remove('mode-toggle--active'); buildCenterBottom(); buildRightPanel(); });
-    $('modeLog').addEventListener('click', function () { state.mode = 'log'; $('modeLog').classList.add('mode-toggle--active'); $('modeFilelist').classList.remove('mode-toggle--active'); buildCenterBottom(); buildRightPanel(); });
+    $('modeFilelist').addEventListener('click', function () { state.selectMode = false; state.selectedLogPaths = {}; state.mode = 'filelist'; $('modeFilelist').classList.add('mode-toggle--active'); $('modeLog').classList.remove('mode-toggle--active'); buildDateBranches(); buildCenterBottom(); buildRightPanel(); });
+    $('modeLog').addEventListener('click', function () { state.mode = 'log'; $('modeLog').classList.add('mode-toggle--active'); $('modeFilelist').classList.remove('mode-toggle--active'); buildDateBranches(); buildCenterBottom(); buildRightPanel(); });
     $('searchInput').addEventListener('input', function () { state.searchQuery = this.value.trim(); buildSidebar(); });
     $('logSearchInput').addEventListener('input', function () { state.logSearchQuery = this.value.trim(); if (state.mode === 'log') buildCenterBottom(); onLogSearchInput(); });
     $('btnResetPrecheck').addEventListener('click', resetPrecheckFlow);

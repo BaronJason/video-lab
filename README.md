@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🎬 Video Lab
+# <img src="app-icon.png" width="30" height="30" style="vertical-align:-6px"> Video Lab
 
 **批量成片项目管理器 · Electron 桌面应用**
 
@@ -8,7 +8,7 @@
 
 <br>
 
-[![版本](https://img.shields.io/badge/版本-1.1-0078D7?style=flat-square)](https://github.com/BaronJason/video-lab/releases)
+[![版本](https://img.shields.io/badge/版本-1.2-0078D7?style=flat-square)](https://github.com/BaronJason/video-lab/releases)
 ![Platform](https://img.shields.io/badge/平台-Windows%2010%2F11-00A4EF?style=flat-square)
 ![PowerShell](https://img.shields.io/badge/运行时-PowerShell%207-5391FE?style=flat-square)
 ![FFmpeg](https://img.shields.io/badge/FFmpeg-必需-FF7F2A?style=flat-square)

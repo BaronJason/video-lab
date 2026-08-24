@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, Tray, nativeImage } = require('electron');
 const { Api, DEFAULT_CONFIG } = require('./backend');
 
 try {
@@ -69,6 +69,35 @@ const api = new Api(root, config, scanCachePath, videoCachePath);
 
 // 主窗口与任务窗口：主窗口仅在原生模态对话框/载入遮罩时被禁用；任务列表窗口不随父窗口禁用
 let mainWin = null;
+// 系统托盘：关闭主窗口仅最小化到托盘，右键托盘图标菜单可退出或显示主窗口
+let tray = null;
+let isQuitting = false;
+// 图标源文件（resources/app/icon/），托盘图标使用多分辨率适配不同缩放的任务栏
+const ICON_DIR = path.join(__dirname, 'icon');
+function trayIcon() {
+  const img = nativeImage.createFromPath(path.join(ICON_DIR, 'tray-icon.png'));
+  for (const rep of ['tray-icon@1.25x.png', 'tray-icon@1.5x.png', 'tray-icon@2x.png']) {
+    img.addRepresentation(nativeImage.createFromPath(path.join(ICON_DIR, rep)));
+  }
+  return img.isEmpty() ? nativeImage.createEmpty() : img;
+}
+function showMainWindow() {
+  if (!mainWin || mainWin.isDestroyed()) createWindow();
+  mainWin.show();
+  mainWin.focus();
+}
+function createTray() {
+  if (!tray) {
+    tray = new Tray(trayIcon());
+    tray.setToolTip('Video Lab');
+  }
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: '显示主窗口', click: () => showMainWindow() },
+    { type: 'separator' },
+    { label: '退出', click: () => { isQuitting = true; app.quit(); } }
+  ]));
+  tray.on('double-click', () => showMainWindow());
+}
 // 任务窗口：显示所有生成任务的状态与实时日志
 let taskWin = null;
 function createTaskWindow() {
@@ -136,6 +165,9 @@ function registerIpc() {
 function createWindow() {
   mainWin = new BrowserWindow({ title: 'Video Lab', width: 1360, height: 860, minWidth: 1120, minHeight: 700, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
   mainWin.loadFile(path.join(__dirname, 'frontend', 'index.html'));
+  mainWin.on('close', (e) => {
+    if (!isQuitting) { e.preventDefault(); mainWin.hide(); }
+  });
   mainWin.on('closed', () => { mainWin = null; });
 }
 
@@ -162,7 +194,10 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   registerIpc();
   await ensureConfig();
+  createTray();
   createWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin' && isQuitting) app.quit();
+});

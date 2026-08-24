@@ -54,9 +54,21 @@ const cacheDir = (() => {
   try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
   return dir;
 })();
-const scanCachePath = path.join(cacheDir, app.isPackaged ? 'scan-cache.json' : 'video-lab-scan-cache.json');
-const api = new Api(root, config, scanCachePath);
+// 两个缓存统一命名(下划线)且统一存放于 Cache 子文件夹：
+//   scan_cache.json   —— TXT 指纹缓存
+//   video_cache.json  —— 预检测(ffprobe)缓存
+const scanCachePath = path.join(cacheDir, app.isPackaged ? 'scan_cache.json' : 'video_lab_scan_cache.json');
+const videoCachePath = path.join(cacheDir, 'video_cache.json');
+// 迁移旧 scan 缓存命名（同目录内把旧的连字符命名改为下划线）；不含脚本目录缓存——脚本目录属用户个人数据，应用绝不读写
+(function migrateOldScanCache() {
+  const oldScan = path.join(cacheDir, app.isPackaged ? 'scan-cache.json' : 'video-lab-scan-cache.json');
+  if (oldScan === scanCachePath || !fs.existsSync(oldScan) || fs.existsSync(scanCachePath)) return;
+  try { fs.copyFileSync(oldScan, scanCachePath); fs.unlinkSync(oldScan); } catch (e) {}
+})();
+const api = new Api(root, config, scanCachePath, videoCachePath);
 
+// 主窗口与任务窗口：主窗口仅在原生模态对话框/载入遮罩时被禁用；任务列表窗口不随父窗口禁用
+let mainWin = null;
 // 任务窗口：显示所有生成任务的状态与实时日志
 let taskWin = null;
 function createTaskWindow() {
@@ -80,6 +92,7 @@ function registerIpc() {
   ipcMain.handle('save_config', (e, p, folders, excludes, watermark) => api.saveConfig(p, folders, excludes, watermark));
   ipcMain.handle('save_config_today', (e, project, name, configName, folders, excludes, watermark) => api.saveConfigToday(project, name, configName, folders, excludes, watermark));
   ipcMain.handle('precheck', (e, paths, excludes) => api.precheck(paths, excludes));
+  ipcMain.handle('reset_precheck', (e) => { const sender = e.sender; return api.resetPrecheck((s) => { try { sender.send('reset_progress', s); } catch (err) {} }); });
   ipcMain.handle('list_logs', (e, project, name, versionPath) => api.listLogs(project, name, versionPath));
   ipcMain.handle('search_logs', (e, query) => api.searchLogs(query));
   ipcMain.handle('get_log_content', (e, fromPath) => api.logContent(fromPath));
@@ -95,7 +108,7 @@ function registerIpc() {
   ipcMain.handle('get_root', () => api.getRoot());
   ipcMain.handle('check_env', () => api.checkEnv());
   ipcMain.handle('choose_workdir', async () => {
-    const result = await dialog.showOpenDialog({ title: '选择工作路径', defaultPath: api.getRoot(), properties: ['openDirectory'] });
+    const result = await dialog.showOpenDialog(mainWin, { title: '选择工作路径', defaultPath: api.getRoot(), properties: ['openDirectory'] });
     if (result.canceled || !result.filePaths || result.filePaths.length === 0) return { ok: false, canceled: true };
     const dir = result.filePaths[0];
     config.root = dir; saveConfig(config); api.setRoot(dir);
@@ -107,22 +120,23 @@ function registerIpc() {
   ipcMain.handle('open_parent', async (e, p) => { const target = path.dirname(path.resolve(p)); if (fs.existsSync(target)) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '路径不存在' }; });
   ipcMain.handle('external_edit', async (e, p) => { const target = path.resolve(p); if (fs.existsSync(target) && fs.statSync(target).isFile()) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '文件不存在' }; });
   ipcMain.handle('pick_watermark', async () => {
-    const result = await dialog.showOpenDialog({ title: '选择水印 PNG', defaultPath: api.watermarkDir || '', properties: ['openFile'], filters: [{ name: 'PNG 图片', extensions: ['png'] }] });
+    const result = await dialog.showOpenDialog(mainWin, { title: '选择水印 PNG', defaultPath: api.watermarkDir || '', properties: ['openFile'], filters: [{ name: 'PNG 图片', extensions: ['png'] }] });
     return result.canceled || !result.filePaths || result.filePaths.length === 0 ? '' : result.filePaths[0];
   });
   ipcMain.handle('pick_exclude', async () => {
-    const result = await dialog.showOpenDialog({ title: '选择要排除的路径（文件夹或视频文件）', defaultPath: api.getRoot(), properties: ['openFile', 'openDirectory', 'multiSelections'] });
+    const result = await dialog.showOpenDialog(mainWin, { title: '选择要排除的路径（文件夹或视频文件）', defaultPath: api.getRoot(), properties: ['openFile', 'openDirectory', 'multiSelections'] });
     return result.canceled || !result.filePaths || result.filePaths.length === 0 ? [] : result.filePaths;
   });
   ipcMain.handle('pick_paths', async () => {
-    const result = await dialog.showOpenDialog({ title: '选择要添加的素材路径（文件夹或视频文件）', defaultPath: api.getRoot(), properties: ['openFile', 'openDirectory', 'multiSelections'] });
+    const result = await dialog.showOpenDialog(mainWin, { title: '选择要添加的素材路径（文件夹或视频文件）', defaultPath: api.getRoot(), properties: ['openFile', 'openDirectory', 'multiSelections'] });
     return result.canceled || !result.filePaths || result.filePaths.length === 0 ? [] : result.filePaths;
   });
 }
 
 function createWindow() {
-  const win = new BrowserWindow({ title: 'Video Lab', width: 1360, height: 860, minWidth: 1120, minHeight: 700, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
-  win.loadFile(path.join(__dirname, 'frontend', 'index.html'));
+  mainWin = new BrowserWindow({ title: 'Video Lab', width: 1360, height: 860, minWidth: 1120, minHeight: 700, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
+  mainWin.loadFile(path.join(__dirname, 'frontend', 'index.html'));
+  mainWin.on('closed', () => { mainWin = null; });
 }
 
 // 首次（或配置缺失）时引导用户选择必要目录，每个弹窗标题都写明用途

@@ -15,6 +15,12 @@ contextBridge.exposeInMainWorld('txapi', {
   save_config_today: (project, name, configName, folders, excludes, watermark) =>
     invoke('save_config_today', project, name, configName, folders, excludes, watermark),
   precheck: (paths, excludes) => invoke('precheck', paths, excludes),
+  reset_precheck: () => invoke('reset_precheck'),
+  on_reset_progress: (cb) => {
+    const ch = (e, s) => { try { cb(s); } catch (err) {} };
+    ipcRenderer.on('reset_progress', ch);
+    return () => { ipcRenderer.removeListener('reset_progress', ch); };
+  },
   list_logs: (project, name, versionPath) => invoke('list_logs', project, name, versionPath),
   search_logs: (query) => invoke('search_logs', query),
   get_log_content: (fromPath) => invoke('get_log_content', fromPath),

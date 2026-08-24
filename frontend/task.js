@@ -54,7 +54,7 @@
     var progress = document.createElement('div');
     progress.className = 'task-card__progress';
     progress.innerHTML =
-      '<div class="task-card__progress-text"></div>' +
+      '<div class="task-card__progress-text"><span class="task-card__progress-label"></span><span class="task-card__progress-pct"></span></div>' +
       '<div class="task-card__progress-track"><div class="task-card__progress-fill"></div></div>';
     card.appendChild(progress);
 
@@ -66,7 +66,7 @@
     body.appendChild(log);
     card.appendChild(body);
 
-    var record = { el: card, header: header, logEl: log, body: body, logCount: 0, expanded: false, progressEl: progress, progressText: progress.querySelector('.task-card__progress-text'), progressFill: progress.querySelector('.task-card__progress-fill') };
+    var record = { el: card, header: header, logEl: log, body: body, logCount: 0, expanded: false, progressEl: progress, progressLabel: progress.querySelector('.task-card__progress-label'), progressPct: progress.querySelector('.task-card__progress-pct'), progressFill: progress.querySelector('.task-card__progress-fill') };
     header.addEventListener('click', function (e) {
       if (e.target.closest('.task-card__stop')) return;
       if (e.target.closest('.task-card__pause')) return;
@@ -123,9 +123,19 @@
     // 进度条：数字行（当前/总）+ 下方进度条，仅解析到总进度后显示
     var prog = t.progress || {};
     var total = prog.total || 0;
-    if (total > 0) {
+    var clipTarget = prog.clipTarget || 0;
+    var clip = Math.max(0, prog.clip || 0);
+    if (clipTarget > 0) {
+      // 底进度条由"单个成片实时进度"驱动；左侧文本显示成片 X/Y，百分比靠最右
+      var pct = Math.max(0, Math.min(clip / clipTarget, 1));
+      rec.progressLabel.textContent = '成片 ' + (prog.current || 0) + '/' + total;
+      rec.progressPct.textContent = Math.round(pct * 100) + '%';
+      rec.progressFill.style.width = (pct * 100) + '%';
+      rec.progressEl.style.display = 'flex';
+    } else if (total > 0) {
       var cur = Math.max(0, Math.min(prog.current || 0, total));
-      rec.progressText.textContent = cur + '/' + total;
+      rec.progressLabel.textContent = cur + '/' + total;
+      rec.progressPct.textContent = Math.round(cur / total * 100) + '%';
       rec.progressFill.style.width = (cur / total * 100) + '%';
       rec.progressEl.style.display = 'flex';
     } else {
@@ -155,6 +165,9 @@
     Object.keys(rendered).forEach(function (id) {
       if (!ids[id]) { var el = rendered[id].el; if (el.parentNode) el.parentNode.removeChild(el); delete rendered[id]; }
     });
+    // 有任务时先移除"暂无任务"占位，避免占位一直留在列表顶部
+    var emptyEl = list.querySelector('.task-empty');
+    if (emptyEl) emptyEl.remove();
     var frag = document.createDocumentFragment();
     tasks.forEach(function (t) {
       var rec = rendered[t.id];

@@ -72,9 +72,11 @@
       padding: 0 10px 8px; margin-top: -2px;
     }
     .task-card__progress-text {
+      display: flex; justify-content: space-between; align-items: center; gap: 8px;
       font-size: var(--body-sm-font-size); color: var(--text-default);
       font-variant-numeric: tabular-nums; line-height: 1.4;
     }
+    .task-card__progress-pct { flex-shrink: 0; color: var(--text-secondary); }
     .task-card__progress-track { height: 6px; border-radius: 3px; background: var(--bg-overlay-l2); overflow: hidden; }
     .task-card__progress-fill { height: 100%; width: 0; border-radius: 3px; background: var(--status-primary-default); transition: width .3s ease; }
     .task-card__log {

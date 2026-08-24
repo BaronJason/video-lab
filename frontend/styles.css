@@ -1517,7 +1517,7 @@ body {
 
 /* ── Left Sidebar ── */
 .sidebar {
-  width: 272px;
+  width: 285px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -1547,10 +1547,10 @@ body {
   gap: 4px;
   height: 22px;
   padding: 0 8px;
-  border: 1px solid var(--brand-500);
+  border: 1px solid var(--status-error-default);
   border-radius: var(--radius-4);
-  background: var(--brand-100);
-  color: var(--brand-600);
+  background: var(--status-error-surface-l1);
+  color: var(--status-error-default);
   font-size: 11px;
   font-weight: var(--font-weight-medium);
   cursor: pointer;
@@ -1560,8 +1560,8 @@ body {
   transition: all 0.1s ease;
 }
 .sidebar__recheck:hover {
-  background: var(--brand-200);
-  color: var(--brand-700);
+  background: var(--status-error-surface-l2);
+  color: var(--status-error-default);
 }
 .sort-toggle__arrow {
   font-size: 9px;
@@ -1605,7 +1605,7 @@ body {
 .sidebar__search .ds-input {
   height: 28px;
   min-height: 28px;
-  background: #FFF;
+  background: var(--bg-base-secondary);
   border-color: var(--border-neutral-l1);
 }
 .sidebar__search .ds-input:focus-within {
@@ -1813,6 +1813,8 @@ body {
 .btn-open-file:hover { background: var(--bg-brand-hover); border-color: var(--bg-brand-hover); }
 .btn-open-folder { background: var(--bg-base-tertiary); color: var(--text-default); border-color: var(--border-neutral-l1); }
 .btn-open-folder:hover { background: var(--bg-overlay-l2); border-color: var(--border-neutral-l2); }
+#btnRecheckProject { background: var(--brand-500); color: var(--text-onbrand); border-color: var(--brand-500); }
+#btnRecheckProject:hover { background: var(--brand-600); border-color: var(--brand-600); }
 .btn-external-edit { background: transparent; color: var(--text-secondary); border-color: var(--border-neutral-l1); }
 .btn-external-edit:hover { background: var(--bg-overlay-l2); color: var(--text-default); }
 
@@ -1995,6 +1997,7 @@ body {
 .config-editor__col--watermark {
   flex: 0 0 28%;
   min-width: 160px;
+  border-left: 1px solid var(--border-neutral-l1);
 }
 .config-resizer {
   flex-shrink: 0;
@@ -2136,12 +2139,12 @@ body {
   min-width: 0;
   height: 24px;
   padding: 0 var(--spacer-6);
-  border: 1px solid transparent;
+  border: 1px solid var(--border-neutral-l1);
   border-radius: var(--radius-4);
-  background: transparent;
+  background: var(--bg-base-secondary);
   font-family: var(--font-family-mono);
   font-size: var(--body-md-font-size);
-  color: var(--text-secondary);
+  color: var(--text-default);
   outline: none;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
@@ -2150,7 +2153,7 @@ body {
   background: var(--bg-base-default);
 }
 .config-path-row__input:focus {
-  border-color: var(--brand-500);
+  border-color: var(--bg-brand);
   background: var(--bg-base-default);
   color: var(--text-default);
 }
@@ -2382,15 +2385,15 @@ body {
   margin: 0 var(--spacer-8) var(--spacer-8);
   height: 30px;
   padding: 0 var(--spacer-8);
-  border: 1px solid var(--border-neutral-l2);
+  border: 1px solid var(--border-neutral-l1);
   border-radius: var(--radius-6);
-  background: var(--bg-base-default);
+  background: var(--bg-base-secondary);
   color: var(--text-default);
   font-size: var(--body-sm-font-size);
   outline: none;
 }
 .config-exclude-input:focus {
-  border-color: var(--brand-500);
+  border-color: var(--bg-brand);
 }
 
 /* Bottom bar */
@@ -2419,9 +2422,9 @@ body {
   width: 56px;
   height: 28px;
   padding: 0 var(--spacer-8);
-  border: 1px solid var(--border-neutral-l2);
+  border: 1px solid var(--border-neutral-l1);
   border-radius: var(--radius-6);
-  background: var(--bg-input-default);
+  background: var(--bg-base-secondary);
   color: var(--text-default);
   font-family: var(--font-family-mono);
   font-size: var(--body-md-font-size);
@@ -2430,7 +2433,7 @@ body {
   transition: border-color 0.15s ease;
 }
 .config-bottombar__input:focus {
-  border-color: var(--brand-500);
+  border-color: var(--bg-brand);
 }
 .config-bottombar__input--name {
   width: 120px;
@@ -2489,10 +2492,10 @@ body {
 }
 .config-btn--run {
   background: var(--status-success-default);
-  color: #fff;
+  color: var(--text-onaccent);
 }
 .config-btn--run:hover {
-  background: #3ab899;
+  background: var(--status-success-hover);
 }
 .config-btn:disabled {
   opacity: 0.45;
@@ -2809,24 +2812,60 @@ body {
   gap: var(--spacer-8);
   min-width: 0;
 }
+.status-bar__success { color: var(--status-success-default); }
 .skin-select {
   display: inline-flex;
   align-items: center;
-}
-.skin-select select {
-  font-family: var(--font-family-default);
-  font-size: var(--body-xs-font-size);
-  line-height: var(--body-xs-line-height);
-  color: var(--text-tertiary);
-  background: var(--bg-base-secondary);
+  gap: 5px;
+  height: 24px;
+  padding: 0 var(--spacer-8);
   border: 1px solid var(--border-neutral-l1);
   border-radius: var(--radius-4);
-  padding: 2px var(--spacer-10);
-  width: 96px;
+  background: var(--bg-base-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
   outline: none;
+  font: inherit;
+}
+.skin-select:hover { border-color: var(--border-neutral-l2); color: var(--text-default-hover); }
+.skin-popup {
+  position: fixed;
+  z-index: 9999;
+  min-width: 88px;
+  padding: var(--spacer-4);
+  background: var(--bg-base-default);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-6);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  display: none;
+}
+.skin-popup__item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-8);
+  width: 100%;
+  padding: 6px var(--spacer-10);
+  border: none;
+  background: transparent;
+  color: var(--text-default);
+  font-family: var(--font-family-default);
+  font-size: var(--body-sm-font-size);
+  text-align: left;
+  border-radius: var(--radius-4);
   cursor: pointer;
 }
-.skin-select select:hover { border-color: var(--border-neutral-l2); }
+.skin-popup__item:hover { background: var(--bg-overlay-l1); }
+.skin-popup__item--active { color: var(--brand-500); font-weight: var(--font-weight-strong); }
+.skin-popup__swatch { display: inline-flex; align-items: center; gap: 1px; flex-shrink: 0; }
+.skin-popup__swatch-b,
+.skin-popup__swatch-t {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  display: inline-block;
+  box-sizing: border-box;
+  box-shadow: inset 0 0 0 1px var(--border-neutral-l2);
+}
 
 /* 工作路径扫描时的载入遮罩 */
 .busy-overlay {
@@ -2850,19 +2889,51 @@ body {
   border-radius: var(--radius-card);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
 }
+.busy-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-12);
+}
 .busy-spinner {
-  width: 34px;
-  height: 34px;
+  width: 20px;
+  height: 20px;
   border: 3px solid var(--border-neutral-l1);
   border-top-color: var(--bg-brand);
   border-radius: 50%;
   animation: busy-rotate 0.8s linear infinite;
+  flex-shrink: 0;
 }
 @keyframes busy-rotate { to { transform: rotate(360deg); } }
 .busy-text {
   font-size: var(--body-sm-font-size);
   line-height: var(--body-sm-line-height);
   color: var(--text-secondary);
+  text-align: left;
+}
+.busy-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-8);
+  width: 100%;
+  min-width: 320px;
+}
+.busy-progress__bar {
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--bg-base-tertiary);
+  overflow: hidden;
+}
+.busy-progress__fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--bg-brand);
+  transition: width 0.2s ease;
+}
+.busy-progress__text {
+  font-size: var(--body-xs-font-size);
+  line-height: var(--body-xs-line-height);
+  color: var(--text-secondary);
+  text-align: center;
 }
 .status-bar__right {
   display: flex;
@@ -3153,7 +3224,7 @@ body {
 .modal-btn--primary {
   background: var(--brand-600);
   border-color: var(--brand-600);
-  color: #fff;
+  color: var(--text-onaccent);
 }
 .modal-btn--primary:hover {
   background: var(--brand-700);
@@ -3162,7 +3233,7 @@ body {
 .modal-btn--danger {
   background: var(--status-error-default);
   border-color: var(--status-error-default);
-  color: #fff;
+  color: var(--text-onaccent);
 }
 .modal-btn--danger:hover {
   background: var(--status-error-hover);

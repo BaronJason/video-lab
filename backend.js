@@ -98,10 +98,13 @@ function walkFiles(dir) {
 }
 
 class Api {
-  constructor(root, config, cachePath) {
+  constructor(root, config, cachePath, videoCachePath) {
     this.root = root;
     this.config = Object.assign({}, DEFAULT_CONFIG, config || {});
     this.cachePath = cachePath || '';
+    this.videoCachePath = videoCachePath || '';
+    // ffprobe 探测并发上限：保持低值，避免占用过多 CPU/IO 拖慢整机
+    this.probeConcurrency = 4;
     this._videoCache = null;
     this._videoInfoCache = new Map();
     this._txtTree = null;
@@ -397,9 +400,9 @@ class Api {
   _loadVideoCache() {
     if (this._videoCache !== null) return this._videoCache;
     let cache = {};
+    const p = this.videoCachePath || '';
     try {
-      const p = path.join(this.scriptsDir, 'video_cache.json');
-      if (fs.existsSync(p)) {
+      if (p && fs.existsSync(p)) {
         const data = JSON.parse(fs.readFileSync(p, 'utf-8'));
         if (data && typeof data === 'object' && !Array.isArray(data)) cache = data;
       }
@@ -412,36 +415,95 @@ class Api {
     try { return Math.round(fs.statSync(videoPath).mtimeMs * 10000) + 621355968000000000; } catch (e) { return 0; }
   }
 
-  _probeVideo(videoPath) {
-    try {
-      const { execFileSync } = require('child_process');
-      const out = execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', videoPath], { encoding: 'utf8', timeout: 60000 });
-      const lines = String(out).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-      if (lines.length >= 3) {
-        const width = parseInt(lines[0], 10);
-        const height = parseInt(lines[1], 10);
-        const duration = parseFloat(lines[2]);
-        const valid = width === 1080 && height === 1920 && isFinite(duration) && duration > 0;
-        return { valid, duration: isFinite(duration) ? duration : 0, width, height };
-      }
-    } catch (e) {}
-    return { valid: false, duration: 0, width: 0, height: 0 };
+  // ffprobe 异步探测（并发限流使用，不阻塞主线程）
+  _probeVideoAsync(videoPath) {
+    return new Promise((resolve) => {
+      const { execFile } = require('child_process');
+      execFile(
+        'ffprobe',
+        ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', videoPath],
+        { encoding: 'utf8', timeout: 60000, windowsHide: true },
+        (err, stdout) => {
+          if (err) return resolve({ valid: false, duration: 0, width: 0, height: 0 });
+          const lines = String(stdout).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+          if (lines.length >= 3) {
+            const width = parseInt(lines[0], 10);
+            const height = parseInt(lines[1], 10);
+            const duration = parseFloat(lines[2]);
+            const valid = width === 1080 && height === 1920 && isFinite(duration) && duration > 0;
+            return resolve({ valid, duration: isFinite(duration) ? duration : 0, width, height });
+          }
+          resolve({ valid: false, duration: 0, width: 0, height: 0 });
+        }
+      );
+    });
   }
 
-  _getVideoInfo(videoPath) {
+  // 并发限流执行器：同一时刻最多并发 limit 个，全部完成后按输入顺序返回结果数组
+  _runWithLimit(items, worker, limit) {
+    return new Promise((resolve) => {
+      const n = items.length;
+      if (n === 0) return resolve([]);
+      const limitN = Math.max(1, limit | 0);
+      const results = new Array(n);
+      let i = 0, running = 0, done = 0;
+      const pump = () => {
+        while (running < limitN && i < n) {
+          const idx = i++;
+          running++;
+          Promise.resolve()
+            .then(() => worker(items[idx], idx))
+            .catch(() => undefined)
+            .then((v) => { results[idx] = v; })
+            .then(() => { running--; done++; if (done === n) resolve(results); else pump(); });
+        }
+      };
+      pump();
+    });
+  }
+
+  // 读取缓存视频信息：命中且 mtime 未变则直接复用，否则返回 null（交由并发探测）
+  _fetchCachedVideoInfo(videoPath) {
     if (this._videoInfoCache.has(videoPath)) return this._videoInfoCache.get(videoPath);
-    try { fs.statSync(videoPath); } catch (e) { return { valid: false, duration: 0, width: 0, height: 0 }; }
+    try { fs.statSync(videoPath); } catch (e) { return null; }
     const cache = this._loadVideoCache();
     const cached = cache[videoPath];
-    let info;
-    if (cached) {
-      info = { valid: !!cached.Valid, duration: Number(cached.Duration) || 0, width: cached.Width || 0, height: cached.Height || 0 };
-    } else {
-      info = this._probeVideo(videoPath);
-      cache[videoPath] = { LastWriteTime: this._mtimeToTicks(videoPath), Duration: info.duration, Valid: info.valid, Width: info.width, Height: info.height };
+    if (cached && cached.LastWriteTime === this._mtimeToTicks(videoPath)) {
+      const info = { valid: !!cached.Valid, duration: Number(cached.Duration) || 0, width: cached.Width || 0, height: cached.Height || 0 };
+      this._videoInfoCache.set(videoPath, info);
+      return info;
     }
-    this._videoInfoCache.set(videoPath, info);
-    return info;
+    if (cached) delete cache[videoPath]; // 指纹变化，丢弃旧缓存交由重新探测
+    return null;
+  }
+
+  // 并发探测缺失缓存的视频并写回缓存；返回 path -> info 映射
+  async _resolveVideoInfos(videoPaths) {
+    const result = new Map();
+    const needProbe = [];
+    for (const p of videoPaths) {
+      const c = this._fetchCachedVideoInfo(p);
+      if (c) result.set(p, c);
+      else needProbe.push(p);
+    }
+    const infos = await this._runWithLimit(needProbe, (p) => this._probeVideoAsync(p), this.probeConcurrency);
+    const cache = this._loadVideoCache();
+    for (let i = 0; i < needProbe.length; i++) {
+      const p = needProbe[i];
+      const info = infos[i] || { valid: false, duration: 0, width: 0, height: 0 };
+      cache[p] = { LastWriteTime: this._mtimeToTicks(p), Duration: info.duration, Valid: info.valid, Width: info.width, Height: info.height };
+      this._videoInfoCache.set(p, info);
+      result.set(p, info);
+    }
+    return result;
+  }
+
+  _saveVideoCache() {
+    try {
+      const p = this.videoCachePath || '';
+      if (!p) return;
+      fs.writeFileSync(p, JSON.stringify(this._videoCache), 'utf-8');
+    } catch (e) {}
   }
 
   _isExcludedPath(target, excludes) {
@@ -454,41 +516,46 @@ class Api {
     return false;
   }
 
-  _precheckFolder(dir, excludes, nonround) {
-    const rootVideos = [];
-    const subDirs = [];
+  async _precheckFolder(dir, excludes, nonround) {
+    // 第一遍：仅同步收集候选视频，按"根目录 + 各子目录"分组，暂不探测
+    const groups = [];
     try {
       const items = fs.readdirSync(dir, { withFileTypes: true });
+      const rootVideos = [];
+      const subDirs = [];
       for (const ent of items) {
         const full = path.join(dir, ent.name);
         if (ent.isDirectory()) subDirs.push(full);
         else if (ent.isFile() && VIDEO_EXTS.has(path.extname(ent.name).toLowerCase())) rootVideos.push(full);
       }
-    } catch (e) { return { total: 0, groupCount: 0 }; }
-    const seen = new Set();
-    let total = 0;
-    let groupCount = 0;
-    let rootValid = 0;
-    for (const v of rootVideos) {
-      if (this._isExcludedPath(v, excludes)) continue;
-      if (this._getVideoInfo(v).valid) { rootValid++; if (!seen.has(v)) { seen.add(v); total++; } }
-    }
-    if (rootValid > 0) groupCount++;
-    for (const sub of subDirs) {
-      let subValid = 0;
-      const files = walkFiles(sub);
-      for (const f of files) {
-        if (!VIDEO_EXTS.has(path.extname(f).toLowerCase())) continue;
-        if (this._isExcludedPath(f, excludes)) continue;
-        if (this._getVideoInfo(f).valid) { subValid++; if (!seen.has(f)) { seen.add(f); total++; } }
+      const rootCands = [];
+      for (const v of rootVideos) if (!this._isExcludedPath(v, excludes)) rootCands.push(v);
+      groups.push(rootCands);
+      for (const sub of subDirs) {
+        const cands = [];
+        for (const f of walkFiles(sub)) {
+          if (!VIDEO_EXTS.has(path.extname(f).toLowerCase())) continue;
+          if (this._isExcludedPath(f, excludes)) continue;
+          cands.push(f);
+        }
+        groups.push(cands);
       }
-      if (subValid > 0) groupCount++;
-    }
+    } catch (e) { return { total: 0, groupCount: 0 }; }
+
+    // 去重后并发探测（未命中缓存的才跑 ffprobe，限流）
+    const seen = new Set();
+    const all = [];
+    for (const g of groups) for (const f of g) if (!seen.has(f)) { seen.add(f); all.push(f); }
+    const infos = await this._resolveVideoInfos(all);
+
+    let total = 0, groupCount = 0;
+    for (const g of groups) if (g.some((f) => { const i = infos.get(f); return i && i.valid; })) groupCount++;
+    for (const f of all) { const i = infos.get(f); if (i && i.valid) total++; }
     if (nonround && total > 0) groupCount = 1;
     return { total, groupCount };
   }
 
-  precheck(paths, excludes) {
+  async precheck(paths, excludes) {
     excludes = (Array.isArray(excludes) ? excludes : []).map((s) => stripQuotes(s)).filter(Boolean);
     const results = [];
     const dedup = new Map();
@@ -502,7 +569,7 @@ class Api {
       try {
         const st = fs.statSync(key);
         if (st.isDirectory()) {
-          const s = this._precheckFolder(key, excludes, nonround);
+          const s = await this._precheckFolder(key, excludes, nonround);
           if (s.total === 0) r = { status: 'warn', text: '无合规视频', total: 0, groupCount: 0, exists: true };
           else {
             const grouped = s.groupCount > 1;
@@ -511,7 +578,8 @@ class Api {
           }
         } else if (st.isFile()) {
           if (VIDEO_EXTS.has(path.extname(key).toLowerCase())) {
-            const valid = !this._isExcludedPath(key, excludes) && this._getVideoInfo(key).valid;
+            const info = this._fetchCachedVideoInfo(key) || await this._probeVideoAsync(key);
+            const valid = !this._isExcludedPath(key, excludes) && info.valid;
             r = valid ? { status: 'ok', text: '1 个视频', total: 1, groupCount: 1, exists: true } : { status: 'warn', text: '非合规视频', total: 0, groupCount: 0, exists: true };
           } else r = { status: 'warn', text: '非视频文件', total: 0, groupCount: 0, exists: true };
         } else r = { status: 'warn', text: '路径无效', total: 0, groupCount: 0, exists: false };
@@ -519,7 +587,59 @@ class Api {
       results.push(r);
       dedup.set(key, r);
     }
+    this._saveVideoCache();
     return results;
+  }
+
+  // 重置预检测：清除物理缓存，收集所有配置指向的路径并全量探测（跨路径去重），可实时回报进度
+  async resetPrecheck(onProgress) {
+    try {
+      const cf = this.videoCachePath || '';
+      if (cf && fs.existsSync(cf)) fs.unlinkSync(cf);
+    } catch (e) {}
+    this._videoCache = {};
+    this._videoInfoCache = new Map();
+
+    // 收集所有配置指向的素材路径（跨配置去重）
+    const all = this._collectAllTxt();
+    const pathSet = new Set();
+    for (const t of all) {
+      let cfg;
+      try { cfg = this.readConfig(t.full); } catch (e) { continue; }
+      for (const f of (cfg.folders || [])) {
+        const p = stripQuotes(String((f && typeof f === 'object' ? f.path : f) || '').trim());
+        if (p) pathSet.add(p);
+      }
+    }
+
+    // 收集所有视频候选（跨路径去重）
+    const seen = new Set();
+    const allVideos = [];
+    for (const p of pathSet) {
+      let st;
+      try { st = fs.statSync(p); } catch (e) { continue; }
+      const cands = [];
+      if (st.isDirectory()) {
+        for (const f of walkFiles(p)) if (VIDEO_EXTS.has(path.extname(f).toLowerCase())) cands.push(f);
+      } else if (st.isFile() && VIDEO_EXTS.has(path.extname(p).toLowerCase())) cands.push(p);
+      for (const f of cands) if (!seen.has(f)) { seen.add(f); allVideos.push(f); }
+    }
+
+    const report = (s) => { if (onProgress) { try { onProgress(s); } catch (e) {} } };
+    const total = allVideos.length;
+    let probed = 0, valid = 0;
+    const cache = this._loadVideoCache();
+    await this._runWithLimit(allVideos, (f) => this._probeVideoAsync(f).then((info) => {
+      cache[f] = { LastWriteTime: this._mtimeToTicks(f), Duration: info.duration, Valid: info.valid, Width: info.width, Height: info.height };
+      this._videoInfoCache.set(f, info);
+      probed++;
+      if (info.valid) valid++;
+      report({ done: probed, total });
+    }), this.probeConcurrency);
+
+    this._saveVideoCache();
+    report({ done: probed, total, finished: true });
+    return { ok: true, total, valid, invalid: total - valid };
   }
 
   // 收集某配置目录下的日志候选并解析为成片条目（按目录 mtime 缓存）
@@ -834,7 +954,25 @@ if ($r -ne 0) { Write-Error "op failed: $r"; exit 1 }
             const c = parseInt(curMatch[1], 10), t = parseInt(curMatch[2], 10);
             if (t > 0) task.progress.total = t;
             task.progress.current = c;
+            // 新成片开始：重置单成片进度
+            task._clipDur = 0;
+            task.progress.clip = 0;
+            task.progress.clipTarget = 0;
           }
+          // 单成片实时进度：目标时长（分母）+ ffmpeg out_time（分子）
+          const durM = s.match(/成片预计时长:\s*([\d.]+)\s*秒/);
+          if (durM) {
+            const d = parseFloat(durM[1]);
+            if (d > 0) { task._clipDur = d; task.progress.clipTarget = d; task.progress.clip = 0; }
+          }
+          const outM = s.match(/out_time=(\d+):(\d+):(\d+(?:\.\d+)?)/)
+            || s.match(/\btime=(\d+):(\d+):(\d+(?:\.\d+)?)/);
+          if (outM) {
+            task.progress.clip = parseInt(outM[1], 10) * 3600 + parseInt(outM[2], 10) * 60 + parseFloat(outM[3]);
+          }
+          const usM = s.match(/out_time_us=(\d+)/);
+          if (usM) task.progress.clip = parseInt(usM[1], 10) / 1e6;
+          if (/成片完成/.test(s) && task._clipDur > 0) task.progress.clip = task._clipDur;
           if (/等待获取互斥锁/.test(s)) task.lockState = 'waiting';
           else if (/已获取互斥锁/.test(s)) task.lockState = 'locked';
           else if (/互斥锁已释放|任务全部完成|脚本完成/.test(s)) task.lockState = 'released';
@@ -871,14 +1009,15 @@ if ($r -ne 0) { Write-Error "op failed: $r"; exit 1 }
     });
   }
 
-  // 任务显示标题：优先取相对工作根目录的第一级项目名，取不到则回退文件名（去掉 .txt 后缀）
+  // 任务显示标题：优先"项目名 / txt 文件名"（txt 去掉 .txt 后缀），取不到项目名则回退文件名
   _taskTitle(filePath) {
     const abs = path.resolve(filePath);
     const rel = path.relative(this.root, abs);
     const parts = rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel.split(path.sep).filter(Boolean) : [];
-    if (parts.length > 0) return parts[0];
     const base = path.basename(abs);
-    return base.replace(/\.txt$/i, '') || base;
+    const txtName = base.replace(/\.txt$/i, '') || base;
+    if (parts.length > 0) return parts[0] + ' / ' + txtName;
+    return txtName;
   }
 
   runBatch(filePath, count, group) {

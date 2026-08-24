@@ -27,7 +27,8 @@
     'video': '<path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/>',
     'search-x': '<path d="m13.5 8.5-5 5"/><path d="m8.5 8.5 5 5"/><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
     'repeat': '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
-    'file-plus': '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M12 18v-6"/><path d="M9 15h6"/>'
+    'file-plus': '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M12 18v-6"/><path d="M9 15h6"/>',
+    'palette': '<circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>'
   };
 
   function icon(name, size, cls) {
@@ -366,7 +367,6 @@
     });
     html += '</div>';
     html += '<input type="text" class="config-exclude-input" id="inputExclude" placeholder="输入排除字符串，回车添加" spellcheck="false"></div>';
-    html += '<div class="config-resizer config-resizer--h"></div>';
     html += '<div class="config-editor__col config-editor__col--watermark">';
     html += '<div class="config-editor__col-header">水印 PNG</div>';
     html += '<div class="config-editor__watermark-content">';
@@ -445,7 +445,28 @@
     var watermark = state.configData ? (state.configData.watermark || '') : '';
     return { folders: folders, excludes: excludes, watermark: watermark };
   }
+  // 预检测：输入防抖 + 宽限期弹窗，避免频繁触发闪烁，也避免长时间检测误以为卡死
+  var precheckDebounceTimer = null;
+  var precheckGraceTimer = null;
+  var precheckOverlayCount = 0;
+  var PRECHECK_DEBOUNCE_MS = 250; // 输入防抖窗口
+  var PRECHECK_OVERLAY_MS = 350;  // 宽限期：超过才弹"正在预检测"遮罩
+  function showPrecheckBusy() {
+    precheckOverlayCount++;
+    var o = $('busyOverlay');
+    if (!o) return;
+    $('busyText').textContent = '正在预检测，请稍候…';
+    o.style.display = 'flex';
+  }
+  function hidePrecheckBusy() {
+    precheckOverlayCount = Math.max(0, precheckOverlayCount - 1);
+    if (precheckOverlayCount === 0) hideBusy();
+  }
   function runPrecheck() {
+    if (precheckDebounceTimer) clearTimeout(precheckDebounceTimer);
+    precheckDebounceTimer = setTimeout(runPrecheckNow, PRECHECK_DEBOUNCE_MS);
+  }
+  function runPrecheckNow() {
     var list = $('pathList');
     if (!list) return;
     var rows = list.querySelectorAll('.config-path-row');
@@ -485,6 +506,9 @@
       });
       state.precheckInvalid = true;
       applyPrecheckValidity();
+    }).finally(function () {
+      if (precheckGraceTimer) { clearTimeout(precheckGraceTimer); precheckGraceTimer = null; }
+      if (precheckOverlayCount > 0) hidePrecheckBusy();
     });
   }
   function refreshPreviewIfModified() { if (state.rightPreview) buildRightPanel(); }
@@ -501,7 +525,9 @@
       else if (t.id === 'btnAddPath') { addPathField(); }
       else if (t.id === 'btnChangeWatermark') { changeWatermark(); }
     }
-    container.removeEventListener('click', onContainerClick); container.addEventListener('click', onContainerClick);
+    container.removeEventListener('click', container._delegatedClick);
+    container._delegatedClick = onContainerClick;
+    container.addEventListener('click', container._delegatedClick);
     var exInput = $('inputExclude');
     if (exInput) { var exKey = function (e) { if (e.key === 'Enter') { e.preventDefault(); addExcludeField(); } }; exInput.addEventListener('keydown', exKey); }
     pathList.addEventListener('dragstart', function (e) {
@@ -531,7 +557,9 @@
     function onContainerChange(e) {
       if (e.target.classList && (e.target.classList.contains('config-path-row__input') || e.target.classList.contains('config-path-row__check'))) { runPrecheck(); refreshPreviewIfModified(); }
     }
-    container.removeEventListener('change', onContainerChange); container.addEventListener('change', onContainerChange);
+    container.removeEventListener('change', container._delegatedChange);
+    container._delegatedChange = onContainerChange;
+    container.addEventListener('change', container._delegatedChange);
   }
   function reindexPathRows() { $('pathList').querySelectorAll('.config-path-row').forEach(function (r, i) { r.dataset.index = i; }); }
   function updatePathCount() { var n = $('pathList').querySelectorAll('.config-path-row').length; var col = document.querySelector('.config-editor__col--paths .config-editor__col-count'); if (col) col.textContent = n; }
@@ -916,44 +944,146 @@
     var targetTop = 8 + (n - 1) * lineHeight;
     content.scrollTop = Math.max(0, targetTop - Math.floor(content.clientHeight * 0.2));
   }
-  function setStatus(msg) { $('statusLeft').textContent = msg; }
+  function setStatus(msg) { var el = $('statusLeft'); if (!el) return; el.classList.remove('status-bar__success'); el.textContent = msg; }
+  function setStatusDone(msg) { var el = $('statusLeft'); if (!el) return; el.classList.add('status-bar__success'); el.textContent = msg; }
 
   // 载入遮罩：工作路径扫描时提示用户
-  function showBusy(text) { var o = $('busyOverlay'); if (!o) return; $('busyText').textContent = text || '正在检测…'; o.style.display = 'flex'; }
+  function showBusy(text) { var o = $('busyOverlay'); if (!o) return; var p = $('busyProgress'); if (p) p.style.display = 'none'; $('busyText').textContent = text || '正在检测…'; o.style.display = 'flex'; }
   function hideBusy() { var o = $('busyOverlay'); if (o) o.style.display = 'none'; }
-
-  // ── 皮肤切换 ──
-  var SKINS = [ { id: 'white_blue', label: '白蓝' }, { id: 'Black_Orange', label: '黑橙' }, { id: 'Gray_Orange', label: '灰橙' } ];
-  function applySkin(id, persist) {
-    var target = SKINS.some(function (s) { return s.id === id; }) ? id : SKINS[0].id;
-    document.documentElement.setAttribute('data-skin', target);
-    var sel = $('skinSelect'); if (sel) sel.value = target;
-    if (persist) call('set_skin', target);
-    return target;
+  // 带进度条的等待窗口：重置预检测全量检测期间使用
+  function showBusyProgress(text) {
+    var o = $('busyOverlay'); if (!o) return;
+    $('busyText').textContent = text || '正在检测…';
+    var fill = $('busyProgressFill'), pt = $('busyProgressText'), p = $('busyProgress');
+    if (p) p.style.display = 'flex';
+    if (fill) fill.style.width = '0%';
+    if (pt) pt.textContent = '正在收集视频…';
+    o.style.display = 'flex';
   }
-  function initSkin() {
-    var sel = $('skinSelect');
-    if (!sel) return;
-    SKINS.forEach(function (s) { var o = document.createElement('option'); o.value = s.id; o.textContent = s.label; sel.appendChild(o); });
-    call('get_skin').then(function (id) { applySkin(id, false); }).catch(function () { applySkin(SKINS[0].id, false); });
-    sel.addEventListener('change', function () {
-      var id = applySkin(sel.value, true);
-      var s = SKINS.filter(function (x) { return x.id === id; })[0];
-      setStatus('皮肤已切换：' + (s ? s.label : id));
+  function onResetProgress(s) {
+    if (!s) return;
+    var total = s.total || 0, done = s.done || 0;
+    var pct = total > 0 ? Math.min(100, Math.round(done / total * 100)) : 0;
+    var fill = $('busyProgressFill'), pt = $('busyProgressText');
+    if (fill) fill.style.width = pct + '%';
+    if (pt) pt.textContent = s.finished
+      ? '已完成 ' + done + ' / ' + total
+      : (total > 0 ? '正在检测 ' + done + ' / ' + total + '（' + pct + '%）' : '正在收集视频…');
+  }
+  function resetPrecheckAll() {
+    var dismiss = null;
+    var api = getApi();
+    if (api && typeof api.on_reset_progress === 'function') {
+      try { dismiss = api.on_reset_progress(onResetProgress); } catch (e) { dismiss = null; }
+    }
+    var cleanup = function () { if (dismiss) { try { dismiss(); } catch (e) {} dismiss = null; } };
+    call('reset_precheck').then(function (r) {
+      hideBusy();
+      cleanup();
+      setStatus('预检测已重置：共检测 ' + (r && r.total || 0) + ' 个视频，合规 ' + (r && r.valid || 0) + ' 个');
+      if (state.activeTxt && state.activeVersion) runPrecheck();
+    }).catch(function (e) {
+      hideBusy();
+      cleanup();
+      setStatus('重置预检测失败：' + e.message);
+    });
+  }
+  function resetPrecheckFlow() {
+    showDialog({
+      title: '重置预检测',
+      message: '将重置预检测物理缓存，并对所有配置指向的路径重新预检测（重复文件自动跳过）。视频数量较多时可能耗时较长，是否继续？',
+      buttons: [ { label: '取消', value: null, primary: true }, { label: '确认重置', value: 1, danger: true } ]
+    }).then(function (v) {
+      if (!v) { setStatus('已取消重置预检测'); return; }
+      showBusyProgress('正在重置预检测缓存并全量检测，请耐心等待…');
+      resetPrecheckAll();
     });
   }
 
-  function refreshData(force, busyText) {
+  // ── 皮肤切换 ──
+  // 皮肤列表按下拉名拼音升序：白蓝 < 黑橙 < 灰橙
+  var SKINS = [
+    { id: 'white_blue', label: '白蓝', bg: '#F5F5F5', theme: '#4B3FE3' },
+    { id: 'Black_Orange', label: '黑橙', bg: '#111113', theme: '#FF6600' },
+    { id: 'Gray_Orange', label: '灰橙', bg: '#333336', theme: '#FF6600' }
+  ];
+  var skinPop = null;
+  function applySkin(id, persist) {
+    var target = SKINS.some(function (s) { return s.id === id; }) ? id : SKINS[0].id;
+    document.documentElement.setAttribute('data-skin', target);
+    var btn = $('skinBtn');
+    if (btn) {
+      var s = SKINS.filter(function (x) { return x.id === target; })[0] || SKINS[0];
+      btn.title = '切换皮肤（当前：' + s.label + '）';
+    }
+    if (persist) call('set_skin', target);
+    return target;
+  }
+  function ensureSkinPop() {
+    if (skinPop) return skinPop;
+    var pop = document.createElement('div');
+    pop.className = 'skin-popup';
+    SKINS.forEach(function (s) {
+      var item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'skin-popup__item';
+      item.dataset.skin = s.id;
+      item.innerHTML = '<span class="skin-popup__swatch"><i class="skin-popup__swatch-b" style="background:' + s.bg + '"></i><i class="skin-popup__swatch-t" style="background:' + s.theme + '"></i></span>' + s.label;
+      pop.appendChild(item);
+    });
+    document.body.appendChild(pop);
+    skinPop = pop;
+    return pop;
+  }
+  function positionSkinPop() {
+    var btn = $('skinBtn');
+    if (!btn || !skinPop) return;
+    var br = btn.getBoundingClientRect();
+    skinPop.style.left = br.left + 'px';
+    skinPop.style.top = (br.top - skinPop.offsetHeight - 6) + 'px';
+    skinPop.style.right = 'auto';
+  }
+  function initSkin() {
+    var btn = $('skinBtn');
+    if (!btn) return;
+    call('get_skin').then(function (id) { applySkin(id, false); }).catch(function () { applySkin(SKINS[0].id, false); });
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var pop = ensureSkinPop();
+      var cur = document.documentElement.getAttribute('data-skin') || SKINS[0].id;
+      pop.querySelectorAll('.skin-popup__item').forEach(function (it) {
+        it.classList.toggle('skin-popup__item--active', it.dataset.skin === cur);
+      });
+      pop.style.display = 'block';
+      positionSkinPop();
+      pop.onclick = function (ev) {
+        var it = ev.target.closest('.skin-popup__item');
+        if (!it) return;
+        var s = SKINS.filter(function (x) { return x.id === it.dataset.skin; })[0];
+        applySkin(it.dataset.skin, true);
+        setStatus('皮肤已切换：' + (s ? s.label : it.dataset.skin));
+        pop.style.display = 'none';
+      };
+    });
+    document.addEventListener('click', function (e) {
+      if (skinPop && skinPop.style.display === 'block' && !e.target.closest('.skin-popup') && !e.target.closest('.skin-select')) {
+        skinPop.style.display = 'none';
+      }
+    });
+  }
+
+  function refreshData(force, busyText, done, skipReflow) {
     if (busyText) showBusy(busyText);
     call('list_projects', force).then(function (projects) {
       state.projects = projects || []; buildSidebar();
-      if (state.activeProject && state.activeTxt) {
+      if (!skipReflow && state.activeProject && state.activeTxt) {
         var foundProj = state.projects.find(function (p) { return p.name === state.activeProject; });
         var foundTxt = foundProj && foundProj.txts.find(function (t) { return t.name === state.activeTxt; });
         if (!foundTxt) { state.activeProject = null; state.activeTxt = null; state.versions = []; state.activeVersion = null; state.configData = null; buildDateBranches(); buildCenterBottom(); buildRightPanel(); setStatus('就绪'); }
         else selectTxt(state.activeProject, state.activeTxt, true);
       }
       if (busyText) hideBusy();
+      if (done) done();
     }).catch(function (e) { setStatus('数据加载失败：' + e.message); if (busyText) hideBusy(); });
   }
   function selectTxt(project, name, keepVersion) {
@@ -987,15 +1117,26 @@
     $('btnSortTime').addEventListener('click', function () { if (state.sortMode === 'time') state.sortTimeDesc = !state.sortTimeDesc; else state.sortMode = 'time'; updateSortButtons(); buildSidebar(); });
     $('dateBranches').addEventListener('click', function (e) { var btn = e.target.closest('.date-branch-btn'); if (btn) selectVersion(btn.getAttribute('data-label')); });
     $('dateBranches').addEventListener('dblclick', function (e) { var btn = e.target.closest('.date-branch-btn'); if (!btn) return; var label = btn.getAttribute('data-label'); var v = state.versions.find(function (x) { return x.label === label; }); if (v) call('open_parent', v.path); });
+    $('dateBranches').addEventListener('contextmenu', function (e) {
+      var btn = e.target.closest('.date-branch-btn');
+      if (!btn) return;
+      e.preventDefault();
+      var label = btn.getAttribute('data-label');
+      var v = state.versions.find(function (x) { return x.label === label; });
+      if (!v) return;
+      showMenu(e.clientX, e.clientY, [
+        { label: '打开文件', action: function () { call('open_path', v.path); } },
+        { label: '打开路径', action: function () { call('open_parent', v.path); } }
+      ]);
+    });
     $('modeFilelist').addEventListener('click', function () { state.mode = 'filelist'; $('modeFilelist').classList.add('mode-toggle--active'); $('modeLog').classList.remove('mode-toggle--active'); buildCenterBottom(); buildRightPanel(); });
     $('modeLog').addEventListener('click', function () { state.mode = 'log'; $('modeLog').classList.add('mode-toggle--active'); $('modeFilelist').classList.remove('mode-toggle--active'); buildCenterBottom(); buildRightPanel(); });
     $('searchInput').addEventListener('input', function () { state.searchQuery = this.value.trim(); buildSidebar(); });
     $('logSearchInput').addEventListener('input', function () { state.logSearchQuery = this.value.trim(); if (state.mode === 'log') buildCenterBottom(); onLogSearchInput(); });
-    $('btnRecheckProject').addEventListener('click', function () { setStatus('重新检测中…'); refreshData(true, '正在重新扫描工作路径…'); });
+    $('btnResetPrecheck').addEventListener('click', resetPrecheckFlow);
+    $('btnRecheckProject').addEventListener('click', function () { setStatus('重新检测中…'); refreshData(true, '正在重新扫描工作路径…', function () { setStatusDone('重新检测完成'); }, true); });
     $('btnPreviewRaw').addEventListener('click', function () { state.rightPreview = false; $('btnPreviewRaw').classList.add('preview-toggle--active'); $('btnPreviewModified').classList.remove('preview-toggle--active'); buildRightPanel(); });
     $('btnPreviewModified').addEventListener('click', function () { state.rightPreview = true; $('btnPreviewModified').classList.add('preview-toggle--active'); $('btnPreviewRaw').classList.remove('preview-toggle--active'); buildRightPanel(); });
-    $('btnOpenFile').addEventListener('click', function () { if (!state.activeVersion) return flashNeedSelect(); call('open_path', state.activeVersion.path); });
-    $('btnOpenFolder').addEventListener('click', function () { if (!state.activeVersion) return flashNeedSelect(); call('open_parent', state.activeVersion.path); });
     $('btnExternalEdit').addEventListener('click', function () { if (!state.activeVersion) return flashNeedSelect(); call('external_edit', state.activeVersion.path); });
     $('btnChoosePath').addEventListener('click', choosePath);
     $('btnOpenTasks').addEventListener('click', function () { call('open_task_window').catch(function () { setStatus('打开任务窗口失败'); }); });
@@ -1005,7 +1146,7 @@
       rz.addEventListener('mousedown', function (e) {
         e.preventDefault();
         var startX = e.clientX, startW = sidebarEl.clientWidth;
-        function onMove(ev) { var w = Math.max(180, Math.min(520, startW + (ev.clientX - startX))); sidebarEl.style.width = w + 'px'; }
+        function onMove(ev) { var w = Math.max(285, Math.min(520, startW + (ev.clientX - startX))); sidebarEl.style.width = w + 'px'; }
         function onUp() { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); rz.classList.remove('workspace-resizer--active'); }
         rz.classList.add('workspace-resizer--active'); document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
       });

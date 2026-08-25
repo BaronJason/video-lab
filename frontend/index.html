@@ -23,6 +23,8 @@
       </div>
     </div>
   </div>
+  <!-- 设置窗口打开时的模糊遮罩（类似预检测） -->
+  <div id="settingsDim" class="settings-dim" style="display:none"></div>
   <div class="app-shell">
 
     <!-- ═══ Main Content ═══ -->
@@ -33,7 +35,7 @@
         <div class="sidebar__header">
           <span class="sidebar__header-title">项目列表</span>
           <button class="sidebar__recheck" id="btnResetPrecheck" title="重置预检测物理缓存，并对所有配置指向的路径重新预检测">
-            <i data-icon="refresh-cw" data-size="12"></i>重置预检测
+            <i data-icon="rotate-ccw" data-size="12"></i>重置预检测
           </button>
           <div class="sidebar__sort">
             <button class="sort-toggle sort-toggle--active" id="btnSortName" title="按名称排序">名称</button>
@@ -51,11 +53,14 @@
           <div class="sidebar__tree" id="sidebarTree"></div>
         </div>
         <div class="sidebar__actions">
-          <button class="btn-full btn-open-folder" id="btnRecheckProject" title="重新扫描工作路径下的所有配置">
+          <button class="btn-full" id="btnRecheckProject" title="重新扫描工作路径下的所有配置">
             <i data-icon="refresh-cw" data-size="14"></i>重新检测配置
           </button>
-          <button class="btn-full btn-open-folder" id="btnChoosePath" title="选择工作路径">
+          <button class="btn-full" id="btnChoosePath" title="选择工作路径">
             <i data-icon="folder" data-size="14"></i>选择路径
+          </button>
+          <button class="btn-full" id="skinBtn" title="设置">
+            <i data-icon="settings" data-size="14"></i>设置
           </button>
         </div>
       </div>
@@ -130,9 +135,6 @@
     <!-- ═══ Status Bar ═══ -->
     <div class="status-bar">
       <span class="status-bar__left">
-        <button class="skin-select" id="skinBtn" title="切换皮肤">
-          <i data-icon="palette" data-size="15"></i>
-        </button>
         <span id="statusLeft">就绪</span>
       </span>
       <span class="status-bar__right">

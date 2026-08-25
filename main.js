@@ -71,19 +71,23 @@ const cacheDir = (() => {
 const scanCachePath = path.join(cacheDir, app.isPackaged ? 'scan_cache.json' : 'video_lab_scan_cache.json');
 const videoCachePath = path.join(cacheDir, 'video_cache.json');
 const logCachePath = path.join(cacheDir, app.isPackaged ? 'log_cache.json' : 'video_lab_log_cache.json');
+// 成片名搜索缓存（仅存成片条目精简字段，目录 mtime 变化自动失效重建）
+const clipCachePath = path.join(cacheDir, app.isPackaged ? 'clip_cache.json' : 'video_lab_clip_cache.json');
+const taskStatePath = path.join(cacheDir, app.isPackaged ? 'task_snapshot.json' : 'video_lab_task_snapshot.json');
 // 迁移旧 scan 缓存命名（同目录内把旧的连字符命名改为下划线）；不含脚本目录缓存——脚本目录属用户个人数据，应用绝不读写
 (function migrateOldScanCache() {
   const oldScan = path.join(cacheDir, app.isPackaged ? 'scan-cache.json' : 'video-lab-scan-cache.json');
   if (oldScan === scanCachePath || !fs.existsSync(oldScan) || fs.existsSync(scanCachePath)) return;
   try { fs.copyFileSync(oldScan, scanCachePath); fs.unlinkSync(oldScan); } catch (e) {}
 })();
-const api = new Api(root, config, scanCachePath, videoCachePath, logCachePath);
+const api = new Api(root, config, scanCachePath, videoCachePath, logCachePath, path.join(projectDir(), 'resources', 'Scripts'), clipCachePath, taskStatePath);
 
 // 主窗口与任务窗口：主窗口仅在原生模态对话框/载入遮罩时被禁用；任务列表窗口不随父窗口禁用
 let mainWin = null;
 // 系统托盘：关闭主窗口仅最小化到托盘，右键托盘图标菜单可退出或显示主窗口
 let tray = null;
 let isQuitting = false;
+let quitConfirmed = false; // 有运行中任务退出时，经主窗口确认后才真正退出
 // 图标源文件（resources/app/icon/），托盘图标使用多分辨率适配不同缩放的任务栏
 const ICON_DIR = path.join(__dirname, 'icon');
 function trayIcon() {
@@ -106,6 +110,10 @@ function createTray() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '显示主窗口', click: () => showMainWindow() },
     { type: 'separator' },
+    { label: '打开任务列表', click: () => createTaskWindow() },
+    { type: 'separator' },
+    { label: '设置', click: () => openSettingsWindow() },
+    { type: 'separator' },
     { label: '退出', click: () => { isQuitting = true; app.quit(); } }
   ]));
   tray.on('double-click', () => showMainWindow());
@@ -114,10 +122,44 @@ function createTray() {
 let taskWin = null;
 function createTaskWindow() {
   if (taskWin && !taskWin.isDestroyed()) { taskWin.focus(); return taskWin; }
-  taskWin = new BrowserWindow({ title: 'Video Lab - 任务', width: 760, height: 620, minWidth: 520, minHeight: 400, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
+  taskWin = new BrowserWindow({ title: 'Video Lab - 任务', width: 760, height: 620, resizable: false, maximizable: false, minimizable: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
   taskWin.loadFile(path.join(__dirname, 'frontend', 'task.html'));
   taskWin.on('closed', () => { taskWin = null; });
   return taskWin;
+}
+// 设置窗口：独立的设置页（通用设置 / 批量拼接 / 视频复刻）
+let settingsWin = null;
+function openSettingsWindow() {
+  if (settingsWin && !settingsWin.isDestroyed()) { settingsWin.focus(); return settingsWin; }
+  // 点击设置按钮时立即让主窗口显示模糊遮罩，与设置窗口出现同步，避免突兀
+  if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('settings_window_opened');
+  settingsWin = new BrowserWindow({ title: 'Video Lab - 设置', width: 680, height: 640, resizable: false, maximizable: false, minimizable: false, parent: mainWin, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
+  settingsWin.loadFile(path.join(__dirname, 'frontend', 'settings.html'));
+  settingsWin.on('blur', handleSettingsBlur);
+  settingsWin.on('closed', () => {
+    settingsWin = null; settingsDirty = false; settingsPickingDir = false;
+    if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('settings_window_closed');
+  });
+  return settingsWin;
+}
+// 设置窗口失焦处理：未修改直接关闭；有修改则系统报错音+关闭按钮闪红提醒
+let settingsDirty = false;
+let settingsPickingDir = false;
+function sysBeep() {
+  try {
+    const { spawn } = require('child_process');
+    const p = spawn('pwsh', ['-NoProfile', '-Command', '[System.Media.SystemSounds]::Exclamation.Play()'], { stdio: 'ignore', detached: true });
+    p.unref();
+  } catch (e) {}
+}
+function handleSettingsBlur() {
+  if (!settingsWin || settingsWin.isDestroyed() || settingsPickingDir) return;
+  if (settingsDirty) {
+    sysBeep();
+    try { settingsWin.webContents.send('settings_flash_close'); } catch (e) {}
+  } else {
+    settingsWin.close();
+  }
 }
 // 任务快照变化时推送给所有窗口（主窗口按钮计数 + 任务窗口列表）
 function sendTasksToAll() {
@@ -140,13 +182,57 @@ function registerIpc() {
   ipcMain.handle('list_log_files', (e, fromPath, configName) => api.listLogFiles(fromPath, configName));
   ipcMain.handle('check_exists', (e, paths) => api.checkExists(paths));
   ipcMain.handle('run_batch', (e, p, count, group) => api.runBatch(p, count, group));
-  ipcMain.handle('run_replica', (e, logPath, mode) => api.runReplica(logPath, mode));
+  ipcMain.handle('run_replica', (e, logPath, mode, entryVideo) => api.runReplica(logPath, mode, entryVideo));
   ipcMain.handle('list_tasks', () => api.snapshotTasks());
   ipcMain.handle('stop_task', (e, id) => api.stopTask(id));
+  ipcMain.handle('pin_task', (e, id) => api.pinTask(id));
+  ipcMain.handle('reorder_tasks', (e, ids) => api.reorderTasks(ids));
   ipcMain.handle('pause_task', (e, id) => api.pauseTask(id));
   ipcMain.handle('resume_task', (e, id) => api.resumeTask(id));
-  ipcMain.handle('clear_finished_tasks', () => api.clearFinishedTasks());
+  ipcMain.handle('clear_finished_tasks', (e, statuses) => api.clearFinishedTasks(statuses));
+  ipcMain.handle('clear_task', (e, id) => api.clearTask(id));
+  ipcMain.handle('resume_all_tasks', () => api.resumeAllTasks());
+  ipcMain.handle('pause_all_tasks', () => api.pauseAllTasks());
+  ipcMain.handle('confirm_quit', () => { quitConfirmed = true; app.quit(); return { ok: true }; });
   ipcMain.handle('open_task_window', () => { createTaskWindow(); return { ok: true }; });
+  ipcMain.handle('open_settings_window', () => { openSettingsWindow(); return { ok: true }; });
+  // 设置页：读取完整配置（合并默认值，保证字段齐全）
+  ipcMain.handle('get_settings', () => {
+    const c = loadConfig();
+    return {
+      skin: c.skin,
+      watermark_dir: c.watermark_dir || '',
+      root: c.root || '',
+      batch: Object.assign({}, DEFAULT_CONFIG.batch, c.batch),
+      replica: Object.assign({}, DEFAULT_CONFIG.replica, c.replica),
+    };
+  });
+  // 设置页：保存完整配置，写入 config.json 并同步内存/后端/主窗口皮肤
+  ipcMain.handle('save_settings', (e, s) => {
+    const cfg = loadConfig();
+    if (s && typeof s === 'object') {
+      for (const k of ['skin', 'watermark_dir', 'root']) {
+        if (typeof s[k] === 'string') cfg[k] = s[k].trim();
+      }
+      if (s.batch && typeof s.batch === 'object') cfg.batch = Object.assign({}, DEFAULT_CONFIG.batch, s.batch);
+      if (s.replica && typeof s.replica === 'object') cfg.replica = Object.assign({}, DEFAULT_CONFIG.replica, s.replica);
+    }
+    saveConfig(cfg);
+    Object.assign(config, cfg);
+    api.updateSettings(cfg);
+    for (const w of BrowserWindow.getAllWindows()) w.webContents.send('settings_saved', cfg);
+    return { ok: true };
+  });
+  // 设置页：通用「选择目录」对话框
+  ipcMain.handle('pick_directory', async (e, title, defaultPath) => {
+    settingsPickingDir = true;
+    try {
+      const result = await dialog.showOpenDialog(settingsWin || mainWin, { title: title || '选择目录', defaultPath: defaultPath || api.getRoot(), properties: ['openDirectory'] });
+      return result.canceled || !result.filePaths || result.filePaths.length === 0 ? '' : result.filePaths[0];
+    } finally { settingsPickingDir = false; }
+  });
+  // 设置页：改动状态通知（决定失焦时是直接关闭还是提醒保存）
+  ipcMain.on('settings_dirty', (e, d) => { settingsDirty = !!d; });
   ipcMain.handle('get_root', () => api.getRoot());
   ipcMain.handle('check_env', () => api.checkEnv());
   ipcMain.handle('choose_workdir', async () => {
@@ -191,10 +277,6 @@ async function ensureConfig() {
     const r = await dialog.showOpenDialog({ title: '选择项目数据根目录', message: '这里存放各项目文件夹及其 TXT 配置（必选）', buttonLabel: '选择此目录', defaultPath: defaultRoot(), properties: ['openDirectory'] });
     if (!r.canceled && r.filePaths && r.filePaths[0]) config.root = r.filePaths[0];
   }
-  if (!isDir(config.scripts_dir)) {
-    const r = await dialog.showOpenDialog({ title: '选择脚本目录', message: '这里放置「批量拼接.ps1」「视频复刻.ps1」（用于生成成片；可取消稍后在 config.json 中补）', buttonLabel: '选择此目录', properties: ['openDirectory'] });
-    if (!r.canceled && r.filePaths && r.filePaths[0]) config.scripts_dir = r.filePaths[0];
-  }
   if (!isDir(config.watermark_dir)) {
     const r = await dialog.showOpenDialog({ title: '选择水印默认目录', message: '水印 PNG 所在的默认目录（可取消，稍后在 config.json 中补）', buttonLabel: '选择此目录', properties: ['openDirectory'] });
     if (!r.canceled && r.filePaths && r.filePaths[0]) config.watermark_dir = r.filePaths[0];
@@ -209,7 +291,22 @@ app.whenReady().then(async () => {
   await ensureConfig();
   createTray();
   createWindow();
+  api.restoreTasks(); // 恢复上次会话的任务列表（退出时已做中断/暂停转换）
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+});
+app.on('before-quit', (e) => {
+  // 仅管理主动退出（托盘「退出」）；若主窗口仍在运行任务，先经主窗口弹确认框（与界面同款样式）
+  if (!isQuitting) return;
+  if (api.hasRunningTask() && !quitConfirmed) {
+    e.preventDefault();
+    showMainWindow();
+    if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('confirm_quit_request');
+    else { api.shutdownTasks(); quitConfirmed = true; app.quit(); }
+    return;
+  }
+  // 收尾：运行中→已中断、排队→暂停，随后持久化任务列表并退出
+  api.shutdownTasks();
+  quitConfirmed = true;
 });
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin' && isQuitting) app.quit();

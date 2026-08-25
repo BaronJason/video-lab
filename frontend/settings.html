@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-skin="white_blue">
+<head>
+  <meta charset="UTF-8">
+  <title>Video Lab - 设置</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="skins/white_blue.css">
+  <link rel="stylesheet" href="skins/Black_Orange.css">
+  <link rel="stylesheet" href="skins/Gray_Orange.css">
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+<div class="settings-shell">
+
+  <aside class="settings-nav">
+    <div class="settings-nav__brand">Video Lab</div>
+    <button class="settings-nav__item is-active" data-view="general">通用设置</button>
+    <button class="settings-nav__item" data-view="batch">批量拼接</button>
+    <button class="settings-nav__item" data-view="replica">视频复刻</button>
+  </aside>
+
+  <div class="settings-body">
+
+    <!-- ═══ 通用设置 ═══ -->
+    <section class="settings-view is-active" id="view-general">
+      <h2 class="settings-view__title">通用设置</h2>
+
+      <div class="form-group">
+        <label class="form-group__label">主题外观</label>
+        <div class="theme-row" id="themeRow"></div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-group__label">工作路径<small>存放各项目文件夹及 TXT 配置</small></label>
+        <div class="dir-row">
+          <input class="form-input" id="cfgRoot" type="text" placeholder="">
+          <button class="btn btn-ghost" data-dir="cfgRoot">选择目录</button>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-group__label">水印目录<small>水印 PNG 所在默认目录</small></label>
+        <div class="dir-row">
+          <input class="form-input" id="cfgWatermark" type="text" placeholder="">
+          <button class="btn btn-ghost" data-dir="cfgWatermark">选择目录</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ 批量拼接 ═══ -->
+    <section class="settings-view" id="view-batch">
+      <h2 class="settings-view__title">成片命名规则</h2>
+
+      <div class="form-group">
+        <label class="form-group__label">创作者名<small>成片名中的创作者标识</small></label>
+        <input class="form-input" id="batchProducer" type="text" placeholder="">
+      </div>
+
+      <div class="form-group">
+        <label class="form-group__label">提取前缀<small>从 TXT 文件名提取的前缀，可留空</small></label>
+        <input class="form-input" id="batchTxtPrefix" type="text" placeholder="">
+      </div>
+
+      <div class="form-group">
+        <label class="form-group__label">后缀<small>成片名末尾的序号标识，可留空</small></label>
+        <input class="form-input" id="batchSuffixMark" type="text" placeholder="YX">
+      </div>
+
+      <div class="producer-preview__label">成片名预览</div>
+      <div class="producer-preview">
+        <code class="producer-preview__value" id="batchNamePreview"></code>
+      </div>
+
+      <h2 class="settings-view__title">批量拼接参数</h2>
+
+      <div class="form-group">
+        <label class="form-group__label">最大成片时长 (秒)</label>
+        <input class="form-input" id="batchMaxDuration" type="number" min="1" step="1" placeholder="">
+      </div>
+
+      <div class="form-group">
+        <label class="form-group__label">重试次数</label>
+        <input class="form-input" id="batchMaxRetry" type="number" min="1" step="1" placeholder="">
+      </div>
+
+      <div class="form-group">
+        <label class="form-group__label">倍速阈值<small>时长超标时的加速倍率上限</small></label>
+        <input class="form-input" id="batchSpeedLimit" type="number" min="1" step="0.1" placeholder="">
+      </div>
+    </section>
+
+    <!-- ═══ 视频复刻 ═══ -->
+    <section class="settings-view" id="view-replica">
+      <h2 class="settings-view__title">视频复刻参数</h2>
+
+      <div class="form-group">
+        <label class="form-group__label">最大成片时长 (秒)</label>
+        <input class="form-input" id="replicaMaxDuration" type="number" min="1" step="1" placeholder="">
+      </div>
+
+      <div class="form-group">
+        <label class="form-group__label">倍速阈值</label>
+        <input class="form-input" id="replicaSpeedLimit" type="number" min="1" step="0.1" placeholder="">
+      </div>
+
+      <div class="form-group">
+        <label class="form-group__label">去重阈值<small>模式2尾部替换需达到的不一致时长占比</small></label>
+        <input class="form-input" id="replicaDedupRatio" type="number" min="0" max="1" step="0.05" placeholder="">
+      </div>
+    </section>
+
+    <footer class="settings-footer">
+      <span class="settings-footer__status" id="settingsStatus"></span>
+      <button class="btn" id="btnClose">关闭</button>
+      <button class="btn btn-primary" id="btnSave" disabled>保存</button>
+    </footer>
+
+  </div>
+</div>
+
+<script src="settings.js"></script>
+</body>
+</html>

@@ -1568,9 +1568,6 @@ body {
   font-size: 9px;
   margin-right: 2px;
 }
-.sort-toggle--active .sort-toggle__arrow {
-  color: var(--brand-600);
-}
 .sidebar__sort {
   display: flex;
   align-items: center;
@@ -1594,9 +1591,17 @@ body {
   color: var(--text-secondary);
 }
 .sort-toggle--active {
-  background: var(--brand-100);
+  background: var(--brand-500);
   border-color: var(--brand-500);
-  color: var(--brand-600);
+  color: var(--text-onaccent);
+}
+.sort-toggle--active:hover {
+  background: var(--brand-600);
+  border-color: var(--brand-600);
+  color: var(--text-onaccent);
+}
+.sort-toggle--active .sort-toggle__arrow {
+  color: inherit;
 }
 .sidebar__search {
   padding: var(--spacer-8) var(--spacer-12);
@@ -1630,19 +1635,28 @@ body {
   overflow-y: auto;
   overflow-x: hidden;
   padding: var(--spacer-4) 0;
+  scrollbar-gutter: stable; /* 滚动条位置常驻，展开配置时不再出现宽度跳变 */
 }
 .sidebar__az-index {
   position: relative;
-  display: none;
+  display: flex;
   flex-direction: column;
   align-items: center;
   align-self: center;
   justify-content: center;
-  width: 16px;
+  width: 0;
+  opacity: 0;
+  pointer-events: none;
   flex-shrink: 0;
   padding: 0;
   user-select: none;
   cursor: pointer;
+  transition: width 0.4s ease, opacity 0.4s ease;
+}
+.sidebar__az-index.is-show {
+  width: 16px;
+  opacity: 1;
+  pointer-events: auto;
 }
 .az-letter {
   flex: 0 0 auto;
@@ -1660,6 +1674,34 @@ body {
   color: var(--brand-600);
   background: var(--bg-base-tertiary);
 }
+/* 切换项目重建 azbar：整列作为整体，文字从左到右渐显 */
+.sidebar__az-index.az-bar--enter {
+  -webkit-mask-image: linear-gradient(to right, #000, #000);
+  mask-image: linear-gradient(to right, #000, #000);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: left center;
+  mask-position: left center;
+  animation: az-bar-enter 0.32s ease both;
+}
+/* 动画期间所有字母保持初始排布（不高亮/不放大/不突出），结束后再单独恢复突出判定 */
+.sidebar__az-index.az-bar--enter .az-letter {
+  width: 100%;
+  align-self: center;
+}
+.sidebar__az-index.az-bar--enter .az-letter--active {
+  width: 100%;
+  align-self: center;
+  font-size: 13px;
+  line-height: 16px;
+  font-weight: normal;
+  color: var(--text-default);
+  background: none;
+}
+@keyframes az-bar-enter {
+  0% { opacity: 0; -webkit-mask-size: 0 100%; mask-size: 0 100%; }
+  100% { opacity: 1; -webkit-mask-size: 16px 100%; mask-size: 16px 100%; }
+}
 .az-letter--active {
   align-self: flex-start;
   width: calc(100% + 12px);
@@ -1675,6 +1717,8 @@ body {
   padding: 0 var(--spacer-12);
 }
 .tree-project__name {
+  position: relative;
+  isolation: isolate; /* 让 ::before 负 z-index 局限于本元素，渲染在背景之上、文字之下 */
   display: flex;
   align-items: center;
   gap: var(--spacer-6);
@@ -1687,11 +1731,31 @@ body {
   user-select: none;
   margin-bottom: var(--spacer-4);
 }
+/* 展开填充动画：展开时主题色从左到右填满项目名，折叠/切换时反向收回 */
+.tree-project__name::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--brand-500);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 0.32s ease;
+}
+.tree-project__name.is-filled { color: var(--text-onaccent); }
+.tree-project__name.is-filled::before { transform: scaleX(1); }
+/* 展开/切换填充动画：一次性动画类驱动，避免依赖过渡触发时序 */
+.tree-project__name.is-filling::before { animation: az-fill 0.32s ease both; }
+@keyframes az-fill {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
 .tree-project__name:hover { background: var(--bg-base-tertiary); }
 /* 配置展开时项目名置顶固定，切换项目时无需大幅滚动；z-index 低于 azbar 高亮，避免互相遮挡 */
 .tree-project__name--sticky {
   position: sticky;
-  top: 0;
+  top: -4px; /* 上探盖住滚动容器顶部 4px padding，避免与搜索框之间露出空隙 */
   z-index: 1;
   background: var(--bg-base-secondary);
   box-shadow: 0 1px 0 0 var(--border-neutral-l1);
@@ -1713,6 +1777,10 @@ body {
   color: var(--text-tertiary);
   font-weight: var(--font-weight-default);
 }
+/* 展开填充态：本行所有子元素（计数/箭头/图标）跟随激活文字色，避免被主题底色盖住看不清 */
+.tree-project__name.is-filled .tree-project__count,
+.tree-project__name.is-filled .tree-arrow,
+.tree-project__name.is-filled .tree-project__icon { color: var(--text-onaccent); }
 
 /* TXT tree item (simplified, no version tree) */
 .tree-txt-item {
@@ -1728,6 +1796,32 @@ body {
   cursor: pointer;
   user-select: none;
   transition: background 0.1s ease;
+}
+/* 项目展开时配置区整体淡入上移（仅在点击项目展开时触发，切换配置不重播） */
+.tree-project__items--enter { animation: az-tree-enter 0.32s ease both; }
+@keyframes az-tree-enter {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+/* 折叠时配置区整体淡出：遮罩从上到下扫描，整块内容（含各配置行）一起隐去 */
+.tree-project__items--leaving {
+  -webkit-mask-image: linear-gradient(to bottom, #000, #000);
+  mask-image: linear-gradient(to bottom, #000, #000);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: bottom center;
+  mask-position: bottom center;
+  animation: az-tree-fade-y 0.32s ease both;
+}
+@keyframes az-tree-fade-y {
+  from { -webkit-mask-size: 100% 100%; mask-size: 100% 100%; opacity: 1; }
+  to { -webkit-mask-size: 100% 1%; mask-size: 100% 1%; opacity: 0.2; }
+}
+/* 折叠后项目标题从上到下渐显，承接列表收起的位移变化 */
+.az-project-enter { animation: az-project-enter 0.28s ease both; }
+@keyframes az-project-enter {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: none; }
 }
 .tree-txt-item:hover { background: var(--bg-base-tertiary); }
 .tree-txt-item--active {
@@ -1819,12 +1913,14 @@ body {
   white-space: nowrap;
   transition: background 0.12s ease, color 0.12s ease;
 }
-.btn-open-file { background: var(--bg-brand); color: var(--text-onbrand); border-color: var(--bg-brand); }
-.btn-open-file:hover { background: var(--bg-brand-hover); border-color: var(--bg-brand-hover); }
-.btn-open-folder { background: var(--bg-base-tertiary); color: var(--text-default); border-color: var(--border-neutral-l1); }
-.btn-open-folder:hover { background: var(--bg-overlay-l2); border-color: var(--border-neutral-l2); }
-#btnRecheckProject { background: var(--brand-500); color: var(--text-onbrand); border-color: var(--brand-500); }
+/* 侧栏底部三个操作按钮：颜色区分，全走 CSS 变量便于主题切换 */
+#btnRecheckProject { background: var(--brand-500); color: var(--text-onaccent); border-color: var(--brand-500); }
 #btnRecheckProject:hover { background: var(--brand-600); border-color: var(--brand-600); }
+#btnChoosePath { background: var(--accent-cyan); color: var(--text-onaccent); border-color: var(--accent-cyan); }
+#btnChoosePath:hover { filter: brightness(1.08); border-color: var(--accent-cyan); }
+#btnChoosePath:active { filter: brightness(0.92); }
+#skinBtn { background: var(--status-success-default); color: var(--text-onaccent); border-color: var(--status-success-default); }
+#skinBtn:hover { background: var(--status-success-hover); border-color: var(--status-success-hover); }
 .btn-external-edit { background: transparent; color: var(--text-secondary); border-color: var(--border-neutral-l1); }
 .btn-external-edit:hover { background: var(--bg-overlay-l2); color: var(--text-default); }
 
@@ -1905,7 +2001,8 @@ body {
   line-height: var(--body-md-strong-line-height);
   transition: background 0.12s ease;
 }
-.mode-toggle:hover { background: var(--brand-600); color: var(--text-onbrand); border-color: var(--brand-600); }
+/* 未激活态悬浮变深灰（右上角 txt 切换一致）；激活态悬浮保持品牌色 */
+.mode-toggle:hover { background: var(--bg-base-tertiary); color: var(--text-secondary); border-color: var(--border-neutral-l2); }
 .mode-toggle--active:hover { background: var(--brand-600); color: var(--text-onbrand); border-color: var(--brand-600); }
 .mode-toggle:disabled { opacity: .5; cursor: not-allowed; color: var(--text-disabled); background: var(--bg-base-secondary); }
 .mode-toggle:disabled:hover { background: var(--bg-base-secondary); }
@@ -2076,15 +2173,23 @@ body {
 .config-path-row--over {
   border-top: 2px solid var(--brand-500);
 }
+/* 路径不存在：整行警示色（橙）边框 + 最左双倍粗橙条（无红条；颜色用主题变量勿写死） */
 .config-path-row--invalid {
-  background: var(--status-error-surface-l1);
-  box-shadow: inset 3px 0 0 var(--status-error-default);
+  box-shadow:
+    inset 0 0 0 1px var(--status-warning-default),
+    inset 6px 0 0 var(--status-warning-default);
 }
 .config-path-row--invalid:hover {
-  background: var(--status-error-surface-l2);
+  box-shadow:
+    inset 0 0 0 1px var(--status-warning-hover),
+    inset 6px 0 0 var(--status-warning-hover);
 }
-.config-path-row--invalid .config-path-row__input {
-  background: transparent;
+/* 路径不存在 + 排序改变并存（JS 显式组合类）：红条声明在最前（上层），橙框/橙条在下层 */
+.config-path-row.is-modified-row.config-path-row--invalid-moved {
+  box-shadow:
+    inset 3px 0 0 var(--status-error-default),
+    inset 0 0 0 1px var(--status-warning-default),
+    inset 6px 0 0 var(--status-warning-default);
 }
 .config-path-row__drag {
   display: flex;
@@ -2253,6 +2358,14 @@ body {
 .config-path-subheader__drag {
   width: 22px;
   flex-shrink: 0;
+}
+.config-path-subheader__sort {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding-right: var(--spacer-4);
 }
 .config-path-subheader__nopoll {
   width: 52px;
@@ -2431,6 +2544,46 @@ body {
   color: var(--text-secondary);
   white-space: nowrap;
 }
+/* 配置被修改提示：路径输入框/排除行/列框体按变化类型标红，配配置名左侧红字 */
+/* 路径输入框文字变化：低透明度红底 */
+.config-path-row__input.is-modified-input {
+  background: var(--status-error-surface-l1);
+}
+/* 排序变化 + 输入框文字变化并存时，红底仍要覆盖行内 transparent 背景 */
+.config-path-row.is-modified-row .config-path-row__input.is-modified-input {
+  background: var(--status-error-surface-l1);
+}
+/* 路径排序变化：红底色 + 左侧红竖条 */
+.config-path-row.is-modified-row {
+  background: var(--status-error-surface-l1);
+  box-shadow: inset 3px 0 0 var(--status-error-default);
+}
+.config-path-row.is-modified-row:hover {
+  background: var(--status-error-surface-l2);
+}
+.config-path-row.is-modified-row .config-path-row__input {
+  background: transparent;
+}
+/* 排除字段新增/修改行：红底色 + 左侧红竖条 */
+.config-exclude-row.is-modified-row {
+  background: var(--status-error-surface-l1);
+  box-shadow: inset 3px 0 0 var(--status-error-default);
+}
+.config-exclude-row.is-modified-row:hover {
+  background: var(--status-error-surface-l2);
+}
+/* 排除字段软删除态：文字删除线 + 斜体 + 变灰 */
+.config-exclude-row.is-ex-deleted .config-exclude-row__path {
+  text-decoration: line-through;
+  font-style: italic;
+  color: var(--text-disabled);
+}
+/* 列框体红框用 outline：绘制在最高层级，不被内部灰底标题（排除字段/水印 PNG）覆盖 */
+.config-editor__col--exclude.is-modified,
+.config-editor__col--watermark.is-modified {
+  outline: 1px solid var(--status-error-default);
+  outline-offset: -1px;
+}
 .config-bottombar__input {
   width: 56px;
   height: 28px;
@@ -2488,13 +2641,13 @@ body {
   transition: all 0.1s ease;
 }
 .config-btn--save {
-  background: var(--brand-100);
-  color: var(--brand-600);
-  border: 1px solid var(--brand-500);
+  background: var(--status-error-default);
+  color: var(--text-onaccent);
+  border: 1px solid var(--status-error-default);
 }
 .config-btn--save:hover {
-  background: var(--brand-200);
-  border-color: var(--brand-600);
+  background: var(--status-error-hover);
+  border-color: var(--status-error-hover);
 }
 .config-btn--save-today {
   background: var(--brand-500);
@@ -2517,7 +2670,8 @@ body {
   background: var(--bg-base-tertiary) !important;
   cursor: not-allowed;
 }
-.config-bottombar__warn {
+.config-bottombar__warn,
+.config-bottombar__modified {
   color: var(--status-error-default);
   font-size: var(--body-xs-font-size);
   font-weight: var(--font-weight-strong);
@@ -2784,9 +2938,14 @@ body {
   color: var(--text-secondary);
 }
 .preview-toggle--active {
-  background: var(--brand-100);
+  background: var(--brand-500);
   border-color: var(--brand-500);
-  color: var(--brand-600);
+  color: var(--text-onaccent);
+}
+.preview-toggle--active:hover {
+  background: var(--brand-600);
+  border-color: var(--brand-600);
+  color: var(--text-onaccent);
 }
 .right-panel__badge {
   font-family: var(--font-family-mono);
@@ -3002,6 +3161,14 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  background: var(--bg-overlay, rgba(0, 0, 0, 0.35));
+  backdrop-filter: blur(1px);
+}
+/* 设置窗口打开时的模糊遮罩（类似预检测，纯遮罩无内容） */
+.settings-dim {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
   background: var(--bg-overlay, rgba(0, 0, 0, 0.35));
   backdrop-filter: blur(1px);
 }

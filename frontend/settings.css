@@ -1,0 +1,243 @@
+/* -*- coding: utf-8 -*-
+   Video Lab — 设置窗口样式（复用各皮肤的 CSS 变量） */
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg-base-default);
+  color: var(--text-default);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+}
+
+.settings-shell {
+  display: flex;
+  height: 100vh;
+}
+
+/* ─── 左侧导航 ─── */
+.settings-nav {
+  width: 150px;
+  flex: 0 0 150px;
+  border-right: 1px solid var(--border-neutral-l1);
+  background: var(--bg-base-secondary);
+  display: flex;
+  flex-direction: column;
+  padding: 12px 8px;
+  box-sizing: border-box;
+}
+.settings-nav__brand {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-brand, var(--brand-500));
+  padding: 4px 10px 14px;
+}
+.settings-nav__item {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  text-align: left;
+  padding: 9px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-bottom: 2px;
+}
+.settings-nav__item:hover { background: var(--bg-overlay-l1); color: var(--text-default); }
+.settings-nav__item.is-active {
+  background: var(--bg-brand);
+  color: var(--text-onaccent);
+  font-weight: 600;
+}
+
+/* ─── 右侧内容 ─── */
+.settings-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.settings-view {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 22px;
+  display: none;
+}
+.settings-view.is-active { display: block; }
+.settings-view__title {
+  margin: 0 0 16px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-default);
+}
+
+/* ─── 表单 ─── */
+.form-group { margin-bottom: 16px; }
+.form-group__label {
+  display: block;
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+.form-group__label small {
+  display: block;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+.form-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  font-size: 14px;
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: 6px;
+  background: var(--bg-base-secondary);
+  color: var(--text-default);
+  outline: none;
+}
+.form-input:focus { border-color: var(--border-brand); }
+
+/* 输入框行：* 绝对定位叠加在输入框内部右侧，不移动框体、不改各框尺寸 */
+.field-row { position: relative; }
+.field-row .form-input {
+  width: 100%;
+  padding: 7px 26px 7px 10px; /* 右侧预留 * 位置，框体尺寸恒一致 */
+}
+.field-row__mark {
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: none;
+  color: var(--status-error-default, #E5484D);
+  font-weight: 700;
+  line-height: 1;
+  z-index: 2;
+  pointer-events: none;
+}
+.form-group.is-dirty .form-input { border-color: var(--status-error-default, #E5484D); }
+.form-group.is-dirty .field-row__mark { display: inline; }
+
+.dir-row { display: flex; gap: 8px; }
+.dir-row .field-row { flex: 1; }
+.btn {
+  appearance: none;
+  border: 1px solid var(--border-neutral-l2);
+  background: var(--bg-base-secondary);
+  color: var(--text-default);
+  padding: 7px 14px;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn:hover { background: var(--bg-overlay-l1); }
+.btn-ghost { flex: 0 0 auto; }
+.btn-primary { background: var(--brand-500); border-color: transparent; color: #fff; }
+.btn-primary:hover { background: var(--brand-600); }
+.btn-primary:disabled {
+  background: var(--bg-base-tertiary, #e2e2e2);
+  border: 1px solid var(--border-neutral-l2);
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+/* 失焦且未保存时的保存提醒：关闭按钮左侧状态文字闪红 */
+.settings-footer__status.is-flash {
+  color: var(--status-error-default, #E5484D) !important;
+  animation: settingsCloseFlash 0.5s ease-in-out 4;
+}
+@keyframes settingsCloseFlash {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* ─── 主题选择 ─── */
+.theme-row { display: flex; gap: 10px; }
+.theme-item {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border-neutral-l2);
+  background: var(--bg-base-secondary);
+  color: var(--text-default);
+  padding: 7px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.theme-item:hover { border-color: var(--border-neutral-l3); }
+.theme-item.is-active { border-color: var(--brand-500); box-shadow: 0 0 0 1px var(--brand-500); }
+.theme-item__swatch { display: inline-flex; align-items: center; flex-shrink: 0; }
+.theme-item__bg,
+.theme-item__theme {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: inline-block;
+  box-sizing: border-box;
+}
+.theme-item__theme { margin-left: -6px; border: 1px solid rgba(255,255,255,0.4); }
+
+/* ─── 成片名预览（标签为小字说明样式，框与下方参数用横线分隔） ─── */
+.producer-preview__label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-bottom: 6px;
+}
+.producer-preview {
+  position: relative;
+  border: 1px dashed var(--border-neutral-l2);
+  border-radius: 8px;
+  padding: 7px 12px; /* 高度与输入框一致，横向保留原 12px */
+  background: var(--bg-overlay-l1);
+  margin-bottom: 20px;
+}
+.producer-preview::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -9px;
+  height: 1px;
+  background: var(--border-neutral-l1);
+}
+.producer-preview__value {
+  display: block;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 13px;
+  color: var(--text-brand, var(--brand-500));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: text;
+}
+
+/* ─── 底部操作栏 ─── */
+.settings-footer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-neutral-l1);
+  background: var(--bg-base-secondary);
+}
+.settings-footer__status {
+  flex: 1;
+  font-size: 12px;
+  color: var(--status-success-default, #15A877);
+}
+.settings-footer__status.is-error { color: var(--status-error-default, #E5484D); }
+
+/* 微调滚动条 */
+.settings-view::-webkit-scrollbar { width: 8px; }
+.settings-view::-webkit-scrollbar-thumb { background: var(--border-neutral-l2); border-radius: 4px; }

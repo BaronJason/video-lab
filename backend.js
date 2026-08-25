@@ -16,7 +16,7 @@ const EXCLUDED_TOP_DIRS = new Set([
 
 // 日志文件名特征（用于区分配置与日志）
 const LOG_NAME_RE = /(拼接日志|复刻日志)/;
-// 复刻模式名称，按 视频复刻.ps1 的 mode 映射；两种模式在侧栏各作一个配置名，仅含日志无配置
+// 复刻模式名称，按 video_replica.ps1 的 mode 映射；两种模式在侧栏各作一个配置名，仅含日志无配置
 const REPLICA_MODES = ['原片复刻', '去重复刻'];
 const REPLICA_PROJECT = '复刻'; // 侧栏中的虚拟项目名（仅含日志，无配置）
 const REPLICA_MARK = 'REPLICA:'; // 复刻项目虚拟版本的 path 前缀，用于路由 list_logs / logContent
@@ -26,6 +26,21 @@ const DEFAULT_CONFIG = {
   scripts_dir: '',
   watermark_dir: '',
   skin: 'white_blue',
+  // video_batch.ps1 顶部全局参数（文件内同名常量被顶部读环境变量 BATCH_* 覆盖）
+  batch: {
+    max_duration: 179,   // MaxTotalDurationSec 最大成片时长(秒)
+    max_retry: 45,       // MaxRetry 重试次数
+    speed_limit: 1.2,    // SpeedThreshold 倍速阈值
+    txt_prefix: '',      // TxtNamePrefix 提取前缀，可留空
+    producer: '李佳燊',  // 成片名固定品牌名
+    suffix_mark: 'YX',   // 序号后缀（成片名中的序号标识），可改
+  },
+  // video_replica.ps1 顶部全局参数（文件内同名常量被顶部读环境变量 REPLICA_* 覆盖）
+  replica: {
+    max_duration: 179,   // MaxTotalDurationSec
+    speed_limit: 1.2,    // SpeedThreshold
+    dedup_ratio: 0.4,    // DedupRatio 去重阈值
+  },
 };
 
 function readText(filePath, fallback = 'utf-8') {
@@ -127,12 +142,19 @@ function dedupeByDir(list) {
 }
 
 class Api {
-  constructor(root, config, cachePath, videoCachePath, logCachePath) {
+  constructor(root, config, cachePath, videoCachePath, logCachePath, scriptsDir, clipIndexCachePath, taskStatePath) {
     this.root = root;
     this.config = Object.assign({}, DEFAULT_CONFIG, config || {});
     this.cachePath = cachePath || '';
     this.videoCachePath = videoCachePath || '';
     this.logCachePath = logCachePath || '';
+    this.scriptsDirFixed = scriptsDir || ''; // 脚本固定位置（main 进程传入 resources\Scripts），无需用户配置
+    this.clipIndexCachePath = clipIndexCachePath || ''; // 成片名搜索索引缓存文件（Cache 子文件夹）
+    this.taskStatePath = taskStatePath || '';           // 任务列表持久化文件（Cache 子文件夹）
+    this._persistTimer = null;                          // 任务持久化节流定时器
+    this._clipIndex = null;        // Map<baseDir, {mtime, entries}>
+    this._clipIndexRoot = '';
+    this._clipIndexDirty = false;
     // ffprobe 探测并发上限：保持低值，避免占用过多 CPU/IO 拖慢整机
     this.probeConcurrency = 4;
     this._videoCache = null;
@@ -144,7 +166,6 @@ class Api {
     this._scanCache = new Map();
     this._scanLoadedRoot = '';
     this._scanDirty = false;
-    this._logsEntryCache = null;
     // 日志 txt 缓存：刷新配置时一次性收集全部日志，供日期分支/对应关系直接使用
     this._logCache = null;
     this._logCacheRoot = '';
@@ -152,9 +173,17 @@ class Api {
     this.tasks = new Map();
     this.taskSeq = 0;
     this.onTasksChanged = null; // 由 main 进程注入，用于向渲染进程推送任务快照
+    // 排队调度：同一时刻仅运行一个任务，其余按创建顺序排队（软件安排制作顺序，替代脚本抢互斥锁）
+    this._taskQueue = [];
+    this._runningTaskId = null;
+    // 计划序号：新建任务入队时递增分配，暂停任务保留、启动任务移除、拖拽/置顶重排后重算。
+    // UI 显示与「继续」插队位置都以此为准（暂停任务随队列推进自然前移，成为下一个后停住，新任务可越过）
+    this._planSeq = 0;
   }
 
   get scriptsDir() {
+    // 脚本固定于项目 resources\Scripts 子文件夹（打包/开发由 main 统一计算传入），不再读取 config.scripts_dir
+    if (this.scriptsDirFixed) return this.scriptsDirFixed;
     let d = this.config.scripts_dir;
     if (!d || !fs.existsSync(d)) d = DEFAULT_CONFIG.scripts_dir;
     return d;
@@ -181,7 +210,6 @@ class Api {
     this._txtTreeRoot = null;
     this._projectsCache = null;
     this._versionsCache.clear();
-    this._logsEntryCache = null;
     this._logCache = null;
     this._logCacheRoot = '';
   }
@@ -322,7 +350,10 @@ class Api {
   }
 
   listProjects(force = false) {
-    if (force) this._invalidateCaches();
+    if (force) {
+      this._invalidateCaches();
+      this._rebuildClipIndex(); // 重新检测配置时一并重建成片名搜索缓存
+    }
     if (!force && this._projectsCache) return this._projectsCache;
     this._collectLogFiles(); // 刷新配置时一并收集日志 txt 缓存
     const data = this._buildProjectsData();
@@ -438,7 +469,9 @@ class Api {
       //   - 单个成片文件夹 → 无后缀正本 <MMdd>
       //   - 成片文件夹外的单独配置 → <MMdd>*（isExternal）
       const chengpian = dedupeByDir(g.copies);
-      const outside = g.source ? [g.source] : [];
+      // 外部 * 配置若与任一成片文件夹正本内容完全一致，则被正体覆盖，不再显示（不一致时才同时显示）
+      const outsideSrc = g.source;
+      const outside = outsideSrc && !chengpian.some((c) => c.hash === outsideSrc.hash) ? [outsideSrc] : [];
       if (chengpian.length > 1) {
         chengpian.forEach((c, i) => versions.push({ label: `${label}-${i + 1}`, path: c.full, isExternal: false }));
       } else if (chengpian.length === 1) {
@@ -823,22 +856,73 @@ class Api {
     if (versionPath && String(versionPath).startsWith(REPLICA_MARK)) {
       return this._replicaLogs(String(versionPath).slice(REPLICA_MARK.length));
     }
-    const all = this._collectLogEntries(path.dirname(path.resolve(versionPath)));
+    const all = this._clipEntriesFor(path.dirname(path.resolve(versionPath)));
     const target = String(name == null ? '' : name).trim();
     if (!target) return all;
     return all.filter((e) => this._configNameFromLog(e.log_path) === target);
   }
 
-  _logsForTxt(txtFull) {
-    const baseDir = path.dirname(txtFull);
+  // ── 成片名搜索索引：仅索引日志解析出的成片条目（video/clips/watermark/log_path）。
+  //    以「配置目录」为单位按目录 mtime 失效，命中直接读内存，未命中重扫该目录；
+  //    有变更时落盘到 Cache\clip_cache.json，冷启动直接复用，避免每次搜索全量读盘解析。
+  _loadClipIndex() {
+    if (this._clipIndex && this._clipIndexRoot === this.root) return;
+    this._clipIndexRoot = this.root;
+    this._clipIndex = new Map();
+    if (!this.clipIndexCachePath) return;
+    try {
+      const data = JSON.parse(fs.readFileSync(this.clipIndexCachePath, 'utf-8'));
+      if (data && data.root === this.root && data.dirs && typeof data.dirs === 'object') {
+        for (const k in data.dirs) {
+          const v = data.dirs[k];
+          if (v && typeof v.mtime === 'number' && Array.isArray(v.entries)) this._clipIndex.set(k, { mtime: v.mtime, entries: v.entries });
+        }
+      }
+    } catch (e) {}
+  }
+
+  _saveClipIndex() {
+    if (!this.clipIndexCachePath || !this._clipIndexDirty) return;
+    const dirs = {};
+    this._clipIndex.forEach((v, k) => { if (Array.isArray(v.entries)) dirs[k] = { mtime: v.mtime, entries: v.entries }; });
+    try {
+      fs.writeFileSync(this.clipIndexCachePath, JSON.stringify({ root: this.root, dirs }), 'utf-8');
+      this._clipIndexDirty = false;
+    } catch (e) {}
+  }
+
+  // 某配置目录的成片条目：目录 mtime 未变直接命中索引，否则重扫该目录并重建索引条目
+  _clipEntriesFor(baseDir) {
+    this._loadClipIndex();
     let mtime = 0;
     try { mtime = fs.statSync(baseDir).mtimeMs; } catch (e) {}
-    const cached = this._logsEntryCache && this._logsEntryCache.get(baseDir);
-    if (cached && cached.mtime === mtime) return cached.entries;
+    const hit = this._clipIndex.get(baseDir);
+    if (hit && hit.mtime === mtime) return hit.entries;
     const entries = this._collectLogEntries(baseDir);
-    if (!this._logsEntryCache) this._logsEntryCache = new Map();
-    this._logsEntryCache.set(baseDir, { mtime, entries });
+    this._clipIndex.set(baseDir, { mtime, entries });
+    this._clipIndexDirty = true;
+    this._saveClipIndex();
     return entries;
+  }
+
+  // 重新检测配置时全量重建索引并落盘（后续搜索/日志列表直接命中，无需再逐目录解析）
+  _rebuildClipIndex() {
+    this._loadClipIndex();
+    this._clipIndex.clear();
+    const dirs = new Set();
+    for (const t of this._collectAllTxt()) dirs.add(path.dirname(t.full));
+    for (const d of [...dirs]) {
+      const entries = this._collectLogEntries(d);
+      let mtime = 0;
+      try { mtime = fs.statSync(d).mtimeMs; } catch (e) {}
+      this._clipIndex.set(d, { mtime, entries });
+      this._clipIndexDirty = true;
+    }
+    this._saveClipIndex();
+  }
+
+  _logsForTxt(txtFull) {
+    return this._clipEntriesFor(path.dirname(txtFull));
   }
 
   // 全局成片名搜索：跨越所有项目/TXT/日期分支，返回包含该成片的日志定位信息
@@ -877,13 +961,28 @@ class Api {
       const mode = String(fromPath).slice(REPLICA_MARK.length);
       return this._replicaLogFiles(mode).map((f) => ({ path: f, name: path.basename(f), date: path.basename(f).slice(0, 4) }));
     }
-    // 使用刷新时写入的日志缓存，按项目 + 日期分支 + 配置名过滤
+    // 使用刷新时写入的日志缓存，按项目 + 配置名过滤（不限定单一日期，展示该配置的全部日志日期分支）
+    // 每条日志附加所属配置版本 label（同成片文件夹的序号化 -N/正本优先，否则当日外部 *），
+    // 使日志分支序号与配置版本序号一一对应
     const project = this._projectOf(fromPath);
-    const date = this._dateBranchOf(fromPath);
     const target = String(configName == null ? '' : configName).trim();
+    const versions = this.listVersions(project, target);
     const files = this._collectLogFiles().files
-      .filter((f) => f.project === project && f.date === date && (!target || f.config === target))
-      .map((f) => ({ path: f.path, name: f.name, date: f.date }));
+      .filter((f) => f.project === project && (!target || f.config === target))
+      .map((f) => {
+        const d = f.date;
+        let label = null;
+        for (const v of versions) {
+          if (v.isExternal) continue;
+          if (String(v.label || '').slice(0, 4) === d && path.dirname(v.path) === path.dirname(f.path)) { label = v.label; break; }
+        }
+        if (!label) {
+          for (const v of versions) {
+            if (v.isExternal && String(v.label || '').slice(0, 4) === d) { label = v.label; break; }
+          }
+        }
+        return { path: f.path, name: f.name, date: f.date, label: label || f.date };
+      });
     files.sort((a, b) => (b.date.localeCompare(a.date) || a.name.localeCompare(b.name)));
     return files;
   }
@@ -969,17 +1068,107 @@ class Api {
   }
 
   // 任务管理 -------------------------------------------------
-  _createTask(type, title, scriptPath, env) {
+  _createTask(type, title, scriptPath, env, srcPath) {
     const id = 'task_' + (++this.taskSeq) + '_' + Date.now().toString(36);
     const task = {
       id, type, title, script: scriptPath, env: Object.assign({}, env),
-      pid: null, status: 'running', lockState: 'unknown', progress: { current: 0, total: 0 },
+      pid: null, status: 'queued', lockState: 'unknown', progress: { current: 0, total: 0 },
       failReason: '', log: [],
       createdAt: Date.now(), endedAt: null, _stopRequested: false,
+      planPos: 0,
+      outDir: srcPath ? this._taskOutDir(srcPath) : '',
     };
     this.tasks.set(id, task);
     this._emitTasks();
     return task;
+  }
+
+  // 任务成片文件夹：源 TXT 所在目录下以「成片」结尾的子目录，找不到则回退源目录
+  _taskOutDir(srcPath) {
+    const d = path.dirname(path.resolve(srcPath));
+    try {
+      for (const e of fs.readdirSync(d)) {
+        if (String(e).endsWith('成片')) {
+          const f = path.join(d, e);
+          if (fs.statSync(f).isDirectory()) return f;
+        }
+      }
+    } catch (e2) {}
+    return d;
+  }
+
+  // 排队执行：无运行任务则立即启动，否则进入队列（软件安排制作顺序）
+  _enqueueTask(task) {
+    // 分配计划序号（新建任务/恢复任务都经由此处或 resumeTask 分配）
+    if (!task.planPos) task.planPos = ++this._planSeq;
+    if (!this._runningTaskId) {
+      this._runningTaskId = task.id;
+      task.status = 'running';
+      task.log.push('[开始运行]');
+      this._emitTasks();
+      this._spawnPowerShell(task.script, task.env, task);
+    } else {
+      task.status = 'queued';
+      task.log.push('[已加入执行队列，等待前序任务完成]');
+      this._taskQueue.push(task.id);
+      this._emitTasks();
+    }
+    return task;
+  }
+
+  // 当前任务结束（正常/失败/停止）后启动队列中的下一个任务
+  _startNextQueued() {
+    while (this._taskQueue.length) {
+      const id = this._taskQueue.shift();
+      const t = this.tasks.get(id);
+      if (!t || t.status === 'stopped' || t._cancelled) continue;
+      this._runningTaskId = id;
+      t.status = 'running';
+      t.log.push('[前序任务完成，开始运行本任务]');
+      this._emitTasks();
+      this._spawnPowerShell(t.script, t.env, t);
+      return;
+    }
+  }
+
+  // 置顶排队任务：让它成为下一个执行的任务（软件安排顺序）
+  pinTask(id) {
+    const t = this.tasks.get(id);
+    if (!t) return { ok: false, error: '任务不存在' };
+    if (t.status !== 'queued') return { ok: false, error: '仅排队中的任务可置顶' };
+    const i = this._taskQueue.indexOf(id);
+    if (i > 0) { this._taskQueue.splice(i, 1); this._taskQueue.unshift(id); }
+    // 重算队列计划序号，使显示顺序与执行顺序一致
+    this._taskQueue.forEach((qid, k) => { this.tasks.get(qid).planPos = k + 1; });
+    t.log.push('[已置顶，成为下一个执行的任务]');
+    this._emitTasks();
+    return { ok: true };
+  }
+
+  // 手动重排待运行顺序（拖拽排序）：ids 为「排队+暂停」任务的完整混合序列（不含运行中/已结束）
+  //   按 ids 顺序重建执行队列并重算所有待运行任务的计划序号；暂停任务的冻结顺位（resumeIdx）同步刷新
+  reorderTasks(ids) {
+    if (!Array.isArray(ids)) return { ok: false, error: '参数无效' };
+    const waiting = [];
+    this.tasks.forEach((t, id) => {
+      if (t.status === 'queued' || t.status === 'paused') waiting.push(id);
+    });
+    const cur = new Set(waiting);
+    const given = new Set(ids.filter((id) => cur.has(id)));
+    if (cur.size !== given.size || ids.length !== waiting.length) return { ok: false, error: '排序参数与待运行任务不一致' };
+    for (const id of ids) if (!cur.has(id)) return { ok: false, error: '排序参数包含不可排序的任务' };
+    const queue = [];
+    let ord = 0;
+    for (const id of ids) {
+      const t = this.tasks.get(id);
+      t.planPos = ++ord;
+      // 暂停任务：前方待运行任务数 = 它在 ids 序列中的位置，作为新的冻结顺位
+      if (t.status === 'paused') t.resumeIdx = ord - 1;
+      else if (t.status === 'queued') queue.push(id);
+    }
+    this._taskQueue = queue;
+    this._emitTasks();
+    return { ok: true };
   }
 
   // 从任务日志中提取人类可读的失败原因（不展示代码/堆栈）
@@ -1013,24 +1202,175 @@ class Api {
 
   snapshotTasks() {
     const list = [];
-    this.tasks.forEach((t) => list.push({
-      id: t.id, type: t.type, title: t.title, script: t.script, pid: t.pid,
-      status: t.status, lockState: t.lockState, paused: !!t.paused,
-      progress: t.progress || { current: 0, total: 0 }, failReason: t.failReason || '',
-      createdAt: t.createdAt, endedAt: t.endedAt,
-      log: t.log.slice(-500),
-    }));
-    list.sort((a, b) => a.createdAt - b.createdAt);
+    this.tasks.forEach((t) => {
+      list.push({
+        id: t.id, type: t.type, title: t.title, script: t.script, pid: t.pid,
+        status: t.status, lockState: t.lockState, paused: !!t.paused,
+        progress: t.progress || { current: 0, total: 0 }, failReason: t.failReason || '',
+        createdAt: t.createdAt, endedAt: t.endedAt, outDir: t.outDir || '',
+        // 计划序号：排队任务=队列第几位；暂停任务=冻结的显示顺位；显示与恢复插队都以此为准
+        pos: t.planPos || 0,
+        resumeIdx: typeof t.resumeIdx === 'number' ? t.resumeIdx : null,
+        queueTotal: this._taskQueue.length,
+        log: t.log.slice(-500),
+      });
+    });
+    // 展示排序：运行中 → 待运行区 → 已结束（按创建时间）。
+    // 待运行区显示顺序：按「恢复所有暂停任务后的最终队列顺序」呈现——
+    // 排队任务保持执行队列次序，暂停任务按冻结顺位（resumeIdx）插入到对应位置，
+    // 与「暂停时几号、继续后几号」的显示顺位完全一致。
+    const ordered = [];
+    this._taskQueue.forEach((qid) => { if (this.tasks.get(qid)) ordered.push(qid); });
+    list.filter((t) => t.status === 'paused')
+      .sort((x, y) => (x.resumeIdx ?? 1e9) - (y.resumeIdx ?? 1e9))
+      .forEach((p) => { ordered.splice(Math.min(p.resumeIdx ?? ordered.length, ordered.length), 0, p.id); });
+    const orderIdx = new Map();
+    ordered.forEach((id, k) => orderIdx.set(id, k));
+    list.sort((a, b) => {
+      const rank = (s) => (s === 'running' ? 0 : s === 'queued' || s === 'paused' ? 1 : 2);
+      const ra = rank(a.status), rb = rank(b.status);
+      if (ra !== rb) return ra - rb;
+      if (ra === 1) {
+        const ia = orderIdx.has(a.id) ? orderIdx.get(a.id) : 1e9;
+        const ib = orderIdx.has(b.id) ? orderIdx.get(b.id) : 1e9;
+        if (ia !== ib) return ia - ib;
+        return a.createdAt - b.createdAt;
+      }
+      return a.createdAt - b.createdAt;
+    });
+    // 待运行区显示序号：仅排队任务连续编号（暂停任务显示圆点、不占号，不影响队伍正常序号展示）
+    let waitN = 0;
+    for (const it of list) {
+      if (it.status === 'queued') { waitN++; it.displayPos = waitN; }
+    }
     return list;
   }
 
-  _emitTasks() { if (this.onTasksChanged) this.onTasksChanged(this.snapshotTasks()); }
+  _emitTasks() {
+  if (this.onTasksChanged) this.onTasksChanged(this.snapshotTasks());
+  this._schedulePersist();
+  }
 
-  // 停止任务：对尚未获取互斥锁（排队中）的任务安全，直接终止进程树
+  // ── 任务列表持久化：状态变化节流写盘，回收/正常退出时保证落盘；重启后保留任务直到手动清空 ──
+  _schedulePersist() {
+    if (this._persistTimer || !this.taskStatePath) return;
+    this._persistTimer = setTimeout(() => { this._persistTimer = null; this.persistTasks(); }, 200);
+  }
+  persistTasks() {
+    if (!this.taskStatePath) return;
+    if (this._persistTimer) { clearTimeout(this._persistTimer); this._persistTimer = null; }
+    const data = {
+      planSeq: this._planSeq,
+      tasks: [...this.tasks.values()].map((t) => ({
+        id: t.id, type: t.type, title: t.title, script: t.script, env: t.env || {},
+        status: t.status, lockState: t.lockState, progress: t.progress || { current: 0, total: 0 },
+        failReason: t.failReason || '', paused: !!t.paused,
+        createdAt: t.createdAt, endedAt: t.endedAt, planPos: t.planPos || 0,
+        resumeIdx: typeof t.resumeIdx === 'number' ? t.resumeIdx : null,
+        outDir: t.outDir || '', log: (t.log || []).slice(-500), _stopRequested: !!t._stopRequested,
+      })),
+    };
+    try { fs.writeFileSync(this.taskStatePath, JSON.stringify(data), 'utf-8'); } catch (e) {}
+  }
+  // 启动时恢复上次会话的任务列表（退出前已做 running→interrupted、queued→paused 转换）
+  restoreTasks() {
+    try {
+      if (!this.taskStatePath || !fs.existsSync(this.taskStatePath)) return;
+      const data = JSON.parse(fs.readFileSync(this.taskStatePath, 'utf-8'));
+      if (!data || !Array.isArray(data.tasks)) return;
+      for (const t of data.tasks) {
+        if (!t || typeof t.id !== 'string') continue;
+        if (this.tasks.has(t.id)) continue;
+        if (t.status !== 'paused' && t.status !== 'done' && t.status !== 'stopped' && t.status !== 'error' && t.status !== 'interrupted') continue;
+        this.tasks.set(t.id, Object.assign({}, t, { env: t.env || {}, pid: null, progress: t.progress || { current: 0, total: 0 }, log: Array.isArray(t.log) ? t.log : [] }));
+        const n = parseInt(String(t.id).replace(/\D/g, ''), 10);
+        if (n > this.taskSeq) this.taskSeq = n;
+      }
+      if (data.planSeq > this._planSeq) this._planSeq = data.planSeq;
+      if (this.tasks.size) this._emitTasks();
+    } catch (e) {}
+  }
+  // 退出前收尾：运行中→已中断，排队→暂停（后由 persistTasks 落盘）
+  shutdownTasks() {
+    const now = Date.now();
+    let changed = false;
+    for (const t of this.tasks.values()) {
+      if (t.status === 'running') {
+        t.status = 'interrupted'; t.paused = false; t.endedAt = now;
+        t.log.push('[应用退出，任务已中断]'); changed = true;
+      } else if (t.status === 'queued') {
+        t.status = 'paused'; t.paused = true;
+        t.log.push('[应用退出，排队任务转为暂停]'); changed = true;
+      }
+    }
+    this._taskQueue = [];
+    this._runningTaskId = null;
+    if (changed) this._emitTasks();
+    this.persistTasks();
+    return { ok: true };
+  }
+  hasRunningTask() {
+    for (const t of this.tasks.values()) if (t.status === 'running') return true;
+    return false;
+  }
+  // 已结束任务单行删除（运行/排队/暂停中的任务不可删）
+  clearTask(id) {
+    const t = this.tasks.get(id);
+    if (!t) return { ok: false, error: '任务不存在' };
+    if (t.status === 'running' || t.status === 'queued' || t.status === 'paused') return { ok: false, error: '进行中的任务不能删除' };
+    this.tasks.delete(id);
+    this._emitTasks();
+    return { ok: true };
+  }
+  // 全部继续：所有暂停任务按冻结顺位依次排入执行队列，无运行任务则立即启动
+  resumeAllTasks() {
+    const paused = [...this.tasks.values()].filter((t) => t.status === 'paused')
+      .sort((a, b) => (a.resumeIdx ?? 1e9) - (b.resumeIdx ?? 1e9));
+    if (!paused.length) return { ok: false, error: '没有暂停的任务' };
+    for (const t of paused) {
+      t.status = 'queued'; t.paused = false; delete t.resumeIdx;
+      this._taskQueue.push(t.id);
+      t.log.push('[全部继续]');
+    }
+    this._taskQueue.forEach((qid, k) => { this.tasks.get(qid).planPos = k + 1; });
+    if (!this._runningTaskId) this._startNextQueued();
+    else this._emitTasks();
+    return { ok: true, count: paused.length };
+  }
+  // 全部暂停：所有排队任务移出执行队列并冻结顺位
+  pauseAllTasks() {
+    const queued = [...this.tasks.values()].filter((t) => t.status === 'queued')
+      .sort((a, b) => (a.planPos || 1e9) - (b.planPos || 1e9));
+    if (!queued.length) return { ok: false, error: '没有排队中的任务' };
+    for (const t of queued) {
+      const i = this._taskQueue.indexOf(t.id);
+      if (i >= 0) this._taskQueue.splice(i, 1);
+      t.status = 'paused'; t.paused = true;
+      const waiting = [...this.tasks.values()].filter((x) => x.status === 'queued' || x.status === 'paused')
+        .sort((a, b) => (a.planPos || 1e9) - (b.planPos || 1e9));
+      t.resumeIdx = Math.max(0, waiting.indexOf(t));
+      t.log.push('[全部暂停]');
+    }
+    this._emitTasks();
+    return { ok: true, count: queued.length };
+  }
+
+  // 停止任务：排队/暂停中的任务直接取消（移出执行队列）；运行中的任务终止进程树
   stopTask(id) {
     const { spawnSync } = require('child_process');
     const t = this.tasks.get(id);
     if (!t) return { ok: false, error: '任务不存在' };
+    if (t.status === 'queued' || t.status === 'paused') {
+      const i = this._taskQueue.indexOf(id);
+      if (i >= 0) this._taskQueue.splice(i, 1);
+      t.status = 'stopped';
+      t.paused = false;
+      t.planPos = 0;
+      t.endedAt = Date.now();
+      t.log.push('[已取消任务，不再执行]');
+      this._emitTasks();
+      return { ok: true };
+    }
     if (t.status !== 'running') return { ok: false, error: '任务已结束' };
     if (!t.pid) return { ok: false, error: '任务进程尚未就绪' };
     t._stopRequested = true;
@@ -1042,67 +1382,57 @@ class Api {
     } catch (e) { return { ok: false, error: String(e) }; }
   }
 
-  clearFinishedTasks() {
-    for (const [id, t] of this.tasks) { if (t.status !== 'running') this.tasks.delete(id); }
+  clearFinishedTasks(statuses) {
+    // 仅清理指定的已结束状态任务（缺省：完成/停止/失败）；运行中、排队中、暂停中的任务保留
+    const allow = new Set(Array.isArray(statuses) && statuses.length ? statuses : ['done', 'stopped', 'error']);
+    for (const [id, t] of this.tasks) {
+      if (allow.has(t.status)) this.tasks.delete(id);
+    }
     this._emitTasks();
     return { ok: true };
   }
 
-  // 挂起/恢复进程树根进程（通过 ntdll 的 NtSuspendProcess / NtResumeProcess 实现）
-  _suspendProcess(pid, suspend) {
-    const { spawnSync } = require('child_process');
-    const fn = suspend ? 'NtSuspendProcess' : 'NtResumeProcess';
-    const ps = `
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public static class NativeProc {
-  [DllImport("kernel32.dll", SetLastError=true)]
-  public static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, int dwProcessId);
-  [DllImport("ntdll.dll", SetLastError=true)]
-  public static extern int ${fn}(IntPtr ProcessHandle);
-  [DllImport("kernel32.dll")]
-  public static extern bool CloseHandle(IntPtr hObject);
-}
-"@;
-$h = [NativeProc]::OpenProcess(0x0001, $false, ${pid});
-if ($h -eq [IntPtr]::Zero) { Write-Error "OpenProcess failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())"; exit 1 }
-$r = [NativeProc]::${fn}($h);
-[NativeProc]::CloseHandle($h) | Out-Null;
-if ($r -ne 0) { Write-Error "op failed: $r"; exit 1 }
-`;
-    try {
-      const r = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps], { windowsHide: true, encoding: 'utf8' });
-      return r.status === 0;
-    } catch (e) { return false; }
-  }
-
-  // 暂停：仅对尚未获取互斥锁（排队中）的任务有效，挂起其进程使其不去抢锁
+  // 暂停：仅排队中的任务可暂停——移出执行队列并冻结当前显示顺位（前方待运行任务数），继续时按该顺位插队
   pauseTask(id) {
     const t = this.tasks.get(id);
     if (!t) return { ok: false, error: '任务不存在' };
-    if (t.status !== 'running') return { ok: false, error: '任务已结束' };
-    if (t.paused) return { ok: false, error: '任务已处于暂停状态' };
-    if (t.lockState === 'locked') return { ok: false, error: '任务已获取互斥锁，无法暂停' };
-    if (!t.pid) return { ok: false, error: '任务进程尚未就绪' };
-    if (!this._suspendProcess(t.pid, true)) return { ok: false, error: '暂停失败（无法挂起进程）' };
+    if (t.status !== 'queued') {
+      if (t.status === 'running') return { ok: false, error: '运行中的任务只能停止，不能暂停' };
+      return { ok: false, error: '任务已结束' };
+    }
+    const i = this._taskQueue.indexOf(id);
+    t.status = 'paused';
     t.paused = true;
-    t.log.push('[已暂停任务，等待互斥锁的进程已挂起]');
+    if (i >= 0) this._taskQueue.splice(i, 1);
+    // 冻结显示顺位：记录该任务在当前「待运行显示序列」（排队+暂停按计划序号排序）中的位置，
+    // 即它前方还有几个待运行任务。继续时据此插队，保证「暂停时几号，继续后还是几号」。
+    const waiting = [];
+    this.tasks.forEach((t2) => { if (t2.status === 'queued' || t2.status === 'paused') waiting.push(t2); });
+    waiting.sort((x, y) => (x.planPos || 1e9) - (y.planPos || 1e9));
+    t.resumeIdx = Math.max(0, waiting.indexOf(t));
+    t.log.push('[已暂停，移出执行队列；点击继续将保持当前顺位插回]');
     this._emitTasks();
     return { ok: true };
   }
 
-  // 继续：恢复被暂停的任务进程
+  // 继续：暂停的任务按冻结的显示顺位插回执行队列；无运行任务时立即启动
   resumeTask(id) {
     const t = this.tasks.get(id);
     if (!t) return { ok: false, error: '任务不存在' };
-    if (t.status !== 'running') return { ok: false, error: '任务已结束' };
-    if (!t.paused) return { ok: false, error: '任务未处于暂停状态' };
-    if (!t.pid) return { ok: false, error: '任务进程已退出' };
-    if (!this._suspendProcess(t.pid, false)) return { ok: false, error: '恢复失败（无法恢复进程）' };
+    if (t.status !== 'paused') return { ok: false, error: '任务未处于暂停状态' };
+    // 按暂停时的显示顺位插队（0-based）：前方任务数 + 1 位置；
+    // 队列已不足（前方任务陆续完成后缩短）时排在队尾，即成为下一个执行任务
+    const idx = typeof t.resumeIdx === 'number' ? t.resumeIdx : Math.max(0, (t.planPos || 1) - 1);
+    const pos = Math.min(idx, this._taskQueue.length);
+    t.status = 'queued';
     t.paused = false;
-    t.log.push('[已恢复任务]');
-    this._emitTasks();
+    this._taskQueue.splice(pos, 0, id);
+    // 重算队列计划序号，使显示顺序与插队位置一致（继续后刷新队伍序号）
+    this._taskQueue.forEach((qid, k) => { this.tasks.get(qid).planPos = k + 1; });
+    delete t.resumeIdx;
+    t.log.push('[已恢复，插入队列第 ' + (pos + 1) + ' 位]');
+    if (!this._runningTaskId) this._startNextQueued();
+    else this._emitTasks();
     return { ok: true };
   }
 
@@ -1179,6 +1509,9 @@ if ($r -ne 0) { Write-Error "op failed: $r"; exit 1 }
           task.paused = false;
           if (task.status === 'error') task.failReason = this._deriveFailReason(task);
           this._emitTasks();
+          // 运行任务结束：清空运行位并启动执行队列中的下一个任务（暂停/继续不影响插入后的推进）
+          this._runningTaskId = null;
+          this._startNextQueued();
         });
         child.on('error', (err2) => {
           task.log.push('[启动失败] ' + String(err2));
@@ -1205,26 +1538,71 @@ if ($r -ne 0) { Write-Error "op failed: $r"; exit 1 }
     return txtName;
   }
 
+  // 校验 批量/复刻 配置参数是否已设置：数字须>0，字符串须非空（txt_prefix 允许空）。返回缺失项标签，空数组=齐全
+  _settingsError(group) {
+    const cfg = this.config[group] || {};
+    const nums = group === 'batch'
+      ? [['max_duration', '最大时长(秒)'], ['max_retry', '重试次数'], ['speed_limit', '倍速阈值']]
+      : [['max_duration', '最大时长(秒)'], ['speed_limit', '倍速阈值'], ['dedup_ratio', '去重阈值']];
+    const missing = [];
+    for (const [k, label] of nums) if (!(parseFloat(cfg[k]) > 0)) missing.push(label);
+    if (group === 'batch') {
+      if (!String(cfg.producer || '').trim()) missing.push('创作者');
+    }
+    return missing;
+  }
+
+  // 设置页保存后同步 Api 持有的配置副本；root 变化时重设根目录
+  updateSettings(s) {
+    const cfg = s || {};
+    if (typeof cfg.root === 'string' && cfg.root && cfg.root !== this.root) this.setRoot(cfg.root);
+    for (const k of ['watermark_dir']) if (typeof cfg[k] === 'string') this.config[k] = cfg[k];
+    if (cfg.batch && typeof cfg.batch === 'object') this.config.batch = Object.assign({}, this.config.batch, cfg.batch);
+    if (cfg.replica && typeof cfg.replica === 'object') this.config.replica = Object.assign({}, this.config.replica, cfg.replica);
+  }
+
   runBatch(filePath, count, group) {
-    const script = path.join(this.scriptsDir, '批量拼接.ps1');
+    const script = path.join(this.scriptsDir, 'video_batch.ps1');
     if (!fs.existsSync(script)) return { ok: false, error: '未找到脚本：' + script };
-    const env = { REPLICA_TXT: path.resolve(filePath) };
+    const notSet = this._settingsError('batch');
+    if (notSet.length) return { ok: false, error: '批量拼接参数未设置：' + notSet.join('、') + '，请到 设置-批量拼接 中配置后再启动' };
+    const b = this.config.batch || {};
+    const env = { REPLICA_TXT: path.resolve(filePath), VL_CACHE_DIR: this.videoCachePath ? path.dirname(this.videoCachePath) : '' };
+    Object.assign(env, {
+      BATCH_MAX_DURATION: String(b.max_duration),
+      BATCH_MAX_RETRY: String(b.max_retry),
+      BATCH_SPEED_LIMIT: String(b.speed_limit),
+      BATCH_TXT_PREFIX: String(b.txt_prefix == null ? '' : b.txt_prefix).trim(),
+      BATCH_PRODUCER: String(b.producer).trim(),
+      BATCH_SUFFIX_MARK: String(b.suffix_mark == null ? 'YX' : b.suffix_mark).trim(),
+    });
     const countStr = String(count).trim();
     if (/^\d+$/.test(countStr) && parseInt(countStr, 10) > 0) env.BATCH_COUNT = countStr;
     const groupStr = String(group).trim();
     env.BATCH_GROUP = /^\d+$/.test(groupStr) && parseInt(groupStr, 10) > 0 ? groupStr : '0';
     env.REPLICA_NO_WAIT = '1';
-    const task = this._createTask('batch', this._taskTitle(filePath), script, env);
-    this._spawnPowerShell(script, env, task);
+    const task = this._enqueueTask(this._createTask('batch', this._taskTitle(filePath), script, env, filePath));
     return { ok: true, taskId: task.id };
   }
 
-  runReplica(logPath, mode = 1) {
-    const script = path.join(this.scriptsDir, '视频复刻.ps1');
+  runReplica(logPath, mode = 1, entryVideo) {
+    const script = path.join(this.scriptsDir, 'video_replica.ps1');
     if (!fs.existsSync(script)) return { ok: false, error: '未找到脚本：' + script };
-    const env = { REPLICA_TXT: path.resolve(logPath), REPLICA_MODE: String(mode) === '2' ? '2' : '1', REPLICA_NO_WAIT: '1' };
-    const task = this._createTask('replica', this._taskTitle(logPath) + (String(mode) === '2' ? '（去重）' : ''), script, env);
-    this._spawnPowerShell(script, env, task);
+    const notSet = this._settingsError('replica');
+    if (notSet.length) return { ok: false, error: '视频复刻参数未设置：' + notSet.join('、') + '，请到 设置-视频复刻 中配置后再启动' };
+    const r = this.config.replica || {};
+    const env = {
+      REPLICA_TXT: path.resolve(logPath),
+      REPLICA_MODE: String(mode) === '2' ? '2' : '1',
+      REPLICA_NO_WAIT: '1',
+      VL_CACHE_DIR: this.videoCachePath ? path.dirname(this.videoCachePath) : '',
+      REPLICA_MAX_DURATION: String(r.max_duration),
+      REPLICA_SPEED_LIMIT: String(r.speed_limit),
+      REPLICA_DEDUP_RATIO: String(r.dedup_ratio),
+    };
+    // 仅复刻日志中的单个指定成片（右侧「复刻」按钮/批量选择传入成片名）
+    if (entryVideo) env.REPLICA_ONLY_NAME = String(entryVideo).trim();
+    const task = this._enqueueTask(this._createTask('replica', this._taskTitle(logPath) + (String(mode) === '2' ? '（去重）' : ''), script, env, logPath));
     return { ok: true, taskId: task.id };
   }
 

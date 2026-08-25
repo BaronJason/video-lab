@@ -7,6 +7,7 @@
   var ICONS = {
     'copy': '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
     'refresh-cw': '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+    'rotate-ccw': '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
     'search': '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
     'file': '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
     'folder-open': '<path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>',
@@ -28,7 +29,8 @@
     'search-x': '<path d="m13.5 8.5-5 5"/><path d="m8.5 8.5 5 5"/><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
     'repeat': '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
     'file-plus': '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M12 18v-6"/><path d="M9 15h6"/>',
-    'palette': '<circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>'
+    'palette': '<circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>',
+    'settings': '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>'
   };
 
   function icon(name, size, cls) {
@@ -81,7 +83,7 @@
       b.type = 'button';
       b.textContent = it.label;
       m.appendChild(b);
-      if (it.disabled) { b.disabled = true; b.className = 'ctx-menu__btn--disabled'; return; }
+      if (it.disabled) { b.disabled = true; b.className = 'ctx-menu__btn--disabled'; if (it.title) b.title = it.title; return; }
       b.addEventListener('click', function () { m.remove(); it.action(); });
     });
     document.body.appendChild(m);
@@ -109,8 +111,8 @@
     projects: [], activeProject: null, activeTxt: null, versions: [], activeVersion: null,
     configData: null, mode: 'filelist', highlightDup: false, searchQuery: '', logSearchQuery: '',
     expandedProject: null, sortMode: 'name', sortAsc: true, sortTimeDesc: true, rightPreview: true, precheckInvalid: false, logContent: null,
-    logFiles: [], activeLogDate: null, selectMode: false, selectedLogPaths: {},
-    focusVideo: null, _searchTimer: null
+    logFiles: [], activeLogDate: null, activeLogPath: null, selectMode: false, selectedLogPaths: {},
+    focusVideo: null, _searchTimer: null, _fromConfig: false, envMissing: []
   };
   // 复刻虚拟项目：仅含日志无配置，配置名对应复刻模式；REPLICA_MARK 为路由标记，透传回后端
   var REPLICA_PROJECT = '复刻';
@@ -153,18 +155,19 @@
     }
     return list;
   }
-  function buildSidebar() {
+  function buildSidebar(forceAz) {
     var tree = $('sidebarTree');
     var html = '';
     sortedProjects().forEach(function (proj) {
       var expanded = (proj.name === state.expandedProject);
       html += '<div class="tree-project">';
-      html += '<div class="tree-project__name' + (expanded ? ' tree-project__name--sticky' : '') + '" data-project="' + escapeHtml(proj.name) + '">';
+      html += '<div class="tree-project__name' + (expanded ? ' tree-project__name--sticky is-filled' : '') + '" data-project="' + escapeHtml(proj.name) + '">';
       html += '<span class="tree-arrow' + (expanded ? ' tree-arrow--open' : '') + '"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
       html += icon('folder', 16, 'tree-project__icon');
       html += escapeHtml(proj.name);
       html += '<span class="tree-project__count">' + proj.txts.length + ' 个 TXT</span></div>';
       if (expanded) {
+        html += '<div class="tree-project__items">';
         sortedTxts(proj.txts).forEach(function (txt) {
           var isActive = (proj.name === state.activeProject && txt.name === state.activeTxt);
           var matched = !state.searchQuery || txt.name.toLowerCase().indexOf(state.searchQuery.toLowerCase()) >= 0;
@@ -176,11 +179,12 @@
           html += '<span class="tree-txt-item__date">' + escapeHtml(txt.latest) + '</span>';
           html += '<span class="tree-txt-item__badge">' + txt.count + '</span></div>';
         });
+        html += '</div>';
       }
       html += '</div>';
     });
     tree.innerHTML = html;
-    buildAzIndex();
+    buildAzIndex(forceAz);
     syncAzBar();
   }
   // ── 项目列表 A-Z 索引条（仅名称排序时显示） ──
@@ -220,17 +224,37 @@
     var avail = azAvailableLetters();
     return azOrderArray().filter(function (L) { return avail[L]; });
   }
-  function buildAzIndex() {
+  function buildAzIndex(force) {
     var bar = $('azIndexBar');
     if (!bar) return;
+    var letters = displayedAzLetters();
+    var existing = Array.prototype.map.call(bar.children, function (c) { return String(c.dataset.letter || ''); });
+    // 字母序列未变且非强制（如点击同一项目的配置）：复用现有字母 DOM，避免重放高亮/扫描动画
+    if (!force && existing.length === letters.length && existing.every(function (L, i) { return L === letters[i]; })) {
+      return;
+    }
     bar.innerHTML = '';
-    displayedAzLetters().forEach(function (L) {
+    _lastAzActive = null; // 字母 DOM 重建后幂等基准失效，需重新判定高亮
+    letters.forEach(function (L) {
       var b = document.createElement('span');
       b.className = 'az-letter';
       b.textContent = L;
       b.dataset.letter = L;
       bar.appendChild(b);
     });
+    // 重建后整列字母作为整体从左到右渐显，动画期间不设高亮（保持初始排布）
+    bar.classList.remove('az-bar--enter');
+    void bar.offsetWidth;
+    bar.classList.add('az-bar--enter');
+    if (!bar.dataset.azAnimBound) {
+      bar.dataset.azAnimBound = '1';
+      bar.addEventListener('animationend', function (ev) {
+        if (ev.animationName !== 'az-bar-enter') return;
+        bar.classList.remove('az-bar--enter');
+        // 仅当由点击/交互引起（_azPending）才执行突出判定，无交互保持初始排布
+        if (_azPending) { _azPending = false; syncAzHighlight(); }
+      });
+    }
     if (bar.dataset.bound) return;
     bar.dataset.bound = '1';
     bar.addEventListener('mousedown', function (e) {
@@ -253,9 +277,13 @@
       azJumpByPos(e.clientY, true);
     });
   }
+  var _lastAzActive = null;
+  var _azPending = false; // 点击/交互后置位，动画结束才消费，避免无交互时自动高亮
   function setAzActive(letter) {
     var bar = $('azIndexBar');
     if (!bar) return;
+    if (_lastAzActive === letter) return; // 首字母未变化：不重放高亮弹出动画
+    _lastAzActive = letter;
     bar.querySelectorAll('.az-letter').forEach(function (b) { b.classList.toggle('az-letter--active', b.dataset.letter === letter); });
   }
   function azJumpByPos(clientY, highlightOnDrag) {
@@ -297,9 +325,16 @@
   function currentAzLetter() {
     var tree = $('sidebarTree');
     if (!tree) return null;
+    // 已选中配置且属于当前展开项目：固定高亮该配置的首字母（不随滚动变化）
+    if (state.activeProject && state.activeTxt && state.expandedProject === state.activeProject) {
+      return azInitial(state.activeTxt);
+    }
     var nodes = tree.querySelectorAll('.tree-txt-item');
     if (!nodes.length) return null;
-    var top = tree.getBoundingClientRect().top;
+    // 置顶项目名会占据视口顶部，按粘性头部高度偏移，取头部之下第一个配置项作为「第一行配置」
+    var header = tree.querySelector('.tree-project__name--sticky');
+    var offset = header ? header.offsetHeight : 0;
+    var top = tree.getBoundingClientRect().top + offset;
     var first = null;
     for (var i = 0; i < nodes.length; i++) {
       if (nodes[i].getBoundingClientRect().bottom >= top) { first = nodes[i]; break; }
@@ -317,8 +352,8 @@
     var tree = $('sidebarTree');
     var hasTxt = !!(tree && tree.querySelector('.tree-txt-item'));
     var show = state.sortMode === 'name' && hasTxt;
-    bar.style.display = show ? 'flex' : 'none';
-    if (show) syncAzHighlight();
+    bar.classList.toggle('is-show', show);
+    // 不自动判定高亮：由点击/滚动/拖拽交互触发（无交互保持初始排布）
   }
   // 仅当配置分支名/日期为严格 4 位 MMdd 时返回该日期，否则返回空串
   function mmddOf(label) { var s = String(label || ''); return /^\d{4}$/.test(s.slice(0, 4)) ? s.slice(0, 4) : ''; }
@@ -351,6 +386,27 @@
       if (mmddOf(v2.label) === date && v2.isExternal) return v2;
     }
     return null;
+  }
+  // 配置模式 → 日志：按当前配置文件版本 label 定位当日对应日志分支
+  //   - 无后缀正本 / 序号化 -N → 精确匹配 label 完全一致的当日日志
+  //   - 外部 * → 当日成片日志：多序号并存跳 -1(最旧)；单成片跳唯一正本；仅此一份跳当日任一
+  function logTargetForVersion(files) {
+    var v = state.activeVersion;
+    if (!v) return null;
+    var d = mmddOf(v.label);
+    if (!d) return null;
+    var sameDay = (files || []).filter(function (f) { return f.date === d; });
+    if (!sameDay.length) return null;
+    var st = String(v.label || '').slice(4); // '' | -N | *
+    if (st === '*') {
+      var numbered = sameDay.filter(function (f) { return /-\d+$/.test(f.label || ''); });
+      if (numbered.length > 1) return numbered[0]; // 多成片并存 → -1(最旧)
+      var plain = sameDay.find(function (f) { return /^\d{4}$/.test(f.label || ''); });
+      if (plain) return plain; // 单成片 → 唯一正本日志
+      return sameDay[0];
+    }
+    var exact = sameDay.find(function (f) { return f.label === v.label; });
+    return exact || sameDay[0];
   }
   // 日志模式当下所选日期是否「有可跳配置」：任一该日期日志能在版本中找到正本/序号 或 外部 *
   function logDateHasConfig() {
@@ -410,20 +466,25 @@
       if (state._logBranchToken !== token) return;
       files = files || [];
       state.logFiles = files;
-      var firstOfDate = {};
-      files.forEach(function (f) { if (!firstOfDate[f.date]) firstOfDate[f.date] = f; });
-      var dates = Object.keys(firstOfDate);
-      if (!dates.length) { state.activeLogDate = null; c.innerHTML = '<span class="date-branch-btn">无日志</span>'; updateModeToggle(); return; }
-      var hadDate = !(state.activeLogDate === null || dates.indexOf(state.activeLogDate) < 0);
-      if (!hadDate) state.activeLogDate = dates[0];
+      if (!files.length) { state.activeLogDate = null; state.activeLogPath = null; c.innerHTML = '<span class="date-branch-btn">无日志</span>'; updateModeToggle(); return; }
+      // 定位当前选中分支：从配置切入时按配置文件版本定位当日对应日志；否则按残留定位
+      var fromConfig = state._fromConfig; state._fromConfig = false;
+      var active = fromConfig ? logTargetForVersion(files) : null;
+      if (!active && state.activeLogPath) { var hit = files.find(function (f) { return f.path === state.activeLogPath; }); if (hit) active = hit; }
+      if (!active && state.activeLogDate) { var hit2 = files.find(function (f) { return f.date === state.activeLogDate; }); if (hit2) active = hit2; }
+      if (!active) active = files[0];
+      var had = state.activeLogPath === active.path;
+      state.activeLogDate = active.date;
+      state.activeLogPath = active.path;
       var html = '';
-      dates.forEach(function (date) {
-        var active = date === state.activeLogDate;
-        html += '<button class="date-branch-btn' + (active ? ' date-branch-btn--active' : '') + '" data-date="' + escapeHtml(date) + '" data-file="' + escapeHtml(firstOfDate[date].path) + '" title="' + escapeHtml(firstOfDate[date].path) + '">' + escapeHtml(date) + '</button>';
+      files.forEach(function (f) {
+        var isActive = f.path === active.path;
+        var txt = f.label || f.date;
+        html += '<button class="date-branch-btn' + (isActive ? ' date-branch-btn--active' : '') + '" data-date="' + escapeHtml(f.date) + '" data-file="' + escapeHtml(f.path) + '" title="' + escapeHtml(f.path) + '">' + escapeHtml(txt) + '</button>';
       });
       c.innerHTML = html;
       updateModeToggle();
-      if (!hadDate && state.mode === 'log' && state.activeTxt) buildCenterBottom();
+      if (!had && state.mode === 'log' && state.activeTxt) buildCenterBottom();
     }).catch(function () { c.innerHTML = '<span class="date-branch-btn">无日志</span>'; updateModeToggle(); });
   }
   function buildCenterBottom() {
@@ -443,10 +504,10 @@
     var watermark = data.watermark || '';
     var html = '<div class="config-editor">';
     html += '<div class="config-editor__col config-editor__col--paths">';
-    html += '<div class="config-path-subheader"><span class="config-path-subheader__drag"></span><span class="config-path-subheader__nopoll">取消轮询</span><span class="config-path-subheader__path">路径</span><span class="config-path-subheader__check">预检测结果</span><span class="config-path-subheader__open"></span></div>';
+    html += '<div class="config-path-subheader"><span class="config-path-subheader__drag"></span><span class="config-path-subheader__sort">排序</span><span class="config-path-subheader__nopoll">取消轮询</span><span class="config-path-subheader__path">路径</span><span class="config-path-subheader__check">预检测结果</span><span class="config-path-subheader__open"></span></div>';
     html += '<div class="config-editor__path-list" id="pathList">';
     folders.forEach(function (f, idx) {
-      html += '<div class="config-path-row" data-index="' + idx + '">';
+      html += '<div class="config-path-row" data-index="' + idx + '" data-orig="' + escapeHtml(f.path) + '" data-orig-idx="' + idx + '">';
       html += '<span class="config-path-row__drag" draggable="true" title="按住拖动排序">' + icon('grip-vertical', 14) + '</span>';
       html += '<label class="config-path-row__checkbox" title="勾选 = 不轮询（添加 = 前缀）"><input type="checkbox" class="config-path-row__check" ' + (f.nonround ? 'checked' : '') + '><span class="config-path-row__check-mark"></span></label>';
       html += '<input type="text" class="config-path-row__input" value="' + escapeHtml(f.path) + '" title="' + escapeHtml(f.path) + '">';
@@ -462,7 +523,7 @@
     html += '<div class="config-editor__col-header">排除字段 <span class="config-editor__col-count">' + excludes.length + '</span></div>';
     html += '<div class="config-editor__exclude-list" id="excludeList">';
     excludes.forEach(function (ex) {
-      html += '<div class="config-exclude-row"><span class="config-exclude-row__path" title="' + escapeHtml(ex) + '">' + escapeHtml(ex) + '</span><button class="config-exclude-row__remove" title="移除排除字段">' + icon('x', 12) + '</button></div>';
+      html += '<div class="config-exclude-row" data-orig="' + escapeHtml(ex) + '"><span class="config-exclude-row__path" title="' + escapeHtml(ex) + '">' + escapeHtml(ex) + '</span><button class="config-exclude-row__remove" title="移除排除字段">' + icon('x', 12) + '</button></div>';
     });
     html += '</div>';
     html += '<input type="text" class="config-exclude-input" id="inputExclude" placeholder="输入排除字符串，回车添加" spellcheck="false"></div>';
@@ -474,7 +535,18 @@
     html += '<button class="config-watermark__change" id="btnChangeWatermark">更换水印</button></div></div>';
     html += '</div></div>';
     container.innerHTML = html;
-    buildConfigBar(); bindEditorEvents(); bindResizers(container); runPrecheck();
+    buildConfigBar(); bindEditorEvents(); bindResizers(container); bindModifiedWatchers(container); runPrecheck();
+    // 仅真正加载配置时（_configOrig 为 null）建立修改基线；局部重建（如水印变更）不重置，保证各部分修改相互独立
+    if (state._configOrig === null || state._configOrig === undefined) {
+      state._configOrig = {
+        folders: folders.map(function (f) { return String(f.path); }),
+        excludes: excludes.map(function (e) { return String(e); }),
+        watermark: watermark,
+        name: data.name || ''
+      };
+      state._configOrigSnapshot = configSnapshot();
+    }
+    refreshConfigModified();
   }
   function buildConfigBar() {
     var bar = $('configBar');
@@ -488,9 +560,10 @@
     html += '<input type="number" class="config-bottombar__input" id="inputGroupCount" value="" min="1" max="99" placeholder="不分组"></div>';
     html += '<div class="config-bar__right">';
     html += '<span class="config-bottombar__warn" id="configWarnMark" style="display:none">有不合格路径</span>';
+    html += '<span class="config-bottombar__modified" id="configModifiedHint" style="display:none">配置发生改变</span>';
     html += '<label class="config-bottombar__label">配置名</label>';
     html += '<input type="text" class="config-bottombar__input config-bottombar__input--name" id="inputConfigName" value="' + escapeHtml(name) + '">';
-    html += '<button class="config-btn config-btn--save" id="btnSaveConfig">' + icon('save', 14) + '保存配置</button>';
+    html += '<button class="config-btn config-btn--save" id="btnSaveConfig">' + icon('save', 14) + '覆盖当前配置</button>';
     html += '<button class="config-btn config-btn--save-today" id="btnSaveToday">' + icon('calendar-plus', 14) + '保存为当日配置</button>';
     html += '<button class="config-btn config-btn--run" id="btnRunScript">' + icon('play', 14) + '启动脚本</button></div>';
     bar.innerHTML = html;
@@ -498,21 +571,99 @@
     $('btnSaveToday').addEventListener('click', saveConfigToday);
     $('btnRunScript').addEventListener('click', runScript);
     $('inputFilmCount').addEventListener('input', function () { var errEl = $('filmCountError'); if (errEl) errEl.style.display = 'none'; });
+    bindModifiedWatchers(bar);
     applyPrecheckValidity();
+    refreshConfigModified();
+    applyEnvDisabled();
+  }
+  // ── 配置修改检测：未修改时两个保存按钮禁用；修改时编辑区红框 + 配置名左侧红字提示 ──
+  function configSnapshot() {
+    try {
+      var ed = getEditorState();
+      var nm = $('inputConfigName') ? $('inputConfigName').value.trim() : (state.activeTxt || '');
+      return JSON.stringify({ f: ed.folders, e: ed.excludes, w: ed.watermark || '', n: nm });
+    } catch (e) { return ''; }
+  }
+  function refreshConfigModified() {
+    var modified = false;
+    if (state.configData) {
+      var t0 = state._configOrigSnapshot, t1 = configSnapshot();
+      modified = t0 !== null && t0 !== undefined && t1 !== t0;
+    }
+    state.configModified = modified;
+    var b1 = $('btnSaveConfig'), b2 = $('btnSaveToday');
+    if (b1) { b1.disabled = state.precheckInvalid || !modified || _envBad(); setBtnHint(b1, _envBad() ? '运行环境缺失' : (state.precheckInvalid ? '存在不合格路径' : (modified ? null : '配置未发生改变'))); }
+    if (b2) { b2.disabled = state.precheckInvalid || _envBad(); setBtnHint(b2, _envBad() ? '运行环境缺失' : (state.precheckInvalid ? '存在不合格路径' : null)); }
+    var hint = $('configModifiedHint');
+    if (hint) hint.style.display = modified ? '' : 'none';
+    // ── 元素级红框提示 ──
+    var orig = state._configOrig || {};
+    // 路径行：文字变化 → 输入框边框红；仅被拖动的行且不在原位 → 该行整行红
+    document.querySelectorAll('.config-path-row').forEach(function (row, i) {
+      var inp = row.querySelector('.config-path-row__input');
+      var origText = row.getAttribute('data-orig') || '';
+      if (inp) inp.classList.toggle('is-modified-input', String(inp.value || '').trim() !== origText.trim());
+      var origIdx = parseInt(row.getAttribute('data-orig-idx') || '-1', 10);
+      var movedFlag = row.dataset.moved === '1';
+      var moved = movedFlag && origIdx >= 0 && origIdx !== i;
+      if (movedFlag && origIdx === i) row.removeAttribute('data-moved');
+      row.classList.toggle('is-modified-row', moved);
+      // 路径不存在 + 排序改变并存：显式组合类让橙框/橙条与排序红条同屏（避免类同步问题）
+      var isInv = row.classList.contains('config-path-row--invalid');
+      row.classList.toggle('config-path-row--invalid-moved', isInv && !!moved);
+    });
+    // 排除行：软删除行 → 删除线灰字（不参与红底）；新增/修改行 → 低透红底+左条
+    document.querySelectorAll('.config-exclude-row').forEach(function (row) {
+      if (row.dataset.deleted === '1') { row.classList.remove('is-modified-row'); return; }
+      var origText = row.getAttribute('data-orig') || '';
+      var txt = row.querySelector('.config-exclude-row__path');
+      var changed = txt ? String(txt.textContent || '').trim() !== origText.trim() : false;
+      row.classList.toggle('is-modified-row', changed);
+    });
+    // 相对初始集合存在缺失（软删除或硬删除初始字段）→ 排除框体红；纯新增/删除刚加的字段 → 不红
+    var curSet = new Set();
+    document.querySelectorAll('.config-exclude-row').forEach(function (r) {
+      if (r.dataset.deleted === '1') return;
+      var tt = r.querySelector('.config-exclude-row__path');
+      if (tt) curSet.add(String(tt.textContent || '').trim());
+    });
+    var lost = (orig.excludes || []).some(function (e) { return !curSet.has(String(e).trim()); });
+    var exCol = document.querySelector('.config-editor__col--exclude');
+    if (exCol) exCol.classList.toggle('is-modified', lost);
+    // 水印：整个水印框架边框红
+    var wf = document.querySelector('.config-editor__col--watermark');
+    if (wf) {
+      var wCur = state.configData ? (state.configData.watermark || '') : '';
+      wf.classList.toggle('is-modified', wCur !== (orig.watermark || ''));
+    }
+  }
+  function bindModifiedWatchers(container) {
+    ['input', 'change', 'click'].forEach(function (ev) {
+      if (container && !container.dataset.mwBound) {
+        container.dataset.mwBound = '1';
+        container.addEventListener(ev, refreshConfigModified, true);
+      }
+    });
   }
   function applyPrecheckValidity() {
     var invalid = state.precheckInvalid;
-    ['btnSaveConfig', 'btnSaveToday', 'btnRunScript'].forEach(function (id) { var b = $(id); if (b) b.disabled = invalid; });
+    var run = $('btnRunScript');
+    if (run) {
+      run.disabled = invalid || _envBad();
+      setBtnHint(run, _envBad() ? '运行环境缺失' : (invalid ? '存在不合格路径，无法启动脚本' : null));
+    }
     var warn = $('configWarnMark');
     if (warn) warn.style.display = invalid ? '' : 'none';
+    refreshConfigModified();
   }
   // ── 日志模式：底部批量复刻成片配置栏 ──
   function toggleLogSelect(entry, force) {
     var lp = entry.getAttribute('data-log-path');
     var key = normalizePath(lp);
-    if (force === true) state.selectedLogPaths[key] = lp;
+    var val = { path: lp, video: entry.getAttribute('data-video') || '' };
+    if (force === true) state.selectedLogPaths[key] = val;
     else if (force === false) delete state.selectedLogPaths[key];
-    else { if (state.selectedLogPaths[key]) delete state.selectedLogPaths[key]; else state.selectedLogPaths[key] = lp; }
+    else { if (state.selectedLogPaths[key]) delete state.selectedLogPaths[key]; else state.selectedLogPaths[key] = val; }
     var cb = entry.querySelector('.log-entry__check');
     if (cb) cb.checked = !!state.selectedLogPaths[key];
     entry.classList.toggle('log-entry--selected', !!state.selectedLogPaths[key]);
@@ -543,6 +694,7 @@
     $('btnBatchReplica1').addEventListener('click', function () { batchReplica('1'); });
     $('btnBatchReplica2').addEventListener('click', function () { batchReplica('2'); });
     refreshLogConfigBar();
+    applyEnvDisabled();
   }
   // 仅刷新批量栏的状态（计数/按钮可用性/全选框）而不重建
   function refreshLogConfigBar() {
@@ -551,8 +703,8 @@
     if (cnt) cnt.textContent = '已选 ' + n;
     var btn1 = $('btnBatchReplica1'), btn2 = $('btnBatchReplica2');
     var canRun = !!state.selectMode && n > 0;
-    if (btn1) btn1.disabled = !canRun;
-    if (btn2) btn2.disabled = !canRun;
+    if (btn1) { btn1.disabled = !canRun || _envBad(); setBtnHint(btn1, _envBad() ? '运行环境缺失' : (canRun ? null : '请先勾选要复刻的成片')); }
+    if (btn2) { btn2.disabled = !canRun || _envBad(); setBtnHint(btn2, _envBad() ? '运行环境缺失' : (canRun ? null : '请先勾选要复刻的成片')); }
     var all = $('chkLogAll');
     if (all) all.checked = !!state.selectMode && n > 0;
   }
@@ -571,7 +723,7 @@
       var container = $('centerBottom');
       if (container) container.querySelectorAll('.log-entry').forEach(function (en) {
         var og = en.getAttribute('data-log-path');
-        if (og) state.selectedLogPaths[normalizePath(og)] = og;
+        if (og) state.selectedLogPaths[normalizePath(og)] = { path: og, video: en.getAttribute('data-video') || '' };
       });
     }
     buildLogList();
@@ -580,14 +732,16 @@
     refreshLogConfigBar();
   }
   function batchReplica(mode) {
+    if (_envBad()) { setStatus('运行环境缺失'); return; }
     if (!state.selectMode) return;
-    var paths = [];
-    for (var k in (state.selectedLogPaths || {})) { if (state.selectedLogPaths[k]) paths.push(state.selectedLogPaths[k]); }
-    if (!paths.length) { setStatus('请先勾选要复刻的成片'); return; }
-    var cnt = paths.length, done = 0;
+    var items = [];
+    for (var k in (state.selectedLogPaths || {})) { var v = state.selectedLogPaths[k]; if (v) items.push({ path: (v.path || v), video: v.video || '' }); }
+    if (!items.length) { setStatus('请先勾选要复刻的成片'); return; }
+    var cnt = items.length, done = 0;
     setStatus('已对 ' + cnt + ' 个成片启动批量' + (mode === '1' ? '完全' : '去重') + '复刻…');
-    paths.forEach(function (p) {
-      call('run_replica', p, mode).then(function (r) {
+    items.forEach(function (it) {
+      // 按选中成片精确复刻（传入成片名，脚本仅处理该成片）
+      call('run_replica', it.path, mode, it.video).then(function (r) {
         done++;
         if (!(r && r.ok)) setStatus('启动失败：' + ((r && r.error) || '未知错误'));
         else if (done === cnt) { setStatus('已全部启动 ' + cnt + ' 个批量复刻脚本'); }
@@ -631,7 +785,7 @@
     });
     var excludes = [];
     var exList = $('excludeList');
-    if (exList) exList.querySelectorAll('.config-exclude-row').forEach(function (row) { var t = row.querySelector('.config-exclude-row__path').textContent.trim(); if (t) excludes.push(t); });
+    if (exList) exList.querySelectorAll('.config-exclude-row').forEach(function (row) { if (row.dataset.deleted === '1') return; var t = row.querySelector('.config-exclude-row__path'); if (t) { var s = t.textContent.trim(); if (s) excludes.push(s); } });
     var watermark = state.configData ? (state.configData.watermark || '') : '';
     return { folders: folders, excludes: excludes, watermark: watermark };
   }
@@ -668,7 +822,7 @@
     });
     var excludes = [];
     var exList = $('excludeList');
-    if (exList) exList.querySelectorAll('.config-exclude-row').forEach(function (row) { var t = row.querySelector('.config-exclude-row__path').textContent.trim(); if (t) excludes.push(t); });
+    if (exList) exList.querySelectorAll('.config-exclude-row').forEach(function (row) { if (row.dataset.deleted === '1') return; var t = row.querySelector('.config-exclude-row__path'); if (t) { var s = t.textContent.trim(); if (s) excludes.push(s); } });
     if (paths.length === 0) return;
     call('precheck', paths, excludes).then(function (results) {
       results = results || [];
@@ -711,13 +865,44 @@
       if (!t) return;
       if (t.classList.contains('config-path-row__remove')) { t.closest('.config-path-row').remove(); updatePathCount(); runPrecheck(); refreshPreviewIfModified(); }
       else if (t.classList.contains('config-path-row__open')) { var input = t.closest('.config-path-row').querySelector('.config-path-row__input'); call('open_path', input.value.trim()); }
-      else if (t.classList.contains('config-exclude-row__remove')) { t.closest('.config-exclude-row').remove(); updateExcludeCount(); runPrecheck(); refreshPreviewIfModified(); }
+      else if (t.classList.contains('config-exclude-row__remove')) {
+        var exRow = t.closest('.config-exclude-row');
+        if (exRow.dataset.deleted === '1') {
+          // 恢复被软删除的排除字段
+          delete exRow.dataset.deleted;
+          exRow.classList.remove('is-ex-deleted');
+          t.innerHTML = icon('x', 12);
+          t.title = '移除排除字段';
+        } else {
+          // 软删除：文字删除线灰显，x 变恢复按钮
+          exRow.dataset.deleted = '1';
+          exRow.classList.add('is-ex-deleted');
+          t.innerHTML = icon('repeat', 12);
+          t.title = '恢复该排除字段';
+        }
+        updateExcludeCount(); runPrecheck(); refreshPreviewIfModified(); refreshConfigModified();
+      }
       else if (t.id === 'btnAddPath') { addPathField(); }
       else if (t.id === 'btnChangeWatermark') { changeWatermark(); }
     }
     container.removeEventListener('click', container._delegatedClick);
     container._delegatedClick = onContainerClick;
     container.addEventListener('click', container._delegatedClick);
+    // 排除字段右键菜单：硬删除该字段
+    container.removeEventListener('contextmenu', container._delegatedCtx);
+    container._delegatedCtx = function (e) {
+      var exRow = e.target.closest('.config-exclude-row');
+      if (!exRow) return;
+      e.preventDefault();
+      showMenu(e.clientX, e.clientY, [{
+        label: '移除',
+        action: function () {
+          exRow.remove();
+          updateExcludeCount(); runPrecheck(); refreshPreviewIfModified(); refreshConfigModified();
+        }
+      }]);
+    };
+    container.addEventListener('contextmenu', container._delegatedCtx);
     var exInput = $('inputExclude');
     if (exInput) { var exKey = function (e) { if (e.key === 'Enter') { e.preventDefault(); addExcludeField(); } }; exInput.addEventListener('keydown', exKey); }
     pathList.addEventListener('dragstart', function (e) {
@@ -742,7 +927,7 @@
       var children = Array.from(pathList.children);
       var from = children.indexOf(dragged), to = children.indexOf(row);
       if (from < to) pathList.insertBefore(dragged, row.nextSibling); else pathList.insertBefore(dragged, row);
-      reindexPathRows(); runPrecheck(); refreshPreviewIfModified();
+      reindexPathRows(); runPrecheck(); refreshPreviewIfModified(); dragged.dataset.moved = '1'; refreshConfigModified();
     });
     function onContainerChange(e) {
       if (e.target.classList && (e.target.classList.contains('config-path-row__input') || e.target.classList.contains('config-path-row__check'))) { runPrecheck(); refreshPreviewIfModified(); }
@@ -788,8 +973,20 @@
     }).catch(function (e) { setStatus('添加路径失败：' + e.message); });
   }
   function changeWatermark() {
-    call('pick_watermark').then(function (p) { if (!p) return; state.configData.watermark = p; buildConfigEditor(); refreshPreviewIfModified(); });
-  }
+      call('pick_watermark').then(function (p) {
+        if (!p) return;
+        state.configData.watermark = p;
+        // 局部更新水印区内容（按钮无需重绑：容器级 click 委托按 id 命中 changeWatermark，重复直接绑定会弹两次）
+        var wc = document.querySelector('.config-editor__col--watermark .config-editor__watermark-content');
+        if (wc) {
+          wc.innerHTML = (p
+            ? '<div class="config-watermark__path">' + escapeHtml(p) + '</div><button class="config-watermark__change" id="btnChangeWatermark">更换水印</button>'
+            : '<div class="config-watermark__empty">未设置水印</div><button class="config-watermark__change" id="btnChangeWatermark">更换水印</button>');
+        }
+        refreshPreviewIfModified();
+        refreshConfigModified();
+      });
+    }
   function saveConfig() {
     if (!state.configData) return;
     var ed = getEditorState();
@@ -797,7 +994,7 @@
     showDialog({ title: '确认覆盖', message: '将覆盖原文件：\n' + path + '\n是否继续？', buttons: [ { label: '取消', value: false }, { label: '确认覆盖', value: true, danger: true, primary: true } ] }).then(function (ok) {
       if (!ok) { setStatus('已取消保存'); return; }
       call('save_config', path, ed.folders, ed.excludes, ed.watermark).then(function (r) {
-        if (r && r.ok) { setStatus('已保存：' + path); refreshData(); } else setStatus('保存失败：' + ((r && r.error) || '未知错误'));
+        if (r && r.ok) { setStatus('已保存：' + path); refreshData(); document.querySelectorAll('.config-exclude-row[data-deleted="1"]').forEach(function (rr) { rr.remove(); }); state._configOrigSnapshot = configSnapshot(); refreshConfigModified(); } else setStatus('保存失败：' + ((r && r.error) || '未知错误'));
       }).catch(function (e) { setStatus('保存失败：' + e.message); });
     });
   }
@@ -827,6 +1024,7 @@
     }).catch(function (e) { setStatus('刷新版本失败：' + e.message); });
   }
   function runScript() {
+    if (_envBad()) { setStatus('运行环境缺失'); return; }
     if (!state.activeVersion) return;
     var count = $('inputFilmCount').value.trim();
     var group = $('inputGroupCount').value.trim();
@@ -888,12 +1086,20 @@
   function buildLogList() {
     var container = $('centerBottom');
     container.innerHTML = '<div class="center-empty">' + icon('scroll-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">正在加载日志…</span></div>';
-    call('list_logs', state.activeProject, state.activeTxt, state.activeVersion.path).then(function (entries) {
+    // 按当前选中的日志分支（精确到日志文件）定位查询目录，切换分支后取对应日志成片
+    var probeLog = null;
+    if (state.activeLogPath) probeLog = state.activeLogPath;
+    else if (state.activeLogDate) {
+      var pf = (state.logFiles || []).find(function (f) { return f.date === state.activeLogDate; });
+      if (pf) probeLog = pf.path;
+    }
+    call('list_logs', state.activeProject, state.activeTxt, probeLog || state.activeVersion.path).then(function (entries) {
       entries = entries || [];
-      // 按所选日志日期过滤：仅显示属于该日期日志文件的成片条目
+      // 按所选日志分支过滤：精确到日志文件，仅显示属于该分支的成片条目
       if (state.activeLogDate) {
         var fileSet = {};
-        (state.logFiles || []).forEach(function (f) { if (f.date === state.activeLogDate) fileSet[normalizePath(f.path)] = 1; });
+        if (state.activeLogPath) { fileSet[normalizePath(state.activeLogPath)] = 1; }
+        else { (state.logFiles || []).forEach(function (f) { if (f.date === state.activeLogDate) fileSet[normalizePath(f.path)] = 1; }); }
         entries = entries.filter(function (en) { return fileSet[normalizePath(en.log_path)]; });
       }
       var q = state.logSearchQuery.trim().toLowerCase();
@@ -928,28 +1134,58 @@
     }).catch(function (e) { container.innerHTML = '<div class="center-empty">' + icon('search-x', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">加载日志失败：' + escapeHtml(e.message) + '</span></div>'; });
     container.oncontextmenu = function (e) {
       var clip = e.target.closest('.log-entry__clip');
-      if (!clip) return;
-      e.preventDefault();
-      var p = clip.getAttribute('data-path');
-      if (!p) return;
-      var missing = clip.getAttribute('data-exists') === '0';
-      var items = [
-        { label: '打开文件', disableIfMissing: true, action: function () { call('open_path', p); } },
-        { label: '打开路径', disableIfMissing: true, action: function () { call('open_parent', p); } }
-      ];
-      if (missing) items.forEach(function (it) { if (it.disableIfMissing) it.disabled = true; });
-      showMenu(e.clientX, e.clientY, items);
+      if (clip) {
+        e.preventDefault();
+        var p = clip.getAttribute('data-path');
+        if (!p) return;
+        var missing = clip.getAttribute('data-exists') === '0';
+        var items = [
+          { label: '打开文件', disableIfMissing: true, title: missing ? '文件不存在' : '', action: function () { call('open_path', p); } },
+          { label: '打开路径', disableIfMissing: true, title: missing ? '文件不存在' : '', action: function () { call('open_parent', p); } }
+        ];
+        if (missing) items.forEach(function (it) { if (it.disableIfMissing) it.disabled = true; });
+        showMenu(e.clientX, e.clientY, items);
+        return;
+      }
+      var entryItem = e.target.closest('.log-entry');
+      if (entryItem) {
+        // 成片级右键：打开成片 / 打开文件夹；成片文件不存在时置灰禁用并悬浮提示
+        e.preventDefault();
+        var videoNm = entryItem.getAttribute('data-video') || '';
+        var lpItem = entryItem.getAttribute('data-log-path');
+        if (!lpItem) { setStatus('无法定位该成片对应的日志文件'); return; }
+        var fname = videoNm.trim();
+        if (!fname) return;
+        if (!/\.mp4$/i.test(fname)) fname += '.mp4';
+        var dirItem = String(lpItem).replace(/[\\/]+/g, '\\').replace(/\\[^\\]*$/, '');
+        var clipFile = dirItem + '\\' + fname;
+        var smenu = function (missingFile) {
+          var items2 = [
+            { label: '打开成片', disableIfMissing: true, action: function () { call('open_path', clipFile); } },
+            { label: '打开文件夹', disableIfMissing: true, action: function () { call('open_parent', clipFile); } }
+          ];
+          if (missingFile) items2.forEach(function (it) { if (it.disableIfMissing) it.disabled = true; it.title = '成片文件不存在'; });
+          showMenu(e.clientX, e.clientY, items2);
+        };
+        call('check_exists', [clipFile]).then(function (map) {
+          map = map || {};
+          smenu(map[clipFile] === false);
+        }).catch(function () { smenu(false); });
+      }
     };
     container.onclick = function (e) {
       var rep = e.target.closest('.log-entry__replica');
       if (rep) {
         e.stopPropagation();
+        if (_envBad()) { setStatus('运行环境缺失'); return; }
         var entry = rep.closest('.log-entry');
         var logPath = entry.getAttribute('data-log-path');
         if (!logPath) { setStatus('无法定位该成片对应的日志文件'); return; }
+        var entryVideo = entry.getAttribute('data-video') || '';
         showDialog({ title: '复刻', message: '请选择复刻方式', buttons: [ { label: '完全复刻', value: '1', primary: true }, { label: '去重复刻', value: '2', primary: true }, { label: '取消', value: null } ] }).then(function (mode) {
           if (!mode) { setStatus('已取消复刻'); return; }
-          call('run_replica', logPath, mode).then(function (r) { setStatus(r && r.ok ? '已启动复刻脚本' : '启动失败：' + ((r && r.error) || '')); });
+          // 仅复刻该单个成片（传入成片名，脚本精确处理该成片）
+          call('run_replica', logPath, mode, entryVideo).then(function (r) { setStatus(r && r.ok ? '已启动该成片复刻脚本' : '启动失败：' + ((r && r.error) || '')); });
         });
         return;
       }
@@ -980,6 +1216,7 @@
       var entry = cb.closest('.log-entry');
       if (entry) toggleLogSelect(entry, cb.checked);
     });
+    applyEnvDisabled(); // 新渲染的成片行复刻按钮应用环境拦截
   }
   // 全局成片名搜索：渲染受限高度的下拉列表，点击跳转到目标日期分支并高亮成片
   function closeLogDropdown() {
@@ -1118,7 +1355,8 @@
   function renderLogRightPanel() {
     var nums = $('rightLineNumbers'); var code = $('rightCode'); var subtitle = $('rightPanelSubtitle');
     var d = state.logContent; var files = (d && d.files) || [];
-    subtitle.textContent = '日志 — ' + state.activeTxt + ' / ' + state.activeVersion.label;
+    var logPath = state.activeLogPath || (files[0] && files[0].path) || state.activeVersion.path;
+    subtitle.textContent = '日志:"' + relToProject(logPath) + '"';
     subtitle.title = subtitle.textContent;
     if (files.length === 0) { nums.innerHTML = ''; code.innerHTML = '<div style="padding:8px 12px;color:var(--text-tertiary)">暂无日志文件</div>'; return; }
     var numHtml = ''; var codeHtml = ''; var row = 0;
@@ -1171,6 +1409,9 @@
   // 载入遮罩：工作路径扫描时提示用户
   function showBusy(text) { var o = $('busyOverlay'); if (!o) return; var p = $('busyProgress'); if (p) p.style.display = 'none'; $('busyText').textContent = text || '正在检测…'; o.style.display = 'flex'; }
   function hideBusy() { var o = $('busyOverlay'); if (o) o.style.display = 'none'; }
+  // 设置窗口开/关时的主窗口模糊遮罩
+  function showSettingsDim() { var o = $('settingsDim'); if (o) { hideBusy(); o.style.display = 'block'; } }
+  function hideSettingsDim() { var o = $('settingsDim'); if (o) o.style.display = 'none'; }
   // 带进度条的等待窗口：重置预检测全量检测期间使用
   function showBusyProgress(text) {
     var o = $('busyOverlay'); if (!o) return;
@@ -1232,11 +1473,6 @@
   function applySkin(id, persist) {
     var target = SKINS.some(function (s) { return s.id === id; }) ? id : SKINS[0].id;
     document.documentElement.setAttribute('data-skin', target);
-    var btn = $('skinBtn');
-    if (btn) {
-      var s = SKINS.filter(function (x) { return x.id === target; })[0] || SKINS[0];
-      btn.title = '切换皮肤（当前：' + s.label + '）';
-    }
     if (persist) call('set_skin', target);
     return target;
   }
@@ -1268,29 +1504,14 @@
     var btn = $('skinBtn');
     if (!btn) return;
     call('get_skin').then(function (id) { applySkin(id, false); }).catch(function () { applySkin(SKINS[0].id, false); });
-    btn.addEventListener('click', function (e) {
-      e.stopPropagation();
-      var pop = ensureSkinPop();
-      var cur = document.documentElement.getAttribute('data-skin') || SKINS[0].id;
-      pop.querySelectorAll('.skin-popup__item').forEach(function (it) {
-        it.classList.toggle('skin-popup__item--active', it.dataset.skin === cur);
-      });
-      pop.style.display = 'block';
-      positionSkinPop();
-      pop.onclick = function (ev) {
-        var it = ev.target.closest('.skin-popup__item');
-        if (!it) return;
-        var s = SKINS.filter(function (x) { return x.id === it.dataset.skin; })[0];
-        applySkin(it.dataset.skin, true);
-        setStatus('皮肤已切换：' + (s ? s.label : it.dataset.skin));
-        pop.style.display = 'none';
-      };
-    });
-    document.addEventListener('click', function (e) {
-      if (skinPop && skinPop.style.display === 'block' && !e.target.closest('.skin-popup') && !e.target.closest('.skin-select')) {
-        skinPop.style.display = 'none';
-      }
-    });
+    btn.addEventListener('click', function () { call('open_settings_window').catch(function () { setStatus('打开设置窗口失败'); }); });
+    // 设置页修改主题后，主界面即时跟随
+    if (window.txapi && window.txapi.on_settings_saved) {
+      window.txapi.on_settings_saved(function (cfg) { if (cfg && typeof cfg === 'object') applySkin(cfg.skin, false); });
+    }
+    // 设置窗口打开/关闭时显示/隐藏主窗口模糊遮罩
+    if (window.txapi && window.txapi.on_settings_window_opened) window.txapi.on_settings_window_opened(showSettingsDim);
+    if (window.txapi && window.txapi.on_settings_window_closed) window.txapi.on_settings_window_closed(hideSettingsDim);
   }
 
   function refreshData(force, busyText, done, skipReflow) {
@@ -1320,16 +1541,32 @@
       if (ml) ml.classList.add('mode-toggle--active');
       if (mf) mf.classList.remove('mode-toggle--active');
       state.expandedProject = project;
-      buildSidebar(); buildDateBranches(); buildCenterBottom(); buildRightPanel();
+      buildSidebar();
+      // 点击配置＝用户交互：重建动画中则动画结束再判定，无动画直接判定
+      var azB2 = $('azIndexBar');
+      if (azB2 && azB2.classList.contains('az-bar--enter')) _azPending = true;
+      else syncAzHighlight();
+      buildDateBranches(); buildCenterBottom(); buildRightPanel();
       setStatus('日志模式：' + name);
       return;
     }
     var prevLabel = keepVersion && state.activeVersion ? state.activeVersion.label : null;
+    // 点击左侧配置名：即使当前在日志模式也切回配置模式，并跳转该配置最新日期分支
+    state.selectMode = false; state.selectedLogPaths = {};
+    state.mode = 'filelist';
+    var mlT = $('modeLog'), mfT = $('modeFilelist');
+    if (mfT) mfT.classList.add('mode-toggle--active');
+    if (mlT) mlT.classList.remove('mode-toggle--active');
     state.activeProject = project; state.activeTxt = name;
     call('list_versions', project, name).then(function (versions) {
       state.versions = versions || []; state.activeVersion = null;
       if (state.versions.length > 0) { var target = prevLabel ? state.versions.find(function (v) { return v.label === prevLabel; }) : null; state.activeVersion = target || state.versions[0]; }
-      buildSidebar(); buildDateBranches();
+      buildSidebar();
+      // 点击配置＝用户交互：重建动画中则动画结束再判定，无动画直接判定
+      var azB3 = $('azIndexBar');
+      if (azB3 && azB3.classList.contains('az-bar--enter')) _azPending = true;
+      else syncAzHighlight();
+      buildDateBranches();
       if (state.activeVersion) loadConfig(state.activeVersion.path);
       else { state.configData = null; buildCenterBottom(); buildRightPanel(); setStatus('该配置无可用版本'); }
     }).catch(function (e) { setStatus('加载版本失败：' + e.message); });
@@ -1338,7 +1575,9 @@
   function loadConfig(path) {
     state.logContent = null;
     call('read_config', path).then(function (data) {
-      state.configData = data; buildCenterBottom(); buildRightPanel();
+      state.configData = data;
+      state._configOrig = null; // 新配置加载：重建修改基线
+      buildCenterBottom(); buildRightPanel();
       setStatus('已选择:"' + (state.activeVersion && state.activeVersion.path || path) + '"');
     }).catch(function (e) { setStatus('读取配置失败：' + e.message); });
   }
@@ -1346,13 +1585,71 @@
     $('sidebarTree').addEventListener('scroll', syncAzHighlight);
     $('sidebarTree').addEventListener('click', function (e) {
       var projectHeader = e.target.closest('.tree-project__name');
-      if (projectHeader) { var pname = projectHeader.getAttribute('data-project'); state.expandedProject = (state.expandedProject === pname) ? null : pname; buildSidebar(); return; }
+      if (projectHeader) {
+        var pname = projectHeader.getAttribute('data-project');
+        var willExpand = state.expandedProject !== pname;
+        var azBar = $('azIndexBar');
+        if (!willExpand) {
+          // 折叠：项目名反向收回 + azbar 收回；配置区整体从上到下渐隐，重建后仅展开项目下方的项目渐显
+          projectHeader.classList.remove('is-filled');
+          if (azBar) azBar.classList.remove('is-show');
+          state.expandedProject = null;
+          var itemWrap = $('sidebarTree').querySelector('.tree-project__items');
+          if (itemWrap) itemWrap.classList.add('tree-project__items--leaving');
+          window.setTimeout(function () {
+            buildSidebar();
+            var headers = $('sidebarTree').querySelectorAll('.tree-project__name');
+            var start = -1;
+            for (var h = 0; h < headers.length; h++) {
+              if (headers[h].getAttribute('data-project') === pname) { start = h; break; }
+            }
+            // 仅原展开项目下方的项目渐显（向上衔接收起位移），其余项目保持原样
+            for (var g = start + 1; g < headers.length; g++) {
+              headers[g].classList.add('az-project-enter');
+              headers[g].style.animationDelay = String(Math.min((g - start - 1) * 40, 180)) + 'ms';
+            }
+          }, 200);
+          return;
+        }
+        // 展开/切换：若有原展开项目，先播原项目收回（去底色）+ 配置区渐隐，随即重建展开新项目
+        state.expandedProject = pname;
+        var oldHeader = $('sidebarTree').querySelector('.tree-project__name.is-filled');
+        var oldWrap = $('sidebarTree').querySelector('.tree-project__items');
+        if (oldHeader) oldHeader.classList.remove('is-filled');
+        if (oldWrap) oldWrap.classList.add('tree-project__items--leaving');
+        var applyExpand = function () {
+          buildSidebar(true); // 项目展开：强制 azbar 扫描动画（即使字母集合相同）
+          // 配置区整体淡入（仅在项目展开时触发，切换配置不重播）
+          var itemWrap2 = $('sidebarTree').querySelector('.tree-project__items');
+          if (itemWrap2) {
+            itemWrap2.classList.remove('tree-project__items--enter');
+            void itemWrap2.offsetWidth;
+            itemWrap2.classList.add('tree-project__items--enter');
+          }
+          // 点击项目名仅展开列表，不触发高亮判定（高亮由点击配置名/滚动/拖拽触发）
+          var newHeader = null;
+          var hs = $('sidebarTree').querySelectorAll('.tree-project__name');
+          for (var k = 0; k < hs.length; k++) {
+            if (hs[k].getAttribute('data-project') === pname) { newHeader = hs[k]; break; }
+          }
+          if (newHeader) {
+            // 一次性动画类驱动填充（remove 后重加即可重新播放），避免过渡触发时序导致部分项目直接变色
+            newHeader.classList.add('is-filled');
+            if (newHeader.classList.contains('is-filling')) newHeader.classList.remove('is-filling');
+            void newHeader.offsetWidth;
+            newHeader.classList.add('is-filling');
+            window.setTimeout(function () { newHeader.classList.remove('is-filling'); }, 400);
+          }
+        };
+        if (oldHeader || oldWrap) { window.setTimeout(applyExpand, 50); } else { applyExpand(); }
+        return;
+      }
       var item = e.target.closest('.tree-txt-item');
       if (item) selectTxt(item.getAttribute('data-project'), item.getAttribute('data-name'), false);
     });
     $('btnSortName').addEventListener('click', function () { if (state.sortMode === 'name') state.sortAsc = !state.sortAsc; else state.sortMode = 'name'; updateSortButtons(); buildSidebar(); });
     $('btnSortTime').addEventListener('click', function () { if (state.sortMode === 'time') state.sortTimeDesc = !state.sortTimeDesc; else state.sortMode = 'time'; updateSortButtons(); buildSidebar(); });
-    $('dateBranches').addEventListener('click', function (e) { var btn = e.target.closest('.date-branch-btn'); if (!btn) return; if (btn.getAttribute('data-date') != null) { state.activeLogDate = btn.getAttribute('data-date'); buildDateBranches(); buildCenterBottom(); return; } selectVersion(btn.getAttribute('data-label')); });
+    $('dateBranches').addEventListener('click', function (e) { var btn = e.target.closest('.date-branch-btn'); if (!btn) return; if (btn.getAttribute('data-date') != null) { state.activeLogDate = btn.getAttribute('data-date'); state.activeLogPath = btn.getAttribute('data-file') || null; buildDateBranches(); buildCenterBottom(); return; } selectVersion(btn.getAttribute('data-label')); });
     $('dateBranches').addEventListener('dblclick', function (e) { var btn = e.target.closest('.date-branch-btn'); if (!btn) return; var fp = btn.getAttribute('data-file'); if (fp) { call('open_parent', fp); return; } var label = btn.getAttribute('data-label'); var v = state.versions.find(function (x) { return x.label === label; }); if (v) call('open_parent', v.path); });
     $('dateBranches').addEventListener('contextmenu', function (e) {
       var btn = e.target.closest('.date-branch-btn');
@@ -1374,8 +1671,15 @@
         { label: '打开路径', action: function () { call('open_parent', v.path); } }
       ]);
     });
-    $('modeFilelist').addEventListener('click', function () { state.selectMode = false; state.selectedLogPaths = {}; state.mode = 'filelist'; $('modeFilelist').classList.add('mode-toggle--active'); $('modeLog').classList.remove('mode-toggle--active'); buildDateBranches(); buildCenterBottom(); buildRightPanel(); });
-    $('modeLog').addEventListener('click', function () { state.mode = 'log'; $('modeLog').classList.add('mode-toggle--active'); $('modeFilelist').classList.remove('mode-toggle--active'); buildDateBranches(); buildCenterBottom(); buildRightPanel(); });
+    $('modeFilelist').addEventListener('click', function () {
+      if (state.activeLogDate) {
+        // 日志 → 配置：按当前选中日志重新定位到对应配置文件版本（正本/序号 或 当日外部 *）
+        var f = (state.logFiles || []).find(function (x) { return x.path === state.activeLogPath; }) || (state.logFiles || []).find(function (x) { return x.date === state.activeLogDate; });
+        if (f) { var ver = versionForLogFile(f); if (ver) state.activeVersion = ver; }
+      }
+      state.selectMode = false; state.selectedLogPaths = {}; state.mode = 'filelist'; $('modeFilelist').classList.add('mode-toggle--active'); $('modeLog').classList.remove('mode-toggle--active'); buildDateBranches(); buildCenterBottom(); buildRightPanel();
+    });
+    $('modeLog').addEventListener('click', function () { state.mode = 'log'; state._fromConfig = true; $('modeLog').classList.add('mode-toggle--active'); $('modeFilelist').classList.remove('mode-toggle--active'); buildDateBranches(); buildCenterBottom(); buildRightPanel(); });
     $('searchInput').addEventListener('input', function () { state.searchQuery = this.value.trim(); buildSidebar(); });
     $('logSearchInput').addEventListener('input', function () { state.logSearchQuery = this.value.trim(); if (state.mode === 'log') buildCenterBottom(); onLogSearchInput(); });
     $('btnResetPrecheck').addEventListener('click', resetPrecheckFlow);
@@ -1422,8 +1726,11 @@
   }
   function flashNeedSelect() { setStatus('请先选择一个 TXT 和日期分支'); }
   function updateTasksCount(tasks) {
+    // 主窗口按钮数字：统计运行中 + 排队（暂停任务无序号、不计入）
     var n = 0;
-    (tasks || []).forEach(function (t) { if (t.status === 'running') n++; });
+    (tasks || []).forEach(function (t) {
+      if (t.status === 'running' || t.status === 'queued') n++;
+    });
     var el = $('tasksCount');
     if (!el) return;
     if (n > 0) { el.textContent = String(n); el.style.display = ''; }
@@ -1435,6 +1742,17 @@
     if (!getApi()) { $('statusLeft').textContent = '后端不可用（未检测到桥接 API）'; return; }
     checkEnv(); buildDateBranches(); buildCenterBottom(); buildRightPanel(); refreshData(false, '正在检测工作路径文件，请稍候…');
     if (getApi().on_task_update) getApi().on_task_update(updateTasksCount);
+    // 有运行中任务退出时：主进程请求二次确认（与界面同款弹窗），确认后才真正退出
+    if (getApi().on_confirm_quit_request) getApi().on_confirm_quit_request(function () {
+      showDialog({
+        title: '确认退出',
+        message: '有正在运行的任务，退出将中断当前生成，并将任务标记为已中断、排队任务转为暂停。确定要退出吗？',
+        buttons: [
+          { label: '取消', value: false },
+          { label: '仍要退出', value: true, danger: true }
+        ]
+      }).then(function (ok) { if (ok && getApi().confirm_quit) getApi().confirm_quit(); });
+    });
   }
   function checkEnv() {
     call('check_env').then(function (r) {
@@ -1443,11 +1761,41 @@
       if (!r.pwsh) miss.push('pwsh');
       if (!r.ffmpeg) miss.push('ffmpeg');
       if (!r.ffprobe) miss.push('ffprobe');
+      state.envMissing = miss;
       var mark = $('envWarnMark');
-      if (!mark) return;
-      if (miss.length) { mark.textContent = '缺少环境: ' + miss.join('、') + '（见 README 安装）'; mark.className = 'status-bar__envwarn'; }
-      else { mark.textContent = '环境正常'; mark.className = 'status-bar__envok'; }
-    }).catch(function () {});
+      if (mark) {
+        if (miss.length) { mark.textContent = '缺少环境: ' + miss.join('、') + '（见 README 安装）'; mark.className = 'status-bar__envwarn'; }
+        else { mark.textContent = '环境正常'; mark.className = 'status-bar__envok'; }
+      }
+      applyEnvDisabled();
+    }).catch(function () { state.envMissing = ['pwsh', 'ffmpeg', 'ffprobe']; applyEnvDisabled(); });
+  }
+  function _envBad() { return (state.envMissing || []).length > 0; }
+  function setBtnHint(b, hint) {
+    if (!b) return;
+    if (hint) {
+      if (!b.dataset.origTitle) b.dataset.origTitle = b.getAttribute('title') || '';
+      b.setAttribute('title', hint);
+    } else if (b.dataset.origTitle) {
+      b.setAttribute('title', b.dataset.origTitle);
+      delete b.dataset.origTitle;
+    } else b.removeAttribute('title');
+  }
+  // 环境硬拦截：缺 pwsh/ffmpeg/ffprobe 时禁用所有调用脚本的入口，悬浮提示「运行环境缺失」
+  function applyEnvDisabled() {
+    var bad = _envBad();
+    var targets = document.querySelectorAll('#btnRunScript, #btnBatchReplica1, #btnBatchReplica2, .log-entry__replica');
+    Array.prototype.forEach.call(targets, function (b) {
+      if (b.disabled === undefined) return;
+      if (bad) {
+        b.disabled = true;
+        setBtnHint(b, '运行环境缺失');
+      } else {
+        setBtnHint(b, null);
+      }
+    });
+    // 环境完整时按各自禁用条件重算提示
+    if (!bad) { if (typeof refreshLogConfigBar === 'function') refreshLogConfigBar(); applyPrecheckValidity(); refreshConfigModified(); }
   }
   var booted = false;
   function boot() { if (booted) return; booted = true; init(); }

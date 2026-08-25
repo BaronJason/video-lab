@@ -18,24 +18,101 @@
       background: var(--bg-base-secondary);
     }
     .task-header__title { font-size: var(--body-base-font-size); font-weight: var(--font-weight-strong); color: var(--text-default); }
-    .task-header__stat { font-size: var(--body-xs-font-size); color: var(--text-tertiary); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .task-header__clear {
-      height: 24px; padding: 0 10px; border: 1px solid var(--border-neutral-l2); border-radius: 4px;
-      background: transparent; color: var(--text-secondary); font-family: var(--font-family-default);
-      font-size: var(--body-xs-font-size); cursor: pointer; flex-shrink: 0;
-    }
-    .task-header__clear:hover { background: var(--bg-overlay-l1); color: var(--text-default-hover); }
     .task-list { flex: 1; overflow-y: auto; padding: 8px 12px; display: flex; flex-direction: column; gap: 8px; }
     .task-empty { color: var(--text-tertiary); font-size: var(--body-sm-font-size); text-align: center; margin-top: 40px; }
+    /* 顶部模式切换：正在运行 / 已完成 / 已停止 */
+    .task-main { flex: 1; position: relative; display: flex; flex-direction: column; min-height: 0; }
+    .task-tabs { display: flex; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border-neutral-l1); background: var(--bg-base-secondary); flex-shrink: 0; }
+    .task-tab {
+      flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      height: 34px; border: 1px solid var(--border-neutral-l2); border-radius: 6px;
+      background: transparent; color: var(--text-secondary); cursor: pointer;
+      font-family: var(--font-family-default); font-size: var(--body-sm-font-size);
+      transition: background .15s ease, color .15s ease, border-color .15s ease;
+    }
+    .task-tab:hover { background: var(--bg-overlay-l1); color: var(--text-default-hover); }
+    .task-tab--active { background: var(--brand-500); border-color: var(--brand-500); color: var(--text-onaccent); }
+    .task-tab--active:hover { background: var(--brand-600); border-color: var(--brand-600); color: var(--text-onaccent); }
+    .task-tab__icon { display: inline-flex; }
+    .task-tab__count {
+      min-width: 18px; height: 18px; padding: 0 5px; line-height: 18px; border-radius: 9px;
+      text-align: center; font-size: 10px; font-variant-numeric: tabular-nums;
+      background: var(--bg-overlay-l2); color: var(--text-secondary);
+    }
+    .task-tab--active .task-tab__count { background: color-mix(in srgb, var(--text-onaccent) 24%, transparent); color: var(--text-onaccent); }
+    /* 已停止 tab：新增报错任务时浅红底提醒，点击查看后消除 */
+    .task-tab--alert { background: var(--status-error-surface-l1); border-color: var(--status-error-default); color: var(--status-error-default); }
+    .task-tab--alert .task-tab__count { background: var(--status-error-default); color: var(--text-onaccent); }
+    .task-tab--alert:hover { background: var(--status-error-surface-l1); color: var(--status-error-default); }
+    /* 右下角悬浮按钮：正在运行=「全部继续（左）/全部暂停（右）」；已完成/已停止=清除列表；不带品牌色，用背景色 */
+    .task-fab {
+      position: absolute; right: 16px; bottom: 16px; z-index: 6;
+      width: 44px; height: 44px; border-radius: 50%;
+      border: 1px solid var(--border-neutral-l2); background: var(--bg-base-default); color: var(--text-secondary);
+      display: inline-flex; align-items: center; justify-content: center;
+      cursor: pointer; box-shadow: 0 6px 18px color-mix(in srgb, var(--text-default) 14%, transparent);
+      transition: transform .15s ease, background .15s ease, color .15s ease;
+    }
+    .task-fab:hover { transform: translateY(-2px); background: var(--bg-overlay-l1); color: var(--text-default); }
+    /* 三个悬浮按钮按功能着色（全部续绿 / 全部暂停橙 / 清除红），颜色取自主题变量便于换肤 */
+    #fabResumeAll { border-color: var(--status-success-default); color: var(--status-success-default); }
+    #fabResumeAll:hover { background: var(--status-success-default); color: var(--text-onaccent); }
+    #fabPauseAll { border-color: var(--status-warning-default); color: var(--status-warning-default); }
+    #fabPauseAll:hover { background: var(--status-warning-default); color: var(--text-onaccent); }
+    #taskFab { border-color: var(--status-error-default); color: var(--status-error-default); }
+    #taskFab:hover { background: var(--status-error-default); color: var(--text-onaccent); }
+    .task-fab-actions {
+      position: absolute; right: 16px; bottom: 16px; z-index: 6;
+      display: inline-flex; gap: 10px;
+    }
+    .task-fab-actions .task-fab { position: static; width: 42px; height: 42px; }
     .task-card { border: 1px solid var(--border-neutral-l1); border-radius: 6px; background: var(--bg-base-secondary); overflow: hidden; flex-shrink: 0; }
     .task-card__header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; user-select: none; }
-    .task-card__status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-    .task-card--running .task-card__status-dot { background: var(--status-primary-default); }
-    .task-card--waiting .task-card__status-dot { background: var(--status-warning-default); }
+    .task-card__status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
+    /* 状态徽章：运行中=绿（高亮行），排队=序号徽章蓝，暂停=橙，已完成=主题色，停止/失败=红 */
+    .task-card--running .task-card__status-dot { background: var(--status-success-default); }
+    .task-card--queued .task-card__status-dot { background: var(--status-primary-default); }
     .task-card--paused .task-card__status-dot { background: var(--status-warning-default); }
-    .task-card--done .task-card__status-dot { background: var(--status-success-default); }
+    .task-card--waiting .task-card__status-dot { background: var(--status-warning-default); }
+    .task-card--done .task-card__status-dot { background: var(--brand-500); }
     .task-card--error .task-card__status-dot { background: var(--status-error-default); }
-    .task-card--stopped .task-card__status-dot { background: var(--text-disabled); }
+    .task-card--stopped .task-card__status-dot { background: var(--status-error-default); }
+    .task-card--interrupted .task-card__status-dot { background: var(--status-error-default); }
+    /* 运行中任务：浅主题色底 + 与下方任务的分隔横线 */
+    .task-card--running {
+      background: color-mix(in srgb, var(--brand-500) 8%, var(--bg-base-secondary));
+      border-color: color-mix(in srgb, var(--brand-500) 45%, var(--border-neutral-l1));
+      border-bottom: 2px solid var(--border-neutral-l2);
+    }
+    /* 排队：状态圆点放大为序号徽章；暂停：橙色实心圆点 */
+    .task-card__status-dot.task-card__queue {
+      min-width: 16px; height: 16px; padding: 0 4px; line-height: 16px; border-radius: 8px;
+      font-size: 10px; font-variant-numeric: tabular-nums;
+      background: var(--brand-500); color: var(--text-onaccent);
+    }
+    .task-card__status-dot.task-card__queue--paused { background: transparent; width: 8px; height: 8px; }
+    .task-card__status-dot .task-card__pause-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--status-warning-default); }
+    /* 左侧排序把手：仅排队中的任务可拖拽换序，运行中/已结束灰显 */
+    .task-card__handle {
+      flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+      width: 18px; height: 20px; border-radius: 4px;
+      color: var(--text-tertiary); cursor: grab;
+    }
+    .task-card__handle:hover { background: var(--bg-overlay-l1); color: var(--text-default); }
+    .task-card__handle--disabled { color: var(--text-disabled); cursor: default; }
+    .task-card__handle--disabled:hover { background: transparent; color: var(--text-disabled); }
+    .task-card--dragging { position: relative; z-index: 10; }
+    /* 排队位置徽章：排队显示序号，暂停用与暂停颜色一致的圆点代替序号 */
+    .task-card__queue {
+      flex-shrink: 0; min-width: 16px; height: 16px; padding: 0 4px; line-height: 16px; border-radius: 8px;
+      text-align: center; font-size: 10px; font-variant-numeric: tabular-nums;
+      background: var(--brand-500); color: var(--text-onaccent);
+    }
+    .task-card__queue--paused { background: transparent; }
+    .task-card__queue--paused .task-card__pause-dot {
+      display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+      background: var(--status-warning-default); opacity: .6; vertical-align: middle;
+    }
     .task-card__failreason {
       flex-shrink: 0; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       font-size: var(--body-xs-font-size); font-weight: var(--font-weight-strong);
@@ -66,6 +143,13 @@
     .task-card__stop { border: 1px solid var(--status-error-default); background: transparent; color: var(--status-error-default); }
     .task-card__stop:hover { background: var(--status-error-surface-l1); }
     .task-card__stop:disabled { border-color: var(--border-neutral-l2); color: var(--text-disabled); cursor: default; background: transparent; }
+    .task-card__del {
+      flex-shrink: 0; width: 20px; height: 20px; padding: 0;
+      border: 1px solid transparent; border-radius: 4px; background: transparent;
+      color: var(--text-tertiary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    }
+    .task-card__del:hover { border-color: var(--status-error-default); color: var(--status-error-default); background: var(--status-error-surface-l1); }
+    .task-card__del svg { flex-shrink: 0; }
     .task-card__body { border-top: 1px solid var(--border-neutral-l1); }
     .task-card__progress {
       display: none; flex-direction: column; gap: 4px;
@@ -87,12 +171,25 @@
   </style>
 </head>
 <body>
-  <div class="task-header">
-    <span class="task-header__title">任务列表</span>
-    <span class="task-header__stat" id="taskStat"></span>
-    <button class="task-header__clear" id="btnClearFinished">清除已完成</button>
+  <div class="task-tabs" id="taskTabs">
+    <button class="task-tab task-tab--active" data-tab="running" id="tabRunning">
+      <i data-icon="play" data-size="15"></i><span>正在运行</span><span class="task-tab__count" id="cntRunning">0</span>
+    </button>
+    <button class="task-tab" data-tab="done" id="tabDone">
+      <i data-icon="check" data-size="15"></i><span>已完成</span><span class="task-tab__count" id="cntDone">0</span>
+    </button>
+    <button class="task-tab" data-tab="stopped" id="tabStopped">
+      <i data-icon="stop" data-size="15"></i><span>已停止</span><span class="task-tab__count" id="cntStopped">0</span>
+    </button>
   </div>
-  <div class="task-list" id="taskList"></div>
+  <div class="task-main">
+    <div class="task-list" id="taskList"></div>
+    <div class="task-fab-actions" id="taskFabActions">
+      <button class="task-fab" id="fabResumeAll" title="全部继续（恢复所有暂停任务）"><i data-icon="play" data-size="18"></i></button>
+      <button class="task-fab" id="fabPauseAll" title="全部暂停（暂停所有排队任务）"><i data-icon="pause" data-size="18"></i></button>
+    </div>
+    <button class="task-fab" id="taskFab" title="清除列表" style="display:none"><i data-icon="trash-2" data-size="20"></i></button>
+  </div>
   <script src="task.js"></script>
 </body>
 </html>

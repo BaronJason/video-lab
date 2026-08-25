@@ -48,6 +48,11 @@ Video Lab/
 
 应用依赖以下外部环境（便携 zip 不含这些，请按需安装；应用底部状态栏会检测并在缺失时红字提醒）：
 
+- **NVIDIA 显卡（必需）**
+
+  视频编码使用 NVIDIA NVENC 硬件编码器，必须配备 NVIDIA 独立显卡才能生成成片；
+  暂不支持 CPU 回退编码，也不支持 AMD / Intel 等其他显卡的硬件编码。
+
 - **PowerShell 7（pwsh）**
 
   ```bash

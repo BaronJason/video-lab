@@ -39,6 +39,15 @@
   function captureOriginals() {
     origValues = {};
     document.querySelectorAll('.form-input').forEach(function (input) { origValues[input.id] = String(input.value); });
+    document.querySelectorAll('input[type=checkbox]').forEach(function (input) { origValues[input.id] = input.checked; });
+    // 同名 radio 视为一组，只记录组内当前选中值，避免后项覆盖导致误判
+    var seenRadios = {};
+    document.querySelectorAll('input[type=radio]').forEach(function (input) {
+      if (seenRadios[input.name]) return;
+      seenRadios[input.name] = true;
+      var checked = document.querySelector('input[type=radio][name="' + input.name + '"]:checked');
+      origValues['radio:' + input.name] = checked ? checked.value : '';
+    });
     originalSkin = document.documentElement.getAttribute('data-skin');
   }
 
@@ -50,13 +59,29 @@
       if (changed) dirty = true;
       if (group) group.classList.toggle('is-dirty', changed);
     });
+    document.querySelectorAll('input[type=checkbox]').forEach(function (input) {
+      var group = input.closest('.form-group');
+      var changed = origValues[input.id] !== undefined && input.checked !== origValues[input.id];
+      if (changed) dirty = true;
+      if (group) group.classList.toggle('is-dirty', changed);
+    });
+    var seenRadios = {};
+    document.querySelectorAll('input[type=radio]').forEach(function (input) {
+      if (seenRadios[input.name]) return;
+      seenRadios[input.name] = true;
+      var group = input.closest('.form-group');
+      var checked = document.querySelector('input[type=radio][name="' + input.name + '"]:checked');
+      var changed = origValues['radio:' + input.name] !== undefined && (checked ? checked.value : '') !== origValues['radio:' + input.name];
+      if (changed) dirty = true;
+      if (group) group.classList.toggle('is-dirty', changed);
+    });
     var themeGroup = $('themeRow') ? $('themeRow').closest('.form-group') : null;
     if (themeGroup) {
       var skinChanged = document.documentElement.getAttribute('data-skin') !== originalSkin;
       if (skinChanged) dirty = true;
       themeGroup.classList.toggle('is-dirty', skinChanged);
     }
-    $('btnSave').disabled = !dirty;
+    $('btnSave').disabled = false; // 保存按钮任何时候可用
     if (api && api.notify_dirty) api.notify_dirty(dirty);
   }
 
@@ -102,6 +127,13 @@
       setSkin(s.skin);
       $('cfgRoot').value = s.root || '';
       $('cfgWatermark').value = s.watermark_dir || '';
+      var chk = $('autoCheckUpdate');
+      if (chk) chk.checked = s.auto_check_update !== false;
+      var storage = s.config_storage === 'appdata' ? 'appdata' : 'program';
+      document.querySelectorAll('input[name="configStorage"]').forEach(function (r) { r.checked = r.value === storage; });
+      var pp = $('cfgPathProgram'), pa = $('cfgPathAppdata');
+      if (pp) pp.textContent = s.config_path_program || '';
+      if (pa) pa.textContent = s.config_path_appdata || '';
       var b = s.batch || {};
       $('batchSuffixMark').value = b.suffix_mark != null ? b.suffix_mark : '';
       $('batchMaxDuration').value = b.max_duration != null ? b.max_duration : '';
@@ -125,6 +157,9 @@
     el.classList.toggle('is-error', !ok);
   }
   function statusTimer() { setStatus('', true); }
+
+  var btnSave = $('btnSave');
+  if (btnSave) btnSave.disabled = false; // 保存按钮任何时候可用
 
   function bindNav() {
     document.querySelectorAll('.settings-nav__item').forEach(function (btn) {
@@ -167,19 +202,75 @@
       if (missing.length) { setStatus('参数未设置：' + missing.join('、'), false); return; }
 
       var skin = document.documentElement.getAttribute('data-skin') || THEMES[0].id;
+      var storageEl = document.querySelector('input[name="configStorage"]:checked');
       api.save_settings({
         skin: skin,
         root: $('cfgRoot').value.trim(),
         watermark_dir: $('cfgWatermark').value.trim(),
+        auto_check_update: !!$('autoCheckUpdate').checked,
+        config_storage: storageEl ? storageEl.value : 'program',
         batch: state.batch,
         replica: state.replica
       }).then(function (res) {
-        if (res && res.ok) { setStatus('已保存', true); setTimeout(statusTimer, 2000); captureOriginals(); recomputeDirty(); }
+        if (res && res.ok) {
+          setStatus('已保存', true); setTimeout(statusTimer, 2000); captureOriginals(); recomputeDirty();
+          if (res.config_moved) setStatus('配置和数据位置已切换并生效，配置与 Cache 已自动迁移', true);
+        }
         else setStatus('保存失败', false);
       }).catch(function () { setStatus('保存失败', false); });
     });
 
+    // 手动检查更新：发现新版本时在设置页内弹二次确认（是否下载）；下载进度/完成在主窗口体现
+    var cu = $('btnCheckUpdate');
+    var _confirmInfo = null;
+    function showUpdateConfirm(info) {
+      _confirmInfo = info;
+      var t = $('updateConfirmTitle'), d = $('updateConfirmDesc');
+      if (t) t.textContent = '发现新版本 v' + ((info && info.latest) || '');
+      if (d) d.textContent = '是否立即下载更新？下载完成后可在主窗口继续操作。';
+      var m = $('updateConfirmMask');
+      if (m) m.style.display = 'flex';
+    }
+    function hideUpdateConfirm() { var m = $('updateConfirmMask'); if (m) m.style.display = 'none'; }
+    if (cu) cu.addEventListener('click', function () {
+      setStatus('正在检查更新…', true);
+      api.check_update(false).then(function (info) {
+        if (!info) { setStatus('检查更新失败', false); return; }
+        if (info.busy) { setStatus('已有更新操作进行中，请稍候', true); return; }
+        if (info.hasUpdate) showUpdateConfirm(info);
+        else if (info.ok) setStatus('已是最新版本 v' + info.current, true);
+        else setStatus('检查更新失败：' + (info.error || '未知错误'), false);
+      }).catch(function () { setStatus('检查更新失败', false); });
+    });
+    var mCancel = $('updateConfirmCancel');
+    if (mCancel) mCancel.addEventListener('click', function () { hideUpdateConfirm(); setStatus('已取消更新', true); });
+    var mGo = $('updateConfirmGo');
+    if (mGo) mGo.addEventListener('click', function () {
+      hideUpdateConfirm();
+      setStatus('已开始下载更新，进度见主窗口状态栏', true);
+      if (api && api.start_update) api.start_update().then(function (r) {
+        if (r && r.busy) { setStatus('已有更新操作进行中，请稍候', true); return; }
+        if (r && !r.ok) setStatus((r.error) || '启动更新失败', false);
+      }).catch(function () { setStatus('下载更新失败', false); });
+    });
+    var mConfirmMask = $('updateConfirmMask');
+    if (mConfirmMask) mConfirmMask.addEventListener('click', function (e) { if (e.target === mConfirmMask) hideUpdateConfirm(); });
+
     $('btnClose').addEventListener('click', function () { window.close(); });
+    // 未保存修改时关闭的二级确认浮层：取消返回设置，确认放弃修改直接关闭
+    var discardPop = $('discardPop');
+    var btnDiscardCancel = $('discardCancel');
+    var btnDiscardConfirm = $('discardConfirm');
+    function showDiscardPop() { if (discardPop) discardPop.style.display = ''; }
+    function hideDiscardPop() { if (discardPop) discardPop.style.display = 'none'; }
+    if (btnDiscardCancel) btnDiscardCancel.addEventListener('click', hideDiscardPop);
+    if (btnDiscardConfirm) btnDiscardConfirm.addEventListener('click', function () {
+      if (api && api.force_close_settings) api.force_close_settings();
+    });
+    if (api && api.on_confirm_discard) api.on_confirm_discard(showDiscardPop);
+    document.addEventListener('mousedown', function (e) {
+      if (discardPop && discardPop.style.display !== 'none' && !discardPop.contains(e.target)) hideDiscardPop();
+    });
     $('batchSuffixMark').addEventListener('input', updatePreview);
     $('batchTxtPrefix').addEventListener('input', updatePreview);
     $('batchProducer').addEventListener('input', updatePreview);
@@ -196,10 +287,19 @@
   }
   function init() {
     wrapAllInputs();
+    // 勾选框/单选切换也参与未保存修改标记（保存按钮始终可用，此项用于关闭确认与高亮）
+    document.querySelectorAll('input[type=checkbox], input[type=radio]').forEach(function (input) {
+      input.addEventListener('change', recomputeDirty);
+    });
     buildThemeRow();
     bindNav();
     bindSave();
     if (api && api.on_settings_flash_close) api.on_settings_flash_close(flashCloseButton);
+    // 右上角 GitHub 按钮：打开主仓库主页
+    var gh = document.getElementById('btnGitHub');
+    if (gh && api && api.open_external) gh.addEventListener('click', function () {
+      api.open_external('https://github.com/BaronJason/video-lab').catch(function () {});
+    });
     loadSettings();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

@@ -1,7 +1,8 @@
 {
   "name": "video-lab",
-  "version": "1.3",
+  "version": "1.4.3",
   "description": "Video Lab — 批量成片项目管理",
+  "author": "Video Lab",
   "main": "main.js",
   "scripts": {
     "start": "node run.js",
@@ -10,32 +11,72 @@
   "build": {
     "appId": "com.videolab.manager",
     "productName": "Video Lab",
+    "npmRebuild": false,
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://github.com/BaronJason/video-lab/releases/latest/download"
+      }
+    ],
     "directories": {
       "output": "dist"
     },
+    "afterPack": "build/afterPack.js",
     "files": [
       "main.js",
       "preload.js",
       "backend.js",
       "frontend/**/*",
+      "icon/**/*",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "../Scripts",
+        "to": "Scripts",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
     "win": {
+      "icon": "icon/app-icon.ico",
       "target": [
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
         }
       ],
-      "artifactName": "${productName}.exe",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": true
     },
     "portable": {
       "artifactName": "${productName}.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Video Lab",
+      "deleteAppDataOnUninstall": false,
+      "differentialPackage": false,
+      "artifactName": "Video-Lab-${version}-x64-Setup.${ext}"
     }
   },
   "devDependencies": {
-    "electron": "^33.0.0",
+    "electron": "33.4.11",
     "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

@@ -1568,7 +1568,9 @@ body {
   font-size: 9px;
   margin-right: 2px;
 }
+/* 左侧项目排序按钮：靠右对齐 */
 .sidebar__sort {
+  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -1887,40 +1889,71 @@ body {
 }
 
 /* Sidebar actions */
-.sidebar__actions {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacer-6);
-  padding: var(--spacer-12);
-  border-top: 1px solid var(--border-neutral-l1);
-  flex-shrink: 0;
-}
-.sidebar__actions .btn-full {
-  display: flex;
+/* 左下角圆形菜单按钮：悬浮在列表栏上，无色边框；常态背景色底 + 文字色 icon，
+   hover 变主题底 + 白 icon 并轻微上抬（与任务列表右下按钮同风格），颜色全走主题变量 */
+.sidebar-menu-btn {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 60;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--spacer-6);
-  width: 100%;
-  height: 28px;
-  padding: 0 var(--spacer-12);
-  border-radius: var(--radius-6);
-  border: 1px solid transparent;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: none;
+  background: var(--bg-base-default);
+  color: var(--text-default);
   cursor: pointer;
-  font-family: var(--body-base-strong-font-family);
-  font-size: var(--body-base-strong-font-size);
-  font-weight: var(--body-base-strong-font-weight);
-  line-height: var(--body-base-strong-line-height);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--text-default) 12%, transparent);
+  transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+.sidebar-menu-btn:hover {
+  background: var(--brand-500);
+  color: var(--text-onaccent);
+  transform: translateY(-2px);
+}
+/* 二级菜单：框体样式（半透明背景 + 浅灰边框 + 阴影），保留自下而上弹出动画 */
+@keyframes sidebar-menu-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.sidebar-menu {
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 0;
+  z-index: 90;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+  background: color-mix(in srgb, var(--bg-base-default) 88%, transparent);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--text-default) 16%, transparent);
+}
+.sidebar-menu--enter { animation: sidebar-menu-rise 0.18s ease-out; }
+.sidebar-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  border-radius: var(--radius-6);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-family-default);
+  font-size: var(--body-base-font-size);
+  text-align: left;
   white-space: nowrap;
+  cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease;
 }
-/* 侧栏底部三个操作按钮：颜色区分，全走 CSS 变量便于主题切换 */
-#btnRecheckProject { background: var(--brand-500); color: var(--text-onaccent); border-color: var(--brand-500); }
-#btnRecheckProject:hover { background: var(--brand-600); border-color: var(--brand-600); }
-#btnChoosePath { background: var(--accent-cyan); color: var(--text-onaccent); border-color: var(--accent-cyan); }
-#btnChoosePath:hover { filter: brightness(1.08); border-color: var(--accent-cyan); }
-#btnChoosePath:active { filter: brightness(0.92); }
-#skinBtn { background: var(--status-success-default); color: var(--text-onaccent); border-color: var(--status-success-default); }
-#skinBtn:hover { background: var(--status-success-hover); border-color: var(--status-success-hover); }
+.sidebar-menu__item:hover { background: var(--bg-overlay-l1); color: var(--text-default); }
+.sidebar-menu__item svg { flex-shrink: 0; color: var(--text-default); }
 .btn-external-edit { background: transparent; color: var(--text-secondary); border-color: var(--border-neutral-l1); }
 .btn-external-edit:hover { background: var(--bg-overlay-l2); color: var(--text-default); }
 
@@ -2474,7 +2507,7 @@ body {
   width: 20px;
   height: 20px;
   border: none;
-  border-radius: var(--radius-4);
+  border-radius: 50%;
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
@@ -3098,6 +3131,17 @@ body {
   gap: var(--spacer-8);
   min-width: 0;
 }
+.status-bar__version {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.status-bar__divider {
+  width: 1px;
+  height: 12px;
+  background: var(--border-neutral-l1);
+  flex-shrink: 0;
+}
 .status-bar__success { color: var(--status-success-default); }
 .skin-select {
   display: inline-flex;
@@ -3570,5 +3614,227 @@ body {
 .ctx-menu button:disabled:hover {
   color: var(--text-disabled);
   background: transparent;
+}
+
+/* ═══ 更新提示条 ═══ 悬浮于底部状态栏上方、水平居中；配色全部走主题变量，不写死 */
+.update-banner {
+  position: fixed;
+  left: 50%;
+  bottom: 44px;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-12);
+  min-width: 460px;
+  max-width: 620px;
+  padding: var(--spacer-12) var(--spacer-16);
+  background: var(--bg-base-default);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-16);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--text-default) 18%, transparent);
+  transform: translateX(-50%);
+  transition: transform 0.15s ease;
+  animation: update-banner-rise 0.24s ease-out;
+}
+.update-banner:hover {
+  transform: translate(-50%, -3px);
+}
+@keyframes update-banner-rise {
+  from { opacity: 0; transform: translate(-50%, 14px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+.update-banner__icon {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-full);
+  background: var(--bg-brand);
+  color: var(--text-onbrand);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--bg-brand) 35%, transparent);
+}
+.update-banner__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.update-banner__title {
+  font-family: var(--font-family-default);
+  font-size: var(--body-base-font-size);
+  font-weight: var(--font-weight-strong);
+  color: var(--text-default);
+  line-height: 1.4;
+}
+.update-banner__desc {
+  font-family: var(--font-family-default);
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--body-sm-font-weight);
+  color: var(--text-tertiary);
+  line-height: 1.5;
+}
+.update-banner__progress {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-8);
+  margin-top: 2px;
+}
+.update-banner__progress-track {
+  flex: 1;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--bg-overlay-l1);
+  overflow: hidden;
+}
+.update-banner__progress-fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--bg-brand);
+  transition: width 0.2s ease;
+}
+.update-banner__progress-text {
+  font-family: var(--font-family-default);
+  font-size: var(--body-sm-font-size);
+  color: var(--text-secondary);
+  min-width: 30px;
+  text-align: right;
+}
+.update-banner__actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-8);
+}
+.update-banner__btn {
+  padding: 8px 18px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-8);
+  font-family: var(--font-family-default);
+  font-size: var(--body-base-font-size);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.update-banner__btn--ghost {
+  background: transparent;
+  border-color: var(--border-neutral-l1);
+  color: var(--text-secondary);
+}
+.update-banner__btn--ghost:hover {
+  background: var(--bg-overlay-l1);
+  color: var(--text-default);
+}
+.update-banner__btn--primary {
+  background: var(--bg-brand);
+  color: var(--text-onbrand);
+}
+.update-banner__btn--primary:hover {
+  background: var(--bg-brand-hover);
+}
+.update-banner__btn--primary:active {
+  background: var(--bg-brand-active);
+}
+
+/* ═══ 状态栏下载进度（任务按钮左侧）═══ 配色走主题变量 */
+.update-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-8);
+  height: 100%;
+  flex-shrink: 0;
+}
+.update-mini__text {
+  font-family: var(--font-family-default);
+  font-size: var(--body-xs-font-size);
+  font-weight: var(--body-xs-font-weight);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.update-mini__label {
+  font-family: var(--font-family-default);
+  font-size: var(--body-xs-font-size);
+  font-weight: var(--body-xs-font-weight);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.update-mini__track {
+  width: 72px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--bg-overlay-l2);
+  overflow: hidden;
+}
+.update-mini__fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--bg-brand);
+  transition: width 0.2s ease;
+}
+
+/* ═══ 未配置工作路径时的引导态：透明覆盖左侧项目列表区（背景透出 sidebar 原色），
+      左下角菜单按钮正常常驻、不被遮罩 ═══ */
+.boot-guide {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 56px; /* 让出左下角菜单按钮区域 */
+  width: 285px;
+  z-index: 210;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  padding: 16px;
+  pointer-events: none; /* 提示层不拦截点击，列表/按钮均可交互 */
+}
+.boot-guide__btn { pointer-events: auto; }
+.boot-guide__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  color: var(--text-tertiary);
+}
+.boot-guide__inner > i { margin-bottom: 6px; }
+.boot-guide__title {
+  font-family: var(--font-family-default);
+  font-size: var(--body-base-font-size);
+  font-weight: var(--font-weight-strong);
+  color: var(--text-default);
+}
+.boot-guide__desc {
+  margin-top: 6px;
+  font-family: var(--font-family-default);
+  font-size: var(--body-sm-font-size);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.boot-guide__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacer-8);
+  margin-top: 16px;
+  padding: 8px 20px;
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+  background: var(--bg-overlay-l1);
+  color: var(--text-default);
+  font-family: var(--font-family-default);
+  font-size: var(--body-base-font-size);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+.boot-guide__btn:hover {
+  background: var(--bg-brand);
+  border-color: var(--bg-brand);
+  color: var(--text-onbrand);
+  transform: translateY(-1px);
 }
     

@@ -54,13 +54,13 @@
       transition: transform .15s ease, background .15s ease, color .15s ease;
     }
     .task-fab:hover { transform: translateY(-2px); background: var(--bg-overlay-l1); color: var(--text-default); }
-    /* 三个悬浮按钮按功能着色（全部续绿 / 全部暂停橙 / 清除红），颜色取自主题变量便于换肤 */
-    #fabResumeAll { border-color: var(--status-success-default); color: var(--status-success-default); }
-    #fabResumeAll:hover { background: var(--status-success-default); color: var(--text-onaccent); }
-    #fabPauseAll { border-color: var(--status-warning-default); color: var(--status-warning-default); }
-    #fabPauseAll:hover { background: var(--status-warning-default); color: var(--text-onaccent); }
-    #taskFab { border-color: var(--status-error-default); color: var(--status-error-default); }
-    #taskFab:hover { background: var(--status-error-default); color: var(--text-onaccent); }
+    /* 三个悬浮按钮按功能实色底 + 白色图标（全部续绿 / 全部暂停橙 / 清除红），颜色取自主题变量便于换肤 */
+    #fabResumeAll { background: var(--status-success-default); border-color: var(--status-success-default); color: var(--text-onaccent); }
+    #fabResumeAll:hover { background: var(--status-success-default); filter: brightness(1.08); transform: translateY(-2px); }
+    #fabPauseAll { background: var(--status-warning-default); border-color: var(--status-warning-default); color: var(--text-onaccent); }
+    #fabPauseAll:hover { background: var(--status-warning-default); filter: brightness(1.08); transform: translateY(-2px); }
+    #taskFab { background: var(--status-error-default); border-color: var(--status-error-default); color: var(--text-onaccent); }
+    #taskFab:hover { background: var(--status-error-default); filter: brightness(1.08); transform: translateY(-2px); }
     .task-fab-actions {
       position: absolute; right: 16px; bottom: 16px; z-index: 6;
       display: inline-flex; gap: 10px;
@@ -143,12 +143,15 @@
     .task-card__stop { border: 1px solid var(--status-error-default); background: transparent; color: var(--status-error-default); }
     .task-card__stop:hover { background: var(--status-error-surface-l1); }
     .task-card__stop:disabled { border-color: var(--border-neutral-l2); color: var(--text-disabled); cursor: default; background: transparent; }
+    /* 行级删除按钮：样式与配置模式排除字段删除按钮（.config-exclude-row__remove）完全一致 */
     .task-card__del {
       flex-shrink: 0; width: 20px; height: 20px; padding: 0;
-      border: 1px solid transparent; border-radius: 4px; background: transparent;
-      color: var(--text-tertiary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+      border: none; border-radius: 50%;
+      background: transparent; color: var(--text-tertiary);
+      cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+      transition: all 0.1s ease;
     }
-    .task-card__del:hover { border-color: var(--status-error-default); color: var(--status-error-default); background: var(--status-error-surface-l1); }
+    .task-card__del:hover { background: var(--status-error-surface-l1); color: var(--status-error-default); }
     .task-card__del svg { flex-shrink: 0; }
     .task-card__body { border-top: 1px solid var(--border-neutral-l1); }
     .task-card__progress {
@@ -190,6 +193,7 @@
     </div>
     <button class="task-fab" id="taskFab" title="清除列表" style="display:none"><i data-icon="trash-2" data-size="20"></i></button>
   </div>
+  <script src="icons.js"></script>
   <script src="task.js"></script>
 </body>
 </html>

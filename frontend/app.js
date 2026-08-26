@@ -4,49 +4,9 @@
 (function () {
   'use strict';
 
-  var ICONS = {
-    'copy': '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
-    'refresh-cw': '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
-    'rotate-ccw': '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
-    'search': '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
-    'file': '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
-    'folder-open': '<path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>',
-    'pencil': '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
-    'list': '<path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/>',
-    'scroll-text': '<path d="M15 12h-5"/><path d="M15 8h-5"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/>',
-    'arrow-left': '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
-    'file-text': '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>',
-    'folder': '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
-    'grip-vertical': '<circle cx="9" cy="12" r="1"/><circle cx="9" cy="5" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="19" r="1"/>',
-    'image': '<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
-    'x': '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
-    'plus': '<path d="M5 12h14"/><path d="M12 5v14"/>',
-    'save': '<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/>',
-    'calendar-plus': '<path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M10 16h4"/><path d="M12 14v4"/>',
-    'play': '<polygon points="6 3 20 12 6 21 6 3"/>',
-    'chevron-right': '<path d="m9 18 6-6-6-6"/>',
-    'video': '<path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/>',
-    'search-x': '<path d="m13.5 8.5-5 5"/><path d="m8.5 8.5 5 5"/><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
-    'repeat': '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
-    'file-plus': '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M12 18v-6"/><path d="M9 15h6"/>',
-    'palette': '<circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>',
-    'settings': '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>'
-  };
-
-  function icon(name, size, cls) {
-    var inner = ICONS[name] || '';
-    var c = cls ? ' class="' + cls + '"' : '';
-    return '<svg' + c + ' viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="' + (size || 24) + '" height="' + (size || 24) + '">' + inner + '</svg>';
-  }
-  function hydrateIcons(root) {
-    (root || document).querySelectorAll('i[data-icon]').forEach(function (el) {
-      var svg = document.createElement('span');
-      svg.innerHTML = icon(el.getAttribute('data-icon'), el.getAttribute('data-size') || 24);
-      var node = svg.firstChild;
-      if (el.className) node.setAttribute('class', el.className);
-      el.replaceWith(node);
-    });
-  }
+  // 图标统一来自 icons.js 全局库（硬约束：不在业务文件维护 ICONS/icon 副本）
+  function icon(name, size, cls) { return window.VL_icon ? window.VL_icon(name, size, cls) : ''; }
+  function hydrateIcons(root) { if (window.VL_hydrateIcons) window.VL_hydrateIcons(root); }
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
@@ -112,7 +72,8 @@
     configData: null, mode: 'filelist', highlightDup: false, searchQuery: '', logSearchQuery: '',
     expandedProject: null, sortMode: 'name', sortAsc: true, sortTimeDesc: true, rightPreview: true, precheckInvalid: false, logContent: null,
     logFiles: [], activeLogDate: null, activeLogPath: null, selectMode: false, selectedLogPaths: {},
-    focusVideo: null, _searchTimer: null, _fromConfig: false, envMissing: []
+    focusVideo: null, _searchTimer: null, _fromConfig: false, envMissing: [],
+    isPortable: null // 运行时形态：null=未知（按便携处理）/ true=便携 zip / false=setup 安装版
   };
   // 复刻虚拟项目：仅含日志无配置，配置名对应复刻模式；REPLICA_MARK 为路由标记，透传回后端
   var REPLICA_PROJECT = '复刻';
@@ -1461,6 +1422,33 @@
       resetPrecheckAll();
     });
   }
+  // 刷新配置列表：先扫描历史遗留的重复外部 * 配置（与成片正本内容一致的副本），
+  // 确认后物理删除再刷新列表；无重复则直接刷新
+  function refreshConfigsFlow() {
+    showBusy('正在扫描重复配置…');
+    call('clean_duplicate_star', false).then(function (r) {
+      hideBusy();
+      var pending = (r && r.pending) ? r.pending : [];
+      if (!pending.length) {
+        setStatus('重新检测中…');
+        refreshData(true, '正在重新扫描工作路径…', function () { setStatusDone('重新检测完成'); }, true);
+        return;
+      }
+      showDialog({
+        title: '发现重复配置',
+        message: '发现 ' + pending.length + ' 个与成片文件夹正本内容完全一致的外部 * 配置（历史遗留副本）。删除它们不影响正本与其他日期分支，是否删除？',
+        buttons: [ { label: '取消', value: null, primary: true }, { label: '删除并刷新', value: 1, danger: true } ]
+      }).then(function (v) {
+        if (!v) { setStatus('已取消清理，仅刷新列表'); refreshData(true, '正在重新扫描工作路径…', function () { setStatusDone('重新检测完成'); }, true); return; }
+        showBusy('正在清理重复配置…');
+        call('clean_duplicate_star', true).then(function (r2) {
+          hideBusy();
+          setStatus('已删除 ' + ((r2 && r2.deleted) ? r2.deleted.length : 0) + ' 个重复配置');
+          refreshData(true, '正在重新扫描工作路径…', function () { setStatusDone('重新检测完成'); }, true);
+        }).catch(function (e) { hideBusy(); setStatus('清理失败：' + e.message); refreshData(true); });
+      });
+    }).catch(function (e) { hideBusy(); setStatus('扫描失败：' + e.message); refreshData(true); });
+  }
 
   // ── 皮肤切换 ──
   // 皮肤列表按下拉名拼音升序：白蓝 < 黑橙 < 灰橙
@@ -1469,42 +1457,14 @@
     { id: 'Black_Orange', label: '黑橙', bg: '#111113', theme: '#FF6600' },
     { id: 'Gray_Orange', label: '灰橙', bg: '#333336', theme: '#FF6600' }
   ];
-  var skinPop = null;
   function applySkin(id, persist) {
     var target = SKINS.some(function (s) { return s.id === id; }) ? id : SKINS[0].id;
     document.documentElement.setAttribute('data-skin', target);
     if (persist) call('set_skin', target);
     return target;
   }
-  function ensureSkinPop() {
-    if (skinPop) return skinPop;
-    var pop = document.createElement('div');
-    pop.className = 'skin-popup';
-    SKINS.forEach(function (s) {
-      var item = document.createElement('button');
-      item.type = 'button';
-      item.className = 'skin-popup__item';
-      item.dataset.skin = s.id;
-      item.innerHTML = '<span class="skin-popup__swatch"><i class="skin-popup__swatch-b" style="background:' + s.bg + '"></i><i class="skin-popup__swatch-t" style="background:' + s.theme + '"></i></span>' + s.label;
-      pop.appendChild(item);
-    });
-    document.body.appendChild(pop);
-    skinPop = pop;
-    return pop;
-  }
-  function positionSkinPop() {
-    var btn = $('skinBtn');
-    if (!btn || !skinPop) return;
-    var br = btn.getBoundingClientRect();
-    skinPop.style.left = br.left + 'px';
-    skinPop.style.top = (br.top - skinPop.offsetHeight - 6) + 'px';
-    skinPop.style.right = 'auto';
-  }
   function initSkin() {
-    var btn = $('skinBtn');
-    if (!btn) return;
     call('get_skin').then(function (id) { applySkin(id, false); }).catch(function () { applySkin(SKINS[0].id, false); });
-    btn.addEventListener('click', function () { call('open_settings_window').catch(function () { setStatus('打开设置窗口失败'); }); });
     // 设置页修改主题后，主界面即时跟随
     if (window.txapi && window.txapi.on_settings_saved) {
       window.txapi.on_settings_saved(function (cfg) { if (cfg && typeof cfg === 'object') applySkin(cfg.skin, false); });
@@ -1682,13 +1642,44 @@
     $('modeLog').addEventListener('click', function () { state.mode = 'log'; state._fromConfig = true; $('modeLog').classList.add('mode-toggle--active'); $('modeFilelist').classList.remove('mode-toggle--active'); buildDateBranches(); buildCenterBottom(); buildRightPanel(); });
     $('searchInput').addEventListener('input', function () { state.searchQuery = this.value.trim(); buildSidebar(); });
     $('logSearchInput').addEventListener('input', function () { state.logSearchQuery = this.value.trim(); if (state.mode === 'log') buildCenterBottom(); onLogSearchInput(); });
-    $('btnResetPrecheck').addEventListener('click', resetPrecheckFlow);
-    $('btnRecheckProject').addEventListener('click', function () { setStatus('重新检测中…'); refreshData(true, '正在重新扫描工作路径…', function () { setStatusDone('重新检测完成'); }, true); });
+    // ── 左下角菜单按钮：刷新配置列表 / 选择路径 / 重置预检测缓存 / 设置 ──
+    var menuBtn = $('sidebarMenuBtn');
+    var menu = $('sidebarMenu');
+    function closeMenu() { if (menu) menu.style.display = 'none'; }
+    if (menuBtn && menu) {
+      menuBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var show = menu.style.display === 'none';
+        if (show) {
+          // 菜单浮到按钮右侧、自下而上展开（fixed 定位，避免被 sidebar 的 overflow:hidden 裁剪）
+          var br = menuBtn.getBoundingClientRect();
+          menu.style.position = 'fixed';
+          menu.style.left = (br.right + 8) + 'px';
+          menu.style.margin = '0';
+          menu.style.display = '';
+          menu.style.visibility = 'hidden'; // 先显示以测量高度，再向上定位防止被底部遮挡
+          var h = menu.offsetHeight;
+          menu.style.top = Math.max(4, br.bottom - h) + 'px';
+          menu.style.visibility = '';
+          // 自下而上移动 + 淡入过渡动画（每次打开重新播放）
+          menu.classList.remove('sidebar-menu--enter');
+          void menu.offsetWidth;
+          menu.classList.add('sidebar-menu--enter');
+        } else {
+          menu.style.display = 'none';
+        }
+      });
+      document.addEventListener('mousedown', function (e) { if (!menu.contains(e.target) && e.target !== menuBtn) closeMenu(); });
+      // 菜单项动作
+      $('menuRefreshConfigs').addEventListener('click', function () { closeMenu(); refreshConfigsFlow(); });   // 刷新配置列表（含清理重复外部 *）
+      $('menuChoosePath').addEventListener('click', function () { closeMenu(); choosePath(); });
+      $('menuResetPrecheck').addEventListener('click', function () { closeMenu(); resetPrecheckFlow(); });
+      $('menuSettings').addEventListener('click', function () { closeMenu(); call('open_settings_window').catch(function () { setStatus('打开设置窗口失败'); }); });
+    }
+    $('btnOpenTasks').addEventListener('click', function () { call('open_task_window').catch(function () { setStatus('打开任务窗口失败'); }); });
     $('btnPreviewRaw').addEventListener('click', function () { state.rightPreview = false; $('btnPreviewRaw').classList.add('preview-toggle--active'); $('btnPreviewModified').classList.remove('preview-toggle--active'); buildRightPanel(); });
     $('btnPreviewModified').addEventListener('click', function () { state.rightPreview = true; $('btnPreviewModified').classList.add('preview-toggle--active'); $('btnPreviewRaw').classList.remove('preview-toggle--active'); buildRightPanel(); });
     $('btnExternalEdit').addEventListener('click', function () { if (!state.activeVersion) return flashNeedSelect(); call('external_edit', state.activeVersion.path); });
-    $('btnChoosePath').addEventListener('click', choosePath);
-    $('btnOpenTasks').addEventListener('click', function () { call('open_task_window').catch(function () { setStatus('打开任务窗口失败'); }); });
     var rz = $('workspaceResizer');
     var sidebarEl = document.querySelector('.sidebar');
     if (rz && sidebarEl) {
@@ -1719,10 +1710,34 @@
       if (!r) { setStatus('选择路径失败'); return; }
       if (r.canceled) { setStatus('已取消选择路径'); return; }
       if (!r.ok) { setStatus('选择路径失败：' + ((r && r.error) || '未知错误')); return; }
-      state.projects = r.projects || []; state.activeProject = null; state.activeTxt = null; state.versions = []; state.activeVersion = null; state.configData = null;
-      buildSidebar(); buildDateBranches(); buildCenterBottom(); buildRightPanel();
-      setStatus('工作路径已切换：' + r.root);
+      hideBootGuide();
+      // 第一步：先扫描配置（force 重扫新路径下的配置列表）
+      setStatus('工作路径已切换：' + r.root + '，正在扫描配置…');
+      refreshData(true, '正在重新扫描工作路径…', function () {
+        // 第二步：根据新路径下的配置重置预检测（清缓存全量探测，带进度条，参照「重置预检测」）
+        resetPrecheckForPath();
+      }, false);
     }).catch(function (e) { hideBusy(); setStatus('选择路径失败：' + e.message); });
+  }
+  // 选择路径后的第二步：根据已扫描的配置重置预检测（遮罩进度条实时回报 x/y）
+  function resetPrecheckForPath() {
+    var dismiss = null;
+    var api = getApi();
+    if (api && typeof api.on_reset_progress === 'function') {
+      try { dismiss = api.on_reset_progress(onResetProgress); } catch (e) { dismiss = null; }
+    }
+    var cleanup = function () { if (dismiss) { try { dismiss(); } catch (e) {} dismiss = null; } };
+    showBusyProgress('正在根据新路径重置预检测…');
+    call('reset_precheck').then(function (r) {
+      hideBusy();
+      cleanup();
+      setStatusDone('重新检测完成：共检测 ' + ((r && r.total) || 0) + ' 个视频，合规 ' + ((r && r.valid) || 0) + ' 个');
+      if (state.activeTxt && state.activeVersion) runPrecheck();
+    }).catch(function (e) {
+      hideBusy();
+      cleanup();
+      setStatus('重置预检测失败：' + e.message);
+    });
   }
   function flashNeedSelect() { setStatus('请先选择一个 TXT 和日期分支'); }
   function updateTasksCount(tasks) {
@@ -1736,11 +1751,152 @@
     if (n > 0) { el.textContent = String(n); el.style.display = ''; }
     else { el.style.display = 'none'; }
   }
+  // 更新提示条（两步式）：发现版本 → 下载（提示条最小化到状态栏显示进度）→ 下载完成重新弹出询问是否重启
+  var _bannerShown = false;
+  var _bannerDismissed = false; // 本次提示条被忽略/取消；新事件到达时重置
+  var _bannerState = 'available'; // available | downloaded
+  function showUpdateBanner(info, mode) {
+    _bannerDismissed = false; // 「忽略/取消」仅关闭本次提示条，下次检查到更新时仍会重新弹出
+    var banner = $('updateBanner');
+    if (!banner) return;
+    var nextMode = mode === 'downloaded' ? 'downloaded' : 'available';
+    // 已处于「下载完成」等待用户操作时，新到的「发现新版本」不覆盖提示条
+    if (_bannerShown && _bannerState === 'downloaded' && nextMode === 'available') return;
+    _bannerShown = true;
+    _bannerState = nextMode;
+    var title = $('updateBannerTitle');
+    var desc = $('updateBannerDesc');
+    var later = $('updateLaterBtn');
+    var now = $('updateNowBtn');
+    if (_bannerState === 'downloaded') {
+      var setupMode = state.isPortable === false; // setup 安装版：重启并安装；便携版：打开更新文件
+      if (title) title.textContent = '更新包下载完成';
+      if (desc) desc.textContent = setupMode ? '是否立即重启并安装？' : '更新包已下载完成，请右键托盘图标退出应用后解压覆盖';
+      if (later) later.textContent = '取消';
+      if (now) now.textContent = setupMode ? '重启并安装' : '打开更新文件';
+    } else {
+      if (title) title.textContent = '发现新版本 v' + ((info && info.latest) || '');
+      if (desc) desc.textContent = '当前版本 v' + ((info && info.current) || '') + ' · 点击立即更新获取最新功能';
+      if (later) later.textContent = '忽略';
+      if (now) now.textContent = '立即更新';
+    }
+    if (now) now.disabled = false;
+    banner.style.display = 'flex'; // display:none → flex 会重新触发入场动画
+  }
+  function hideUpdateBanner() {
+    var banner = $('updateBanner');
+    if (banner) banner.style.display = 'none';
+    _bannerShown = false;
+  }
+  // 状态栏下载进度（任务按钮左侧）：左侧「更新 vX」+ 中间细进度条 + 右侧百分比
+  function showUpdateMini(info) {
+    var el = $('updateMini');
+    var fill = $('updateMiniFill');
+    var lab = $('updateMiniLabel');
+    var txt = $('updateMiniText');
+    if (!el) return;
+    var p = Math.max(0, Math.min(100, (info && info.percent) || 0));
+    var latest = (info && info.latest) || '';
+    if (fill) fill.style.width = p + '%';
+    if (lab) lab.textContent = latest ? ('更新 v' + latest) : '更新中…';
+    if (txt) txt.textContent = p + '%';
+    el.style.display = 'inline-flex';
+  }
+  function hideUpdateMini() {
+    var el = $('updateMini');
+    if (el) el.style.display = 'none';
+  }
+  function initUpdateBanner() {
+    var banner = $('updateBanner');
+    if (!banner) return;
+    banner.style.display = 'none'; // 默认隐藏，由后端事件驱动显示
+    var later = $('updateLaterBtn');
+    if (later) later.addEventListener('click', function () {
+      _bannerDismissed = true; // 忽略/取消：本次会话不再提醒，下次启动仍会检查
+      hideUpdateBanner();
+    });
+    var now = $('updateNowBtn');
+    if (now) now.addEventListener('click', function () {
+      var gp = getApi();
+      if (!gp) { setStatus('更新功能不可用'); return; }
+      now.disabled = true;
+      if (_bannerState === 'downloaded') {
+        if (state.isPortable === false) {
+          // setup 安装版：electron-updater 静默升级安装并重启
+          setStatus('正在重启并安装更新…');
+          if (!gp.apply_update) { now.disabled = false; return; }
+          gp.apply_update().catch(function () { now.disabled = false; setStatus('启动更新失败'); });
+        } else {
+          // 便携版：打开资源管理器并选中更新包，用户自行关闭应用后解压覆盖
+          if (!gp.reveal_update_file) { now.disabled = false; return; }
+          gp.reveal_update_file().catch(function () { now.disabled = false; setStatus('打开更新文件失败'); });
+        }
+      } else {
+        // 第一步：仅下载更新包（连接服务器阶段先给提示，随后出现 0% 进度条）
+        setStatus('正在连接更新服务器…');
+        if (!gp.start_update) { now.disabled = false; return; }
+        gp.start_update().then(function (r) {
+          if (r && r.busy) { now.disabled = false; setStatus('已有更新操作进行中，请稍候'); }
+        }).catch(function () { now.disabled = false; setStatus('下载更新失败'); });
+      }
+    });
+    var upd = getApi();
+    if (!upd) return;
+    if (upd.on_update_available) upd.on_update_available(function (info) { showUpdateBanner(info, 'available'); });
+    if (upd.on_update_progress) upd.on_update_progress(function (info) {
+      // 下载进行中：提示条最小化到状态栏，任务按钮左侧显示文字与进度条
+      hideUpdateBanner();
+      showUpdateMini(info);
+    });
+    if (upd.on_update_downloaded) upd.on_update_downloaded(function (info) {
+      hideUpdateMini();
+      showUpdateBanner(info, 'downloaded');
+    });
+    if (upd.on_update_none) upd.on_update_none(function (info) {
+      hideUpdateMini();
+      if (info && info.message) setStatus(info.message);
+      else setStatus('已是最新版本 v' + ((info && info.current) || ''));
+    });
+    if (upd.on_update_error) upd.on_update_error(function (info) {
+      hideUpdateMini();
+      if (info && info.busy) { setStatus('已有更新操作进行中，请稍候'); return; }
+      setStatus('更新失败：' + ((info && (info.message || info.error)) || '未知错误'));
+    });
+    if (upd.on_update_ready) upd.on_update_ready(function () {
+      hideUpdateMini();
+      hideUpdateBanner();
+      setStatus('更新包已就绪，正在重启应用…');
+    });
+  }
+
+  // 未配置工作路径时的引导态：项目列表为空，中央「选择路径」指引
+  function showBootGuide() { var el = $('bootGuide'); if (el) el.style.display = 'flex'; }
+  function hideBootGuide() { var el = $('bootGuide'); if (el) el.style.display = 'none'; }
+  function initBootGuide() {
+    var btn = $('bootGuidePick');
+    if (btn) btn.addEventListener('click', function () { choosePath(); });
+    if (getApi().get_root) {
+      getApi().get_root().then(function (r) { (r ? hideBootGuide() : showBootGuide()); }).catch(showBootGuide);
+    }
+  }
   function init() {
     hydrateIcons(document); bindStaticEvents(); initSkin(); buildAzIndex();
     updateSortButtons();
+    initUpdateBanner();
+    // 状态栏左下角常驻版本号
+    if (getApi().get_app_version) {
+      getApi().get_app_version().then(function (v) {
+        var el = $('versionTag');
+        if (el) el.textContent = v ? 'v' + v : '';
+      }).catch(function () {});
+    }
+    // 运行时形态（便携/setup），决定「下载完成」后是打开更新文件还是重启并安装
+    if (getApi().get_runtime) {
+      getApi().get_runtime().then(function (r) { state.isPortable = !!(r && r.is_portable); }).catch(function () { state.isPortable = true; });
+    }
     if (!getApi()) { $('statusLeft').textContent = '后端不可用（未检测到桥接 API）'; return; }
     checkEnv(); buildDateBranches(); buildCenterBottom(); buildRightPanel(); refreshData(false, '正在检测工作路径文件，请稍候…');
+    initBootGuide();
     if (getApi().on_task_update) getApi().on_task_update(updateTasksCount);
     // 有运行中任务退出时：主进程请求二次确认（与界面同款弹窗），确认后才真正退出
     if (getApi().on_confirm_quit_request) getApi().on_confirm_quit_request(function () {

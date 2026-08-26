@@ -44,30 +44,9 @@
     document.addEventListener('contextmenu', onCtx, true);
   }
 
-  var ICONS = {
-    'play': '<polygon points="6 3 20 12 6 21 6 3"/>',
-    'pause': '<rect width="4" height="16" x="8" y="4" rx="1"/><rect width="4" height="16" x="14" y="4" rx="1"/>',
-    'stop': '<rect width="10" height="10" x="7" y="7" rx="1"/>',
-    'check': '<path d="M20 6 9 17l-5-5"/>',
-    'arrow-up': '<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>',
-    'trash-2': '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>',
-    'grip-vertical': '<circle cx="9" cy="12" r="1"/><circle cx="9" cy="5" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="19" r="1"/>'
-  };
-  function icon(name, size, cls) {
-    var inner = ICONS[name] || '';
-    var c = cls ? ' class="' + cls + '"' : '';
-    return '<svg' + c + ' viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="' + (size || 24) + '" height="' + (size || 24) + '">' + inner + '</svg>';
-  }
-  function hydrateIcons(root) {
-    // 与主窗口 app.js 一致的图标注入：<i data-icon="名称" data-size="N"> 替换为 SVG
-    (root || document).querySelectorAll('i[data-icon]').forEach(function (el) {
-      var svg = document.createElement('span');
-      svg.innerHTML = icon(el.getAttribute('data-icon'), el.getAttribute('data-size') || 24);
-      var node = svg.firstChild;
-      if (el.className) node.setAttribute('class', el.className);
-      el.replaceWith(node);
-    });
-  }
+  // 图标统一来自 icons.js 全局库（硬约束：不在业务文件维护 ICONS/icon 副本）
+  function icon(name, size, cls) { return window.VL_icon ? window.VL_icon(name, size, cls) : ''; }
+  function hydrateIcons(root) { if (window.VL_hydrateIcons) window.VL_hydrateIcons(root); }
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
@@ -174,16 +153,13 @@
       if (cur.status === 'paused') confirmResume(cur);
       else confirmPause(cur);
     });
-    // 已结束任务单行删除（已完成/已停止列表中的「×」）
+    // 已结束任务单行删除（已完成/已停止列表中的「×」），hover 显现、直接删除不再二次确认
     header.querySelector('.task-card__del').addEventListener('click', function (e) {
       e.stopPropagation();
       var cur = card.__task || t;
-      confirmDialog('确定要从列表中移除任务「' + (cur.title || cur.id) + '」吗？（不影响已生成的成片文件）').then(function (ok) {
-        if (!ok) return;
-        call('clear_task', cur.id).then(function (r) {
-          if (!r || !r.ok) alertDialog('删除失败：' + ((r && r.error) || '未知错误'));
-        }).catch(function (err) { alertDialog('删除失败：' + err.message); });
-      });
+      call('clear_task', cur.id).then(function (r) {
+        if (!r || !r.ok) alertDialog('删除失败：' + ((r && r.error) || '未知错误'));
+      }).catch(function (err) { alertDialog('删除失败：' + err.message); });
     });
     // 右键菜单：按任务状态提供 置顶/暂停/继续/打开文件夹
     card.addEventListener('contextmenu', function (e) {
@@ -520,6 +496,10 @@
     var api = getApi();
     if (!api) return;
     if (api.get_skin) api.get_skin().then(function (skin) { document.documentElement.setAttribute('data-skin', skin || 'white_blue'); }).catch(function () {});
+    // 设置页切换皮肤时实时生效（无需关闭重开任务列表）
+    if (api.on_settings_saved) api.on_settings_saved(function (cfg) {
+      if (cfg && cfg.skin) document.documentElement.setAttribute('data-skin', cfg.skin);
+    });
     hydrateIcons(document);
     Array.prototype.forEach.call(document.querySelectorAll('.task-tab'), function (b) {
       b.addEventListener('click', function () { switchTab(b.getAttribute('data-tab')); });

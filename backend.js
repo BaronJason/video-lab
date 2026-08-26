@@ -26,6 +26,8 @@ const DEFAULT_CONFIG = {
   scripts_dir: '',
   watermark_dir: '',
   skin: 'white_blue',
+  auto_check_update: true,    // 启动时自动检查更新
+  config_storage: 'program',  // 配置文件保存位置：program=程序所在目录 / appdata=%APPDATA%\Video Lab
   // video_batch.ps1 顶部全局参数（文件内同名常量被顶部读环境变量 BATCH_* 覆盖）
   batch: {
     max_duration: 179,   // MaxTotalDurationSec 最大成片时长(秒)
@@ -362,6 +364,8 @@ class Api {
   }
 
   _buildProjectsData() {
+    // 未配置工作路径：项目列表为空（连"复刻"虚拟项目也不显示），交给前端引导态
+    if (!this.root) return [];
     const all = this._collectAllTxt();
     const byProject = new Map();
     for (const t of all) {
@@ -483,6 +487,36 @@ class Api {
     return versions;
   }
 
+  // 清理历史遗留的重复外部 * 配置：仅当「同项目+同配置名+同日期分支」有成片文件夹正本，
+  // 且正本与外部 * 内容 hash 完全一致时才删除该外部 *。按 label 分组隔离，不影响其他日期分支。
+  // commit=false 仅扫描报告；commit=true 物理删除（菜单「刷新配置列表」清理历史残留）
+  cleanDuplicateStar(commit) {
+    const groups = new Map(); // key = 项目\0配置名\0日期label -> { copies: [], sources: [] }
+    for (const t of this._collectAllTxt()) {
+      const label = relativeDateLabel(t.parts);
+      if (!label) continue;
+      const key = t.pdir + '\u0000' + t.name + '\u0000' + label;
+      if (!groups.has(key)) groups.set(key, { copies: [], sources: [] });
+      const g = groups.get(key);
+      (isChengpianFile(t.parts) ? g.copies : g.sources).push(t);
+    }
+    const pending = [];
+    const deleted = [];
+    for (const g of groups.values()) {
+      if (!g.copies.length) continue;
+      for (const s of g.sources) {
+        const dup = g.copies.some((c) => c.hash === s.hash);
+        if (!dup) continue;
+        pending.push(s.full);
+        if (commit) {
+          try { fs.unlinkSync(s.full); deleted.push(s.full); } catch (e) {}
+        }
+      }
+    }
+    if (commit && deleted.length) this._invalidateCaches();
+    return { ok: true, pending, deleted };
+  }
+
   readConfig(filePath) {
     filePath = path.resolve(filePath);
     const text = readText(filePath);
@@ -555,9 +589,18 @@ class Api {
     return cache;
   }
 
+  // 文件写入时间 → 与 PowerShell 一致的 100ns ticks（自 0001-01-01）。
+  // 必须用 bigint(mtimeNs) 精确换算：浮点 mtimeMs*10000 会超过 double 精确整数范围(2^53)丢低位精度，
+  // 导致与脚本 Get-Item LastWriteTimeUtc.Ticks 比对永远不等，缓存全部失效重测
   _mtimeToTicks(videoPath) {
-    try { return Math.round(fs.statSync(videoPath).mtimeMs * 10000) + 621355968000000000; } catch (e) { return 0; }
+    try {
+      const st = fs.statSync(videoPath, { bigint: true });
+      return (st.mtimeNs / 100n) + 621355968000000000n;
+    } catch (e) { return 0n; }
   }
+  // 缓存命中/写入统一用字符串承载 ticks：JSON number 无法表达 19 位整数，会再次丢精度；
+  // 脚本侧 PowerShell 的 string -eq long 会自动转换比较，仍能正确命中
+  _ticksToStr(v) { return String(v == null ? '' : v); }
 
   // ffprobe 异步探测（并发限流使用，不阻塞主线程）
   _probeVideoAsync(videoPath) {
@@ -612,7 +655,7 @@ class Api {
     try { fs.statSync(videoPath); } catch (e) { return null; }
     const cache = this._loadVideoCache();
     const cached = cache[videoPath];
-    if (cached && cached.LastWriteTime === this._mtimeToTicks(videoPath)) {
+    if (cached && this._ticksToStr(cached.LastWriteTime) === this._ticksToStr(this._mtimeToTicks(videoPath))) {
       const info = { valid: !!cached.Valid, duration: Number(cached.Duration) || 0, width: cached.Width || 0, height: cached.Height || 0 };
       this._videoInfoCache.set(videoPath, info);
       return info;
@@ -622,20 +665,23 @@ class Api {
   }
 
   // 并发探测缺失缓存的视频并写回缓存；返回 path -> info 映射
-  async _resolveVideoInfos(videoPaths) {
+  // onProbe(done) 可选：每完成一个视频（含缓存命中）回报累计计数
+  async _resolveVideoInfos(videoPaths, onProbe) {
     const result = new Map();
     const needProbe = [];
+    let doneCount = 0;
+    const tick = () => { doneCount++; if (onProbe) { try { onProbe(doneCount); } catch (e) {} } };
     for (const p of videoPaths) {
       const c = this._fetchCachedVideoInfo(p);
-      if (c) result.set(p, c);
+      if (c) { result.set(p, c); tick(); }
       else needProbe.push(p);
     }
-    const infos = await this._runWithLimit(needProbe, (p) => this._probeVideoAsync(p), this.probeConcurrency);
+    const infos = await this._runWithLimit(needProbe, (p) => this._probeVideoAsync(p).then((info) => { tick(); return info; }), this.probeConcurrency);
     const cache = this._loadVideoCache();
     for (let i = 0; i < needProbe.length; i++) {
       const p = needProbe[i];
       const info = infos[i] || { valid: false, duration: 0, width: 0, height: 0 };
-      cache[p] = { LastWriteTime: this._mtimeToTicks(p), Duration: info.duration, Valid: info.valid, Width: info.width, Height: info.height };
+      cache[p] = { LastWriteTime: this._ticksToStr(this._mtimeToTicks(p)), Duration: info.duration, Valid: info.valid, Width: info.width, Height: info.height };
       this._videoInfoCache.set(p, info);
       result.set(p, info);
     }
@@ -735,6 +781,27 @@ class Api {
     return results;
   }
 
+  // 自动配置水印目录：扫描所有配置，取第一个「存在有效素材路径且带可用水印」的配置的水印所在目录
+  detectWatermarkFromConfigs() {
+    const all = this._collectAllTxt();
+    for (const t of all) {
+      let cfg;
+      try { cfg = this.readConfig(t.full); } catch (e) { continue; }
+      const folders = Array.isArray(cfg.folders) ? cfg.folders : [];
+      let hasFolder = false;
+      for (const f of folders) {
+        const p = stripQuotes(String((f && typeof f === 'object') ? f.path : f || '').trim());
+        if (!p) continue;
+        try { if (fs.existsSync(p)) { hasFolder = true; break; } } catch (e) {}
+      }
+      if (!hasFolder) continue;
+      const wm = String((cfg && cfg.watermark) || '').trim();
+      if (!wm) continue;
+      try { if (fs.existsSync(wm)) return path.dirname(wm); } catch (e) {}
+    }
+    return '';
+  }
+
   // 重置预检测：清除物理缓存，收集所有配置指向的路径并全量探测（跨路径去重），可实时回报进度
   async resetPrecheck(onProgress) {
     try {
@@ -774,7 +841,7 @@ class Api {
     let probed = 0, valid = 0;
     const cache = this._loadVideoCache();
     await this._runWithLimit(allVideos, (f) => this._probeVideoAsync(f).then((info) => {
-      cache[f] = { LastWriteTime: this._mtimeToTicks(f), Duration: info.duration, Valid: info.valid, Width: info.width, Height: info.height };
+      cache[f] = { LastWriteTime: this._ticksToStr(this._mtimeToTicks(f)), Duration: info.duration, Valid: info.valid, Width: info.width, Height: info.height };
       this._videoInfoCache.set(f, info);
       probed++;
       if (info.valid) valid++;

@@ -96,6 +96,8 @@
 
   var rendered = {}; // taskId -> { el, header, logEl, body, logCount, expanded }
   var state = { tab: 'running', _errCount: 0, _viewedErr: 0 };
+  // 已完成列表按日期分组的展开状态：dayKey -> true(展开)/false(折叠)；未记录时首组展开、其余折叠
+  var doneGroupsExpanded = {};
 
   function buildCard(t) {
     var card = document.createElement('div');
@@ -415,7 +417,11 @@
     updateTabCounts(tasks);
     // 按当前 tab 过滤出列表内容
     var cur;
-    if (state.tab === 'done') cur = tasks.filter(function (t) { return t.status === 'done'; });
+    if (state.tab === 'done') {
+      cur = tasks.filter(function (t) { return t.status === 'done'; });
+      // 已完成列表按完成日期降序分组：同组按结束时间降序排列
+      cur.sort(function (a, b) { return (b.endedAt || 0) - (a.endedAt || 0); });
+    }
     else if (state.tab === 'stopped') cur = tasks.filter(function (t) { return t.status === 'stopped' || t.status === 'error' || t.status === 'interrupted'; });
     else cur = tasks.filter(function (t) { return t.status === 'running' || t.status === 'queued' || t.status === 'paused'; });
     if (!cur.length) { list.innerHTML = '<div class="task-empty">' + emptyText(state.tab) + '</div>'; rendered = {}; return; }
@@ -426,12 +432,86 @@
     });
     var emptyEl = list.querySelector('.task-empty');
     if (emptyEl) emptyEl.remove();
+    // 旧的日期分组头整体移除，按当前顺序重建（卡片节点复用）
+    Array.prototype.slice.call(list.querySelectorAll('.task-day-group')).forEach(function (h) { h.parentNode.removeChild(h); });
+    if (state.tab !== 'done') {
+      cur.forEach(function (t) {
+        var rec = rendered[t.id];
+        if (!rec) { rec = buildCard(t); rendered[t.id] = rec; }
+        updateCard(rec, t);
+        // 清理在已完成 tab 可能残留的分组标记与隐藏
+        delete rec.el.dataset.day;
+        rec.el.style.display = '';
+        list.appendChild(rec.el);
+      });
+      return;
+    }
+    // 已完成列表：按日期降序分组渲染（日期已降序，同日连续）
+    var dayOrder = [];
+    var dayCount = {};
     cur.forEach(function (t) {
+      var d = dayKey(t.endedAt);
+      if (!dayCount[d]) { dayCount[d] = 0; dayOrder.push(d); }
+      // 视频数 = 该任务生成的成片数（progress.total），无进度数据时按 1 个任务计 1
+      var n = (t.progress && t.progress.total > 0) ? t.progress.total : 1;
+      dayCount[d] += n;
+    });
+    var firstDay = dayOrder.length ? dayOrder[0] : null;
+    dayOrder.forEach(function (day, di) {
+      // 默认首组展开、其余折叠；记录过展开状态则保持
+      if (!(day in doneGroupsExpanded)) doneGroupsExpanded[day] = (di === 0);
+    });
+    var lastDay = null;
+    var curDay = null;
+    cur.forEach(function (t) {
+      var day = dayKey(t.endedAt);
+      if (day !== lastDay) {
+        lastDay = day; curDay = day;
+        var expanded = !!doneGroupsExpanded[day];
+        var hdr = document.createElement('div');
+        hdr.className = 'task-day-group';
+        hdr.dataset.day = day;
+        hdr.innerHTML =
+          '<span class="task-day-group__label">' + day + '</span>' +
+          '<span class="task-day-group__line"></span>' +
+          '<span class="task-day-group__count">共 ' + dayCount[day] + ' 个视频</span>';
+        if (!expanded) hdr.classList.add('is-collapsed');
+        list.appendChild(hdr);
+        // 点击整个分组头即展开/折叠该日列表（按钮已移除）
+        hdr.addEventListener('click', function () {
+          doneGroupsExpanded[day] = !doneGroupsExpanded[day];
+          applyDoneGroupState(day);
+        });
+      }
       var rec = rendered[t.id];
       if (!rec) { rec = buildCard(t); rendered[t.id] = rec; }
       updateCard(rec, t);
-      if (rec.el.parentNode !== list) list.appendChild(rec.el);
+      rec.el.dataset.day = day;
+      list.appendChild(rec.el);
     });
+    // 应用各日期组隐显与分组头按钮状态
+    dayOrder.forEach(function (day) { applyDoneGroupState(day); });
+  }
+
+  // 按展开状态更新某日期组：折叠时隐藏该组卡片、分组头打上折叠样式
+  function applyDoneGroupState(day) {
+    var list = $('taskList');
+    if (!list) return;
+    var expanded = !!doneGroupsExpanded[day];
+    list.querySelectorAll('.task-card[data-day="' + day + '"]').forEach(function (el) {
+      el.style.display = expanded ? '' : 'none';
+    });
+    var hdr = list.querySelector('.task-day-group[data-day="' + day + '"]');
+    if (!hdr) return;
+    hdr.classList.toggle('is-collapsed', !expanded);
+  }
+
+  // 完成时间 → yy.mm.dd 分组键
+  function dayKey(ts) {
+    if (!ts) return '';
+    var d = new Date(ts);
+    function p(n) { return (n < 10 ? '0' : '') + n; }
+    return String(d.getFullYear()).slice(2) + '.' + p(d.getMonth() + 1) + '.' + p(d.getDate());
   }
 
   function emptyText(tab) {

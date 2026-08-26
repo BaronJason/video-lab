@@ -1,6 +1,6 @@
 {
   "name": "video-lab",
-  "version": "1.4.3",
+  "version": "1.4.5",
   "description": "Video Lab — 批量成片项目管理",
   "author": "Video Lab",
   "main": "main.js",
@@ -55,7 +55,7 @@
           ]
         }
       ],
-      "signAndEditExecutable": true
+      "signAndEditExecutable": false
     },
     "portable": {
       "artifactName": "${productName}.exe"
@@ -75,5 +75,8 @@
   "devDependencies": {
     "electron": "33.4.11",
     "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

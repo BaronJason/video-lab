@@ -94,12 +94,12 @@
   }
   function sortedProjects() {
     var list = state.projects.slice();
-    if (state.sortMode === 'time') {
-      list.forEach(function (p) { p._sortDate = 0; (p.txts || []).forEach(function (t) { if (branchNum(t.latest) > p._sortDate) p._sortDate = branchNum(t.latest); }); });
-      list.sort(function (a, b) { var d = (b._sortDate || 0) - (a._sortDate || 0); return state.sortTimeDesc ? d : -d; });
-    } else {
-      list.sort(function (a, b) { var r = sortByName(a, b); return state.sortAsc ? r : -r; });
-    }
+    // 项目名始终按名称升序（升降序仅作用于配置项），复刻虚拟项目固定放最下面
+    list.sort(function (a, b) {
+      if (a.name === REPLICA_PROJECT) return 1;
+      if (b.name === REPLICA_PROJECT) return -1;
+      return String(a.name).localeCompare(String(b.name), 'zh');
+    });
     return list;
   }
   function updateSortButtons() {
@@ -116,6 +116,11 @@
     }
     return list;
   }
+  // 时间排序按月份分组：取配置版本 label（如 0802、0802-1、0802*）开头的两位月份，忽略后缀
+  function monthOf(label) {
+    var m = /^(\d{2})/.exec(String(label || '').trim());
+    return m ? parseInt(m[1], 10) : 0;
+  }
   function buildSidebar(forceAz) {
     var tree = $('sidebarTree');
     var html = '';
@@ -126,18 +131,37 @@
       html += '<span class="tree-arrow' + (expanded ? ' tree-arrow--open' : '') + '"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
       html += icon('folder', 16, 'tree-project__icon');
       html += escapeHtml(proj.name);
-      html += '<span class="tree-project__count">' + proj.txts.length + ' 个 TXT</span></div>';
+      // 项目名行右侧：展开时显示「共 N 个配置」徽章（复刻虚拟项目无配置则不显示）
+      if (proj.name !== REPLICA_PROJECT && expanded) {
+        html += '<span class="tree-project__badge">共 ' + proj.txts.length + ' 个配置</span>';
+      }
+      html += '</div>';
       if (expanded) {
         html += '<div class="tree-project__items">';
+        var lastGroupKey = null;
+        var isReplica = (proj.name === REPLICA_PROJECT);
         sortedTxts(proj.txts).forEach(function (txt) {
           var isActive = (proj.name === state.activeProject && txt.name === state.activeTxt);
           var matched = !state.searchQuery || txt.name.toLowerCase().indexOf(state.searchQuery.toLowerCase()) >= 0;
           if (!matched) return;
+          // 名称排序按首字母分组、时间排序按月份分组：每个组的首个配置前插入分组标签行（含首组）；
+          // 复刻虚拟项目的固定子项不参与分组
+          if (!isReplica) {
+            var groupKey = (state.sortMode === 'time')
+              ? monthOf(txt.latest)
+              : azInitial(txt.name);
+            if (lastGroupKey === null || groupKey !== lastGroupKey) {
+              var label = (state.sortMode === 'time') ? groupKey + '月' : groupKey;
+              html += '<div class="tree-txt-group"><span class="tree-txt-group__label">' + escapeHtml(label) + '</span><span class="tree-txt-group__line"></span></div>';
+            }
+            lastGroupKey = groupKey;
+          }
           var dupCls = (state.highlightDup && txt.dup) ? ' tree-txt-item--dup' : '';
           html += '<div class="tree-txt-item' + (isActive ? ' tree-txt-item--active' : '') + dupCls + '" data-project="' + escapeHtml(proj.name) + '" data-name="' + escapeHtml(txt.name) + '">';
           html += icon('file-text', 16, 'tree-txt-item__icon');
           html += '<span class="tree-txt-item__name">' + escapeHtml(txt.name) + '</span>';
-          html += '<span class="tree-txt-item__date">' + escapeHtml(txt.latest) + '</span>';
+          // 复刻子项无配置日期，不显示 latest；徽章显示其日志数
+          if (!isReplica) html += '<span class="tree-txt-item__date">' + escapeHtml(txt.latest) + '</span>';
           html += '<span class="tree-txt-item__badge">' + txt.count + '</span></div>';
         });
         html += '</div>';
@@ -286,19 +310,28 @@
   function currentAzLetter() {
     var tree = $('sidebarTree');
     if (!tree) return null;
-    // 已选中配置且属于当前展开项目：固定高亮该配置的首字母（不随滚动变化）
+    // 置顶项目名会占据视口顶部，按粘性头部高度偏移，取其下作为「第一行配置」的判定基准
+    var header = tree.querySelector('.tree-project__name--sticky');
+    var topLimit = tree.getBoundingClientRect().top + (header ? header.offsetHeight : 0);
+    var bottomLimit = tree.getBoundingClientRect().bottom;
+    // 已选中配置且属于当前展开项目：选中行仍在列表可视区内则固定高亮其首字母；
+    // 若被滚轮滑出可视区，则回退为视口首行配置的首字母（滚动回可见后自动恢复）
     if (state.activeProject && state.activeTxt && state.expandedProject === state.activeProject) {
-      return azInitial(state.activeTxt);
+      var items = tree.querySelectorAll('.tree-txt-item');
+      var activeItem = null;
+      for (var q = 0; q < items.length; q++) {
+        if (items[q].getAttribute('data-name') === state.activeTxt) { activeItem = items[q]; break; }
+      }
+      if (activeItem) {
+        var r = activeItem.getBoundingClientRect();
+        if (r.top < bottomLimit && r.bottom > topLimit) return azInitial(state.activeTxt);
+      }
     }
     var nodes = tree.querySelectorAll('.tree-txt-item');
     if (!nodes.length) return null;
-    // 置顶项目名会占据视口顶部，按粘性头部高度偏移，取头部之下第一个配置项作为「第一行配置」
-    var header = tree.querySelector('.tree-project__name--sticky');
-    var offset = header ? header.offsetHeight : 0;
-    var top = tree.getBoundingClientRect().top + offset;
     var first = null;
     for (var i = 0; i < nodes.length; i++) {
-      if (nodes[i].getBoundingClientRect().bottom >= top) { first = nodes[i]; break; }
+      if (nodes[i].getBoundingClientRect().bottom >= topLimit) { first = nodes[i]; break; }
     }
     if (!first) first = nodes[nodes.length - 1];
     return azInitial(first.getAttribute('data-name') || '');
@@ -411,7 +444,6 @@
     state.versions.forEach(function (v) {
       var active = v.label === state.activeVersion.label;
       html += '<button class="date-branch-btn' + (active ? ' date-branch-btn--active' : '') + '" data-label="' + escapeHtml(v.label) + '" title="' + escapeHtml(v.path) + '">' + escapeHtml(v.label);
-      if (v.is_latest) html += '<span class="date-branch-btn__latest">最新</span>';
       html += '</button>';
     });
     c.innerHTML = html;
@@ -465,7 +497,7 @@
     var watermark = data.watermark || '';
     var html = '<div class="config-editor">';
     html += '<div class="config-editor__col config-editor__col--paths">';
-    html += '<div class="config-path-subheader"><span class="config-path-subheader__drag"></span><span class="config-path-subheader__sort">排序</span><span class="config-path-subheader__nopoll">取消轮询</span><span class="config-path-subheader__path">路径</span><span class="config-path-subheader__check">预检测结果</span><span class="config-path-subheader__open"></span></div>';
+    html += '<div class="config-path-subheader"><span class="config-path-subheader__sort">排序</span><span class="config-path-subheader__nopoll">取消轮询</span><span class="config-path-subheader__path">路径</span><span class="config-path-subheader__check">预检测结果</span><span class="config-path-subheader__open"></span><span class="config-path-subheader__remove"></span></div>';
     html += '<div class="config-editor__path-list" id="pathList">';
     folders.forEach(function (f, idx) {
       html += '<div class="config-path-row" data-index="' + idx + '" data-orig="' + escapeHtml(f.path) + '" data-orig-idx="' + idx + '">';
@@ -1348,18 +1380,35 @@
     if (state.mode !== 'log' || !state.activeTxt || !state.activeVersion) return;
     if (!state.logContent) { state._pendingLogJump = { video: video, logPath: logPath }; return; }
     var line = logRowFor(video, logPath);
-    if (line) scrollLogRightTo(line);
+    if (line) highlightLogBlock(line, video, logPath);
   }
-  function scrollLogRightTo(line) {
+  // 高亮整个成片块：成片名行（lineStart-1）到下一个成片名行之前的所有行
+  function highlightLogBlock(line, video, logPath) {
+    var entries = (state.logContent && state.logContent.entries) || [];
+    var idx = -1;
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i].video === video && (entries[i].logPath === logPath || normalizePath(entries[i].logPath) === normalizePath(logPath))) { idx = i; break; }
+    }
+    if (idx < 0) { for (var j = 0; j < entries.length; j++) { if (entries[j].video === video) { idx = j; break; } } }
+    var startRow = Number(line) - 1; // 成片名行
+    var endRow = null;
+    if (idx >= 0 && entries[idx + 1]) endRow = Number(entries[idx + 1].lineStart) - 2; // 下一个成片名行之前
+    scrollLogRightTo(startRow, endRow);
+  }
+  function scrollLogRightTo(line, endLine) {
     var content = $('rightPanelContent');
     if (!content) return;
     var n = Number(line);
     if (!n || n < 1) return;
-    content.querySelectorAll('[data-row].log-target').forEach(function (el) { el.classList.remove('log-target'); });
-    var num = content.querySelector('.right-panel__line-num[data-row="' + n + '"]');
-    var cod = content.querySelector('.right-panel__code-line[data-row="' + n + '"]');
-    if (num) num.classList.add('log-target');
-    if (cod) cod.classList.add('log-target');
+    var end = Number(endLine);
+    if (!end || end < n) end = n;
+    content.querySelectorAll('.right-panel__line-num.log-target, .right-panel__code-line.log-target').forEach(function (el) { el.classList.remove('log-target'); });
+    for (var r = n; r <= end; r++) {
+      var num = content.querySelector('.right-panel__line-num[data-row="' + r + '"]');
+      var cod = content.querySelector('.right-panel__code-line[data-row="' + r + '"]');
+      if (num) num.classList.add('log-target');
+      if (cod) cod.classList.add('log-target');
+    }
     var lineHeight = 18;
     var targetTop = 8 + (n - 1) * lineHeight;
     content.scrollTop = Math.max(0, targetTop - Math.floor(content.clientHeight * 0.2));
@@ -1552,6 +1601,8 @@
         if (!willExpand) {
           // 折叠：项目名反向收回 + azbar 收回；配置区整体从上到下渐隐，重建后仅展开项目下方的项目渐显
           projectHeader.classList.remove('is-filled');
+          var bdgFold = projectHeader.querySelector('.tree-project__badge');
+          if (bdgFold) bdgFold.classList.add('tree-project__badge--leave');
           if (azBar) azBar.classList.remove('is-show');
           state.expandedProject = null;
           var itemWrap = $('sidebarTree').querySelector('.tree-project__items');
@@ -1575,7 +1626,11 @@
         state.expandedProject = pname;
         var oldHeader = $('sidebarTree').querySelector('.tree-project__name.is-filled');
         var oldWrap = $('sidebarTree').querySelector('.tree-project__items');
-        if (oldHeader) oldHeader.classList.remove('is-filled');
+        if (oldHeader) {
+          oldHeader.classList.remove('is-filled');
+          var bdgOld = oldHeader.querySelector('.tree-project__badge');
+          if (bdgOld) bdgOld.classList.add('tree-project__badge--leave');
+        }
         if (oldWrap) oldWrap.classList.add('tree-project__items--leaving');
         var applyExpand = function () {
           buildSidebar(true); // 项目展开：强制 azbar 扫描动画（即使字母集合相同）

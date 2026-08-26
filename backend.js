@@ -760,10 +760,10 @@ class Api {
         const st = fs.statSync(key);
         if (st.isDirectory()) {
           const s = await this._precheckFolder(key, excludes, nonround);
-          if (s.total === 0) r = { status: 'warn', text: '无合规视频', total: 0, groupCount: 0, exists: true };
+          if (s.total === 0) r = { status: 'warn', text: '无合格视频', total: 0, groupCount: 0, exists: true };
           else {
             const grouped = s.groupCount > 1;
-            const text = grouped ? `${s.total} 个视频，分为 ${s.groupCount} 个子组` : `${s.total} 个视频`;
+            const text = grouped ? `${s.total}个视频，共${s.groupCount}组` : `${s.total} 个视频`;
             r = { status: grouped ? 'group' : 'ok', text, total: s.total, groupCount: s.groupCount, exists: true };
           }
         } else if (st.isFile()) {

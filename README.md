@@ -105,6 +105,8 @@ npm run dist     # 打包
 
 依据授权条款：本皮肤素材仅限**非商业性**使用；对包含本皮肤的部分进行再分发或修改时，须以**相同方式共享（ShareAlike）**并保留上述署名与完整创作链。
 
+本仓库整体以 **[CC BY-NC-SA 4.0](./LICENSE)** 授权，完整许可文本见 `LICENSE`，创作链与第三方素材声明见 `NOTICE`。
+
 ## 更新日志
 
 详见 [CHANGELOG.md](./CHANGELOG.md)。

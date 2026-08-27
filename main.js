@@ -316,7 +316,19 @@ api.onTasksChanged = sendTasksToAll;
 // 自动安装（apply_update / 更新器脚本）代码保留，供 setup 安装版接入使用
 const UPDATE_ENABLED = true;
 const GITHUB_REPO = 'BaronJason/video-lab';
+const GITEE_REPO = 'hirannu/video-lab';
 const UPDATE_API_URL = 'https://api.github.com/repos/' + GITHUB_REPO + '/releases/latest';
+// 码云 release 检查地址（GitHub 同款 API 结构：tag_name + assets[]）
+const GITEE_API_URL = 'https://gitee.com/api/v5/repos/' + GITEE_REPO + '/releases/latest';
+// 当前更新源（跟随设置 update_source，动态切换 GitHub / 码云）
+function currentUpdateSource() {
+  return (loadConfig().update_source === 'github') ? 'github' : 'gitee';
+}
+// 根据更新源生成检查地址：码云直连不打加速前缀，GitHub 走原加速链
+function updateCheckUrls() {
+  if (currentUpdateSource() === 'github') return accelUrls(UPDATE_API_URL);
+  return [GITEE_API_URL];
+}
 // GitHub 加速前缀链：许多机器直连 GitHub 慢/不稳，更新检查与下载按序尝试各加速站（实测
 // gh-proxy.com 最快），全部不可达最后回退直连；增删/换加速站只需改 UPDATE_PROXIES
 const UPDATE_PROXIES = ['https://gh-proxy.com', 'https://gh-proxy.org'];
@@ -434,7 +446,7 @@ async function checkForUpdate(opts) {
   try {
     let res = null;
     let accelErr = '';
-    for (const cand of accelUrls(UPDATE_API_URL)) {
+    for (const cand of updateCheckUrls()) {
       try {
         res = await netGet(cand, 10000);
         if (res.status === 200) break;
@@ -449,7 +461,12 @@ async function checkForUpdate(opts) {
     const data = JSON.parse(res.body.toString('utf-8'));
     const tag = String(data.tag_name || '').replace(/^v/i, '');
     const assets = Array.isArray(data.assets) ? data.assets : [];
-    const asset = assets.find((a) => /\.zip$/i.test(String(a.name || ''))) || null;
+    // 优先匹配正式便携包资产（Video-Lab-<版本>-x64-Portable.zip）；
+    // Gitee / GitHub 会自动附带源码归档（如 v1.4.6.zip），须排除以免误下载源码包
+    const asset =
+      assets.find((a) => /Video-Lab-.*-x64-Portable\.zip$/i.test(String(a.name || ''))) ||
+      assets.find((a) => /\.zip$/i.test(String(a.name || '')) && !/^v?\d+\.\d+\.\d+\.zip$/i.test(String(a.name || ''))) ||
+      null;
     // release 资产的 digest 为 sha256:<hex>，作为下载完整性校验依据
     const sha256 = (asset && asset.digest && String(asset.digest).replace(/^sha256:/i, '')) || '';
     const hasUpdate = cmpVersion(tag, APP_VERSION) > 0;
@@ -794,6 +811,7 @@ function registerIpc() {
       batch: Object.assign({}, DEFAULT_CONFIG.batch, c.batch),
       replica: Object.assign({}, DEFAULT_CONFIG.replica, c.replica),
       auto_check_update: c.auto_check_update !== false,
+      update_source: c.update_source === 'github' ? 'github' : 'gitee',
       config_storage: c.config_storage === 'appdata' ? 'appdata' : 'program',
       config_path: configFilePath(),
       config_path_program: path.dirname(programConfigPath()),   // 显示目录（含配置与 Cache）
@@ -811,6 +829,7 @@ function registerIpc() {
       }
       if (s.config_storage === 'program' || s.config_storage === 'appdata') cfg.config_storage = s.config_storage;
       if (typeof s.auto_check_update === 'boolean') cfg.auto_check_update = s.auto_check_update;
+      if (s.update_source === 'github' || s.update_source === 'gitee') cfg.update_source = s.update_source;
       if (s.batch && typeof s.batch === 'object') cfg.batch = Object.assign({}, DEFAULT_CONFIG.batch, s.batch);
       if (s.replica && typeof s.replica === 'object') cfg.replica = Object.assign({}, DEFAULT_CONFIG.replica, s.replica);
     }

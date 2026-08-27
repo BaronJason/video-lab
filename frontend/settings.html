@@ -87,8 +87,22 @@
             <span>启动时自动检查更新</span>
           </label>
         </div>
+        <div class="opt-row">
+          <label class="opt-radio">
+            <input type="radio" name="updateSource" value="gitee">
+            <span class="opt-radio__dot"></span>
+            <span class="opt-radio__label">码云（Gitee）<span class="opt-path">gitee.com/hirannu/video-lab</span></span>
+          </label>
+        </div>
+        <div class="opt-row">
+          <label class="opt-radio">
+            <input type="radio" name="updateSource" value="github">
+            <span class="opt-radio__dot"></span>
+            <span class="opt-radio__label">GitHub<span class="opt-path">github.com/BaronJason/video-lab</span></span>
+          </label>
+        </div>
         <div class="opt-actions">
-          <button class="btn" id="btnCheckUpdate" title="立即检查 GitHub Releases 是否有新版本">检查更新</button>
+          <button class="btn" id="btnCheckUpdate" title="立即检查所选更新源（码云/GitHub）是否有新版本">检查更新</button>
         </div>
       </div>
     </section>

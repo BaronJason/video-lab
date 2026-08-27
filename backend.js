@@ -27,6 +27,7 @@ const DEFAULT_CONFIG = {
   watermark_dir: '',
   skin: 'white_blue',
   auto_check_update: true,    // 启动时自动检查更新
+  update_source: 'gitee',     // 更新源：gitee=码云 release / github=GitHub release，默认码云
   config_storage: 'program',  // 配置文件保存位置：program=程序所在目录 / appdata=%APPDATA%\Video Lab
   // video_batch.ps1 顶部全局参数（文件内同名常量被顶部读环境变量 BATCH_* 覆盖）
   batch: {

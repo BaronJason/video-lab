@@ -1,4 +1,4 @@
-﻿// -*- coding: utf-8 -*-
+// -*- coding: utf-8 -*-
 // Video Lab — 设置窗口逻辑（通用设置 / 批量拼接 / 视频复刻）
 'use strict';
 (function () {
@@ -130,6 +130,7 @@
       $('cfgWatermark').value = s.watermark_dir || '';
       var chk = $('autoCheckUpdate');
       if (chk) chk.checked = s.auto_check_update !== false;
+      document.querySelectorAll('input[name="updateSource"]').forEach(function (r) { r.checked = r.value === s.update_source; });
       var storage = s.config_storage === 'appdata' ? 'appdata' : 'program';
       document.querySelectorAll('input[name="configStorage"]').forEach(function (r) { r.checked = r.value === storage; });
       var pp = $('cfgPathProgram'), pa = $('cfgPathAppdata');
@@ -204,11 +205,13 @@
 
       var skin = document.documentElement.getAttribute('data-skin') || THEMES[0].id;
       var storageEl = document.querySelector('input[name="configStorage"]:checked');
+      var srcEl = document.querySelector('input[name="updateSource"]:checked');
       api.save_settings({
         skin: skin,
         root: $('cfgRoot').value.trim(),
         watermark_dir: $('cfgWatermark').value.trim(),
         auto_check_update: !!$('autoCheckUpdate').checked,
+        update_source: srcEl ? srcEl.value : 'gitee',
         config_storage: storageEl ? storageEl.value : 'program',
         batch: state.batch,
         replica: state.replica

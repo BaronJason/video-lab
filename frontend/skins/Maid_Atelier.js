@@ -207,6 +207,17 @@
 
   var activeDispose = null;
 
+  // 幂等清理：移除本皮肤全部装饰元素与投影（重复 apply 造成的残留也一并清掉）
+  function disposeLocal() {
+    var doc = document;
+    doc.querySelectorAll('[data-skin-owner="' + OWNER + '"]').forEach(function (el) { el.remove(); });
+    var holder = doc.querySelector('[data-skin-chrome="maid-width-rule"]');
+    if (holder && holder.parentNode === doc.head) doc.head.removeChild(holder);
+    delete doc.body.dataset.maidSidebarSize;
+    delete doc.body.dataset.maidSearchCollapsed;
+    delete doc.body.dataset.maidChatActive;
+  }
+
   var mod = {
     apply: function () {
       activeDispose = apply();
@@ -214,7 +225,8 @@
     dispose: function () {
       if (activeDispose) { try { activeDispose(); } catch (e) { console.error('[skin:Maid_Atelier] dispose', e); } }
       activeDispose = null;
-    }
+    },
+    disposeLocal: disposeLocal
   };
 
   if (window.VL_SkinRuntime) {

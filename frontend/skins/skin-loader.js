@@ -16,14 +16,19 @@
 
     // 切换皮肤行为：id 为最终生效的皮肤 id
     sync: function (id) {
-      if (current && current.id !== id) {
-        safe(function () { current.mod.dispose(); }, 'dispose:' + current.id);
-        current = null;
+      if (!current || current.id !== id) {
+        // 不同皮肤或首次：先卸旧皮肤行为
+        if (current) {
+          safe(function () { current.mod.dispose(); }, 'dispose:' + current.id);
+          current = null;
+        }
+        var mod = MODS[id];
+        if (!mod) return;
+        // 若该皮肤之前发生过重复 apply（如老版本 bug 堆积），apply 前幂等清理残留装饰
+        if (mod.disposeLocal) safe(function () { mod.disposeLocal(); }, 'disposeLocal:' + id);
+        safe(function () { mod.apply(); }, 'apply:' + id);
+        current = { id: id, mod: mod };
       }
-      var mod = MODS[id];
-      if (!mod) return;
-      safe(function () { mod.apply(); }, 'apply:' + id);
-      current = { id: id, mod: mod };
     },
 
     disposeAll: function () {

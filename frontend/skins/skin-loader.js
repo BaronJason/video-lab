@@ -1,0 +1,39 @@
+// Video Lab — 皮肤运行时：行为层注册表与切换编排
+// 契约：皮肤可通过 VL_SkinRuntime.register(id, { apply(), dispose() }) 注册可选行为模块；
+// 切换皮肤时先 dispose 旧模块、再 apply 新模块，保证热切换零残留。
+// 视觉层仍由各皮肤 CSS 承担，行为层只负责 DOM 装饰 / 度量 / 属性投影。
+'use strict';
+(function () {
+  var MODS = {};
+  var current = null; // { id, mod }
+
+  function safe(fn, label) {
+    try { fn(); } catch (e) { console.error('[skin:' + label + ']', e); }
+  }
+
+  var runtime = {
+    register: function (id, mod) { MODS[id] = mod; },
+
+    // 切换皮肤行为：id 为最终生效的皮肤 id
+    sync: function (id) {
+      if (current && current.id !== id) {
+        safe(function () { current.mod.dispose(); }, 'dispose:' + current.id);
+        current = null;
+      }
+      var mod = MODS[id];
+      if (!mod) return;
+      safe(function () { mod.apply(); }, 'apply:' + id);
+      current = { id: id, mod: mod };
+    },
+
+    disposeAll: function () {
+      if (!current) return;
+      safe(function () { current.mod.dispose(); }, 'dispose:' + current.id);
+      current = null;
+    },
+
+    isActive: function (id) { return current !== null && current.id === id; }
+  };
+
+  window.VL_SkinRuntime = runtime;
+})();

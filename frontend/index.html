@@ -8,8 +8,25 @@
   <link rel="stylesheet" href="skins/white_blue.css">
   <link rel="stylesheet" href="skins/Black_Orange.css">
   <link rel="stylesheet" href="skins/Gray_Orange.css">
+  <link rel="stylesheet" href="skins/Maid_Atelier.css">
 </head>
 <body>
+  <!-- 自制标题栏（frame:false） -->
+  <div class="win-titlebar" id="winTitlebar">
+    <span class="win-titlebar__title">Video Lab</span>
+    <div class="win-titlebar__controls">
+      <button class="win-titlebar__btn" data-wctl="min" title="最小化">
+        <svg viewBox="0 0 12 12"><line x1="2" y1="6" x2="10" y2="6" stroke="currentColor" stroke-width="1"/></svg>
+      </button>
+      <button class="win-titlebar__btn" data-wctl="max" title="最大化">
+        <svg class="win-titlebar__svg-max" viewBox="0 0 12 12"><rect x="2.5" y="2.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1"/></svg>
+        <svg class="win-titlebar__svg-restore" viewBox="0 0 12 12" style="display:none"><rect x="2.5" y="3.5" width="6" height="6" fill="none" stroke="currentColor" stroke-width="1"/><path d="M4 3.5V2H9v6H8.5" fill="none" stroke="currentColor" stroke-width="1"/></svg>
+      </button>
+      <button class="win-titlebar__btn win-titlebar__btn--close" data-wctl="close" title="关闭">
+        <svg viewBox="0 0 12 12"><path d="M3 3l6 6M9 3L3 9" stroke="currentColor" stroke-width="1" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
   <!-- 工作路径扫描时的载入遮罩 -->
   <div id="busyOverlay" class="busy-overlay" style="display:none">
     <div class="busy-box">
@@ -32,37 +49,44 @@
 
       <!-- Left Sidebar -->
       <div class="sidebar">
-        <div class="sidebar__header">
-          <span class="sidebar__header-title">项目列表</span>
-          <div class="sidebar__sort">
-            <button class="sort-toggle sort-toggle--active" id="btnSortName" title="按名称排序">名称</button>
-            <button class="sort-toggle" id="btnSortTime" title="按时间排序">时间</button>
+        <div class="sidebar__root">
+          <div class="sidebar__header">
+            <span class="sidebar__header-title">项目列表</span>
+            <div class="sidebar__sort">
+              <button class="sort-toggle sort-toggle--active" id="btnSortName" title="按名称排序">名称</button>
+              <button class="sort-toggle" id="btnSortTime" title="按时间排序">时间</button>
+            </div>
           </div>
-        </div>
-        <div class="sidebar__search">
-          <div class="ds-input">
-            <i data-icon="search" data-size="14"></i>
-            <input type="text" placeholder="搜索配置名..." id="searchInput">
+          <div class="sidebar__search">
+            <div class="ds-input">
+              <i data-icon="search" data-size="14"></i>
+              <input type="text" placeholder="搜索配置名..." id="searchInput">
+            </div>
           </div>
-        </div>
-        <div class="sidebar__tree-wrap">
-          <div class="sidebar__az-index" id="azIndexBar" title="拖动字母快速跳转"></div>
-          <div class="sidebar__tree" id="sidebarTree"></div>
-          <button class="sidebar-menu-btn" id="sidebarMenuBtn" title="菜单">
-            <i data-icon="menu" data-size="20"></i>
-          </button>
-          <div class="sidebar-menu" id="sidebarMenu" style="display:none">
-            <button class="sidebar-menu__item" id="menuRefreshConfigs" title="重新扫描工作路径下的所有配置，并清理重复的外部 * 配置">
-              <i data-icon="refresh-cw" data-size="14"></i>刷新配置列表
+          <div class="sidebar__tree-wrap">
+            <div class="sidebar__az-index" id="azIndexBar" title="拖动字母快速跳转"></div>
+            <div class="sidebar__tree" id="sidebarTree"></div>
+            <div class="sidebar-menu" id="sidebarMenu" style="display:none">
+              <button class="sidebar-menu__item" id="menuRefreshConfigs" title="重新扫描工作路径下的所有配置，并清理重复的外部 * 配置">
+                <i data-icon="refresh-cw" data-size="14"></i>刷新配置列表
+              </button>
+              <button class="sidebar-menu__item" id="menuResetPrecheck" title="重置预检测物理缓存，并对所有配置指向的路径重新预检测">
+                <i data-icon="rotate-ccw" data-size="14"></i>重置预检测缓存
+              </button>
+              <button class="sidebar-menu__item" id="menuChoosePath" title="选择工作路径">
+                <i data-icon="folder" data-size="14"></i>选择路径
+              </button>
+              <button class="sidebar-menu__item" id="menuSettings" title="设置">
+                <i data-icon="settings" data-size="14"></i>设置
+              </button>
+            </div>
+          </div>
+          <div class="sidebar__footer" data-maid-sidebar-footer>
+            <button class="sidebar-menu-btn" id="sidebarToTop" title="跳转至列表顶端" aria-label="跳转至列表顶端">
+              <i data-icon="arrow-up" data-size="20"></i>
             </button>
-            <button class="sidebar-menu__item" id="menuResetPrecheck" title="重置预检测物理缓存，并对所有配置指向的路径重新预检测">
-              <i data-icon="rotate-ccw" data-size="14"></i>重置预检测缓存
-            </button>
-            <button class="sidebar-menu__item" id="menuChoosePath" title="选择工作路径">
-              <i data-icon="folder" data-size="14"></i>选择路径
-            </button>
-            <button class="sidebar-menu__item" id="menuSettings" title="设置">
-              <i data-icon="settings" data-size="14"></i>设置
+            <button class="sidebar-menu-btn" id="sidebarMenuBtn" title="菜单">
+              <i data-icon="menu" data-size="20"></i>
             </button>
           </div>
         </div>
@@ -100,9 +124,6 @@
             <div class="center-bottom" id="centerBottom"></div>
           </div>
 
-          <!-- 预览宽度调节 -->
-          <div class="workspace-resizer" id="workspaceVResizer" title="拖拽调整预览宽度"></div>
-
           <!-- Right Panel: 预览 -->
           <div class="right-panel" id="rightPanel">
             <div class="right-panel__header">
@@ -127,6 +148,20 @@
             </div>
           </div>
 
+          <!-- 预览面板分隔/折叠按钮：细亮金线分隔由 right-panel 左缘 border 承担，
+               按钮独立置于 workspace-body 层、右面板之后（相邻兄弟，
+               保证 hover 区仅为右侧面板区域时按钮可显隐），
+               点击折叠/展开，按住拖动调宽 -->
+          <button class="preview-collapse" id="previewCollapseBtn" title="展开预览面板">
+            <svg class="preview-collapse__icon ico-left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="m15 18-6-6 6-6"/></svg>
+            <svg class="preview-collapse__icon ico-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="m9 18 6-6-6-6"/></svg>
+          </button>
+
+          <!-- 界面右上角圆形折叠按钮：独立于预览栏，始终可见，
+               点击折叠/展开预览栏；颜色风格同侧栏置顶按钮 -->
+          <button class="preview-collapse-round" id="previewCollapseRound" title="展开预览面板">
+            <i data-icon="panel-right" data-size="12"></i>
+          </button>
         </div>
 
         <!-- 配置栏：横跨除左侧项目列表外的整个底部 -->
@@ -185,6 +220,9 @@
   </div>
 
   <script src="icons.js"></script>
+  <script src="titlebar.js"></script>
+  <script src="skins/skin-loader.js"></script>
+  <script src="skins/Maid_Atelier.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

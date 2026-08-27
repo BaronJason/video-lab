@@ -29,6 +29,8 @@
     'play': '<polygon points="6 3 20 12 6 21 6 3"/>',
     'pause': '<rect width="4" height="16" x="6" y="4" rx="1"/><rect width="4" height="16" x="14" y="4" rx="1"/>',
     'chevron-right': '<path d="m9 18 6-6-6-6"/>',
+    'chevron-left': '<path d="m15 18-6-6 6-6"/>',
+    'panel-right': '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M14.5 3v18"/>',
     'video': '<path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/>',
     'search-x': '<path d="m13.5 8.5-5 5"/><path d="m8.5 8.5 5 5"/><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
     'repeat': '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',

@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="skins/white_blue.css">
   <link rel="stylesheet" href="skins/Black_Orange.css">
   <link rel="stylesheet" href="skins/Gray_Orange.css">
+  <link rel="stylesheet" href="skins/Maid_Atelier.css">
   <link rel="stylesheet" href="settings.css">
   <style>
     /* 首次引导窗口：仿设置页布局 + 顶部标题栏与右上角跳过 */
@@ -43,6 +44,14 @@
   </style>
 </head>
 <body>
+<div class="win-titlebar" id="winTitlebar">
+  <span class="win-titlebar__title">Video Lab - 首次设置</span>
+  <div class="win-titlebar__controls">
+    <button class="win-titlebar__btn win-titlebar__btn--close" data-wctl="close" title="关闭">
+      <svg viewBox="0 0 12 12"><path d="M3 3l6 6M9 3L3 9" stroke="currentColor" stroke-width="1" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+</div>
 <div class="settings-shell guide-shell">
   <div class="guide-head">
     <div class="guide-head__title">Video Lab 首次设置</div>
@@ -66,6 +75,7 @@
   </footer>
 </div>
 <script src="icons.js"></script>
+<script src="titlebar.js"></script>
 <script src="guide.js"></script>
 </body>
 </html>

@@ -62,7 +62,7 @@
   --font-family-default: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-family-heading: "SF Pro", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-family-metric: "Inter", "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-family-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-family-mono: "JetBrainsMono Nerd Font Mono", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --font-weight-default: 400;
   --font-weight-code: 450;
   --font-weight-medium: 500;
@@ -1070,7 +1070,7 @@ pre {
   --font-family-default: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-family-heading: "SF Pro", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-family-metric: "Inter", "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-family-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-family-mono: "JetBrainsMono Nerd Font Mono", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --font-weight-default: 400;
   --font-weight-code: 450;
   --font-weight-medium: 500;
@@ -1363,6 +1363,64 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* 自制标题栏（方案A：frame:false 窗口顶部 34px 条）
+   统一组件：标题绝对居中，右侧窗口控制按钮区（最小化/最大化/关闭）
+   拖拽：整条 drag，按钮 no-drag；各页面容器需 padding-top:34px 让位 */
+.win-titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 34px;
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  -webkit-app-region: drag;
+  user-select: none;
+  background: var(--bg-base-default);
+  border-bottom: 1px solid var(--border-neutral-l1);
+}
+.win-titlebar__title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--font-family-default);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 34px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.win-titlebar__controls {
+  margin-left: auto;
+  height: 100%;
+  display: flex;
+  align-items: stretch;
+  -webkit-app-region: no-drag;
+}
+.win-titlebar__btn {
+  width: 46px;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-default);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.win-titlebar__btn:hover { background: var(--bg-overlay-l1); color: var(--text-default-hover); }
+.win-titlebar__btn--close:hover { background: #e81123; color: #ffffff; }
+.win-titlebar svg { width: 13px; height: 13px; display: block; }
+
+/* 自制标题栏为 fixed 顶层，各窗口容器顶部让位 34px */
+.app-shell,
+.settings-shell,
+.guide-shell { padding-top: 34px; }
+
 /* App Shell */
 .app-shell {
   display: flex;
@@ -1484,6 +1542,135 @@ body {
   background: var(--border-neutral-l1);
   transition: background 0.1s ease;
 }
+/* 尺寸拖拽栏已移除；折叠按钮独立位于 workspace-body 层，
+   垂直居中覆盖在右侧面板左缘的细金分隔线上（宽度 16px）；折叠时贴界面右缘 */
+.workspace-body {
+  position: relative;
+}
+.preview-collapse {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 64px;
+  padding: 0;
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: 6px;
+  background: var(--bg-base-secondary);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--text-default) 14%, transparent);
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease, opacity 0.15s ease;
+  z-index: 5;
+}
+/* 热区：按钮本体 + 四周各外扩 12px（方便点按），内部内容不受影响 */
+.preview-collapse::before {
+  content: '';
+  position: absolute;
+  inset: -12px;
+  border-radius: 14px;
+}
+.preview-collapse:hover {
+  background: var(--bg-base-tertiary);
+  color: var(--text-default);
+  border-color: var(--border-neutral-l3);
+}
+.preview-collapse .preview-collapse__icon {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  transform: translate(-50%, -50%);
+  transition: opacity 0.15s ease;
+}
+/* 折叠态（面板隐藏，body[data-preview-collapsed]）：显示朝右箭头（点击展开）
+   ；展开态：显示朝左箭头。两个图标同位叠放、交叉淡出淡入，
+   与面板滑动动画同帧驱动，无 JS 计时错位 */
+.preview-collapse .ico-left { opacity: 0; }
+.preview-collapse .ico-right { opacity: 1; }
+body:not([data-preview-collapsed]) .preview-collapse .ico-left { opacity: 1; }
+body:not([data-preview-collapsed]) .preview-collapse .ico-right { opacity: 0; }
+/* 右侧面板左缘：细亮金线分隔符（皮肤可覆盖为金色调） */
+.right-panel {
+  border-left: 1px solid var(--border-neutral-l2);
+  transition: width 0.3s cubic-bezier(0.22, 0.78, 0.2, 1), opacity 0.3s ease;
+}
+
+/* 折叠态：右侧预览面板水平收起 + 淡出（width/opacity 过渡，替代 display:none
+   以保留展开/收缩动画），仅留分隔线上的窄竖条按钮提示展开 */
+body[data-preview-collapsed] .right-panel {
+  width: 0 !important;
+  min-width: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+/* 折叠动画期间：内容固定宽度不随面板挤压重排，随整体裁剪（避免文字逐行堆叠） */
+body[data-preview-collapsed] .right-panel__header,
+body[data-preview-collapsed] .right-panel__content {
+  min-width: 280px;
+  overflow: hidden;
+}
+
+/* 折叠态：右上角圆形按钮位于搜索栏右上角，搜索栏内右侧让出按钮空位
+   （26px 按钮 + 边界间距，仅折叠时需要；展开态按钮在预览栏标题行上方）。
+   让位 31px：较 40px 向右回 9px，避免空位过大 */
+body[data-preview-collapsed] .center-global-search .ds-input {
+  margin-right: 31px;
+}
+
+/* 界面右上角圆形折叠按钮：独立于预览栏，始终可见（不随预览栏折叠隐藏）；
+   圆形，直径 26px（不超过预览标题栏 36px 高），金边风格同侧栏置顶按钮 */
+.preview-collapse-round {
+  position: absolute;
+  top: 5px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: 50%;
+  background: var(--bg-base-secondary);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--text-default) 14%, transparent);
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease, transform 0.12s ease;
+  z-index: 6;
+}
+.preview-collapse-round:hover {
+  background: var(--bg-base-tertiary);
+  color: var(--text-default);
+  border-color: var(--border-neutral-l3);
+  transform: translateY(-1px);
+}
+.preview-collapse-round .preview-collapse__icon,
+.preview-collapse-round svg { width: 12px; height: 12px; }
+
+/* 预览栏 header 为圆形按钮让位：header 右侧预留 34px 空位，
+   使「外部编辑」按钮不被右上角圆形按钮遮挡 */
+.right-panel__header-right {
+  padding-right: 34px;
+}
+
+/* 展开态（面板可见）：窄竖条按钮常态透明，hover 右侧面板或按钮本体
+   （含 ::before 外扩 12px 热区）时显示；
+   折叠态（面板隐藏）：同样常态透明，仅 hover 按钮热区时浮现提示可展开 */
+body:not([data-preview-collapsed]) .preview-collapse,
+body[data-preview-collapsed] .preview-collapse {
+  opacity: 0;
+}
+body:not([data-preview-collapsed]) .right-panel:hover + .preview-collapse,
+body:not([data-preview-collapsed]) .preview-collapse:hover,
+body[data-preview-collapsed] .preview-collapse:hover {
+  opacity: 1;
+}
 .workspace-resizer:hover,
 .workspace-resizer--active {
   background: var(--brand-hue);
@@ -1524,6 +1711,15 @@ body {
   flex-direction: column;
   background: var(--bg-base-secondary);
   border-right: 1px solid var(--border-neutral-l1);
+  overflow: hidden;
+}
+/* 侧栏内容根（承载皮肤三层渐变背景与 corners z4/mascot z0/内容 z2 层级） */
+.sidebar__root {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
   overflow: hidden;
 }
 .sidebar__header {
@@ -1958,6 +2154,10 @@ body {
   color: var(--text-onaccent);
   transform: translateY(-2px);
 }
+/* 跳转至顶端按钮：与菜单按钮同款式，置于其正上方（间隔 8px） */
+#sidebarToTop {
+  bottom: 58px;
+}
 /* 二级菜单：框体样式（半透明背景 + 浅灰边框 + 阴影），保留自下而上弹出动画 */
 @keyframes sidebar-menu-rise {
   from { opacity: 0; transform: translateY(10px); }
@@ -2011,9 +2211,12 @@ body {
   overflow: hidden;
 }
 
-/* Center Global Search Bar */
+/* Center Global Search Bar：框体高度与右侧预览栏标题行（36px）一致 */
 .center-global-search {
-  padding: var(--spacer-8) var(--spacer-12);
+  display: flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 var(--spacer-12);
   border-bottom: 1px solid var(--border-neutral-l1);
   flex-shrink: 0;
 }
@@ -2984,6 +3187,7 @@ body {
   padding: 0 var(--spacer-12);
   border-bottom: 1px solid var(--border-neutral-l1);
   flex-shrink: 0;
+  white-space: nowrap; /* 折叠动画收缩时禁止换行，文字整体裁剪而非逐行堆叠 */
 }
 .right-panel__title {
   font-family: var(--heading-xs-font-family);
@@ -2997,7 +3201,6 @@ body {
   display: flex;
   align-items: center;
   gap: 2px;
-  margin-left: var(--spacer-8);
   flex-shrink: 0;
 }
 .preview-toggle {
@@ -3053,6 +3256,8 @@ body {
   cursor: pointer;
   font-family: var(--body-base-strong-font-family);
   font-size: var(--body-xs-font-size);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .right-panel__edit:hover {
   background: var(--bg-overlay-l2);

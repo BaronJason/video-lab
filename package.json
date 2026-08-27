@@ -1,6 +1,6 @@
 {
   "name": "video-lab",
-  "version": "1.4.5",
+  "version": "1.4.6",
   "description": "Video Lab — 批量成片项目管理",
   "author": "Video Lab",
   "main": "main.js",

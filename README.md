@@ -8,7 +8,7 @@
 
 <br>
 
-[![版本](https://img.shields.io/badge/版本-1.4.5-0078D7?style=flat-square)](https://github.com/BaronJason/video-lab/releases)
+[![版本](https://img.shields.io/badge/版本-1.4.6-0078D7?style=flat-square)](https://github.com/BaronJason/video-lab/releases)
 ![Platform](https://img.shields.io/badge/平台-Windows%2010%2F11-00A4EF?style=flat-square)
 ![PowerShell](https://img.shields.io/badge/运行时-PowerShell%207-5391FE?style=flat-square)
 ![FFmpeg](https://img.shields.io/badge/FFmpeg-必需-FF7F2A?style=flat-square)
@@ -85,6 +85,23 @@ npm install
 npm start        # 开发运行
 npm run dist     # 打包
 ```
+
+## 皮肤素材来源与许可
+
+内置皮肤「深海女仆（Maid Atelier）」移植自开源皮肤项目 `maid-atelier`（dsh-deep-whale 仓库）：
+
+- 皮肤项目地址：<https://github.com/Small-tailqwq/dsh-deep-whale/tree/main/maid-atelier>
+- 皮肤源码与素材授权协议：知识共享 署名-非商业性使用-相同方式共享 4.0 国际（**[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)**）
+
+按 CC BY-NC-SA 4.0 的署名要求，本皮肤保留完整创作链，原始作者与主页如下：
+
+| 创作层 | 作者 | 说明 | 地址 |
+| --- | --- | --- | --- |
+| 一创 | 上善 | 鲸鱼娘（whale-girl）角色形象原作 | <https://www.pixiv.net/users/62155430> |
+| 二创 | zipzip | 女仆鲸鱼娘二次设计（含 DeepSeek 元素，GPT Image 2 生成） | <https://www.pixiv.net/users/18604994> |
+| 三创（皮肤实现） | Small-tailqwq | DeepSeek 元素再设计与皮肤工程实现 | <https://github.com/Small-tailqwq/dsh-deep-whale> |
+
+依据授权条款：本皮肤素材仅限**非商业性**使用；对包含本皮肤的部分进行再分发或修改时，须以**相同方式共享（ShareAlike）**并保留上述署名与完整创作链。
 
 ## 更新日志
 

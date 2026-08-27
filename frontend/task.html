@@ -7,10 +7,11 @@
   <link rel="stylesheet" href="skins/white_blue.css">
   <link rel="stylesheet" href="skins/Black_Orange.css">
   <link rel="stylesheet" href="skins/Gray_Orange.css">
+  <link rel="stylesheet" href="skins/Maid_Atelier.css">
   <style>
     * { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; }
-    body { display: flex; flex-direction: column; overflow: hidden; }
+    body { display: flex; flex-direction: column; overflow: hidden; padding-top: 34px; }
     .task-header {
       display: flex; align-items: center; gap: 10px;
       padding: 8px 12px; flex-shrink: 0;
@@ -208,6 +209,14 @@
   </style>
 </head>
 <body>
+  <div class="win-titlebar" id="winTitlebar">
+    <span class="win-titlebar__title">Video Lab - 任务</span>
+    <div class="win-titlebar__controls">
+      <button class="win-titlebar__btn win-titlebar__btn--close" data-wctl="close" title="关闭">
+        <svg viewBox="0 0 12 12"><path d="M3 3l6 6M9 3L3 9" stroke="currentColor" stroke-width="1" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
   <div class="task-tabs" id="taskTabs">
     <button class="task-tab task-tab--active" data-tab="running" id="tabRunning">
       <i data-icon="play" data-size="15"></i><span>正在运行</span><span class="task-tab__count" id="cntRunning">0</span>
@@ -228,6 +237,7 @@
     <button class="task-fab" id="taskFab" title="清除列表" style="display:none"><i data-icon="trash-2" data-size="20"></i></button>
   </div>
   <script src="icons.js"></script>
+  <script src="titlebar.js"></script>
   <script src="task.js"></script>
 </body>
 </html>

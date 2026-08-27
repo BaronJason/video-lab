@@ -52,6 +52,7 @@ contextBridge.exposeInMainWorld('txapi', {
   reveal_update_file: () => invoke('reveal_update_file'),
   on_update_available: (cb) => { ipcRenderer.on('update_available', (e, info) => { try { cb(info); } catch (err) {} }); },
   on_update_progress: (cb) => { ipcRenderer.on('update_downloading', (e, info) => { try { cb(info); } catch (err) {} }); },
+  on_update_status: (cb) => { ipcRenderer.on('update_status', (e, text) => { try { cb(text); } catch (err) {} }); },
   on_update_none: (cb) => { ipcRenderer.on('update_none', (e, info) => { try { cb(info); } catch (err) {} }); },
   on_update_error: (cb) => { ipcRenderer.on('update_error', (e, info) => { try { cb(info); } catch (err) {} }); },
   on_update_ready: (cb) => { ipcRenderer.on('update_ready', (e, info) => { try { cb(info); } catch (err) {} }); },
@@ -80,4 +81,11 @@ contextBridge.exposeInMainWorld('txapi', {
   get_skin: () => invoke('get_skin'),
   set_skin: (skin) => invoke('set_skin', skin),
   choose_workdir: () => invoke('choose_workdir'),
+  // 自制标题栏（frame:false）窗口控制
+  window_caps: () => invoke('window_caps'),
+  window_minimize: () => invoke('window_minimize'),
+  window_toggle_maximize: () => invoke('window_toggle_maximize'),
+  window_close: () => invoke('window_close'),
+  listen_window_max: () => { try { ipcRenderer.send('window_max_changed_listen'); } catch (e) {} },
+  on_window_max_changed: (cb) => { ipcRenderer.on('window_max_changed', (e, m) => { try { cb(!!m); } catch (err) {} }); },
 });

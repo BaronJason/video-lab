@@ -7,6 +7,17 @@
   // 图标统一来自 icons.js 全局库（硬约束：不在业务文件维护 ICONS/icon 副本）
   function icon(name, size, cls) { return window.VL_icon ? window.VL_icon(name, size, cls) : ''; }
   function hydrateIcons(root) { if (window.VL_hydrateIcons) window.VL_hydrateIcons(root); }
+  // 局部替换图标：元素内可能已有插入的 svg，直接重建（私有，不污染全局图标库）
+  function hydIcon(el, name) {
+    if (!el) return;
+    var i = el.querySelector('i[data-icon]');
+    if (i) hydIcon(i, name);
+    else {
+      el.innerHTML = icon(name, 14);
+      var svg = el.firstChild;
+      if (svg && svg.setAttribute) { svg.setAttribute('class', 'preview-collapse__icon'); }
+    }
+  }
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
@@ -73,14 +84,23 @@
     expandedProject: null, sortMode: 'name', sortAsc: true, sortTimeDesc: true, rightPreview: true, precheckInvalid: false, logContent: null,
     logFiles: [], activeLogDate: null, activeLogPath: null, selectMode: false, selectedLogPaths: {},
     focusVideo: null, _searchTimer: null, _fromConfig: false, envMissing: [],
-    isPortable: null // 运行时形态：null=未知（按便携处理）/ true=便携 zip / false=setup 安装版
+    isPortable: null, // 运行时形态：null=未知（按便携处理）/ true=便携 zip / false=setup 安装版
+    previewCollapsed: true, // 右侧预览面板默认折叠（仅留拖拽条上的竖条按钮提示展开）
+    previewLastWidth: 300 // 展开时恢复的预览宽度（记忆折叠前的宽度）
   };
   // 复刻虚拟项目：仅含日志无配置，配置名对应复刻模式；REPLICA_MARK 为路由标记，透传回后端
   var REPLICA_PROJECT = '复刻';
   var REPLICA_MARK = 'REPLICA:';
   function $(id) { return document.getElementById(id); }
 
-  function branchNum(s) { var m = /^(\d{2})(\d{2})$/.exec(s || ''); return m ? parseInt(m[1], 10) * 100 + parseInt(m[2], 10) : 0; }
+  // 时间排序键：取标签前 4 位 MMdd 作主键 + 后缀序号（-1/-2/* 等）作细分，0802 与 0802-1 同组但后者排前面
+  function branchNum(s) {
+    var m = /^(\d{2})(\d{2})/.exec(s || '');
+    var main = m ? parseInt(m[1], 10) * 100 + parseInt(m[2], 10) : 0;
+    var n = /[-*](\d+)$/.exec(s || '');
+    var sub = n ? parseInt(n[1], 10) : 0;
+    return main * 100 + sub;
+  }
   // 名称排序：按 azbar 的拼音首字母顺序（A→Z，兜底 # 最后），与 A-Z 索引条一致
   function azRank(name) {
     var L = azInitial(name);
@@ -121,7 +141,7 @@
     var m = /^(\d{2})/.exec(String(label || '').trim());
     return m ? parseInt(m[1], 10) : 0;
   }
-  function buildSidebar(forceAz) {
+  function buildSidebar(forceAz, noBadgeAnim) {
     var tree = $('sidebarTree');
     var html = '';
     sortedProjects().forEach(function (proj) {
@@ -132,8 +152,9 @@
       html += icon('folder', 16, 'tree-project__icon');
       html += escapeHtml(proj.name);
       // 项目名行右侧：展开时显示「共 N 个配置」徽章（复刻虚拟项目无配置则不显示）
+      // 切换配置场景（noBadgeAnim）：徽章加 --static 静止类，不重播滑入动画，与本行其他内容保持一致
       if (proj.name !== REPLICA_PROJECT && expanded) {
-        html += '<span class="tree-project__badge">共 ' + proj.txts.length + ' 个配置</span>';
+        html += '<span class="tree-project__badge' + (noBadgeAnim ? ' tree-project__badge--static' : '') + '">共 ' + proj.txts.length + ' 个配置</span>';
       }
       html += '</div>';
       if (expanded) {
@@ -1005,14 +1026,14 @@
     var name = String(targetPath).replace(/[\\/]+/g, '\\').split('\\').pop().replace(/\.txt$/i, '');
     if (!state.activeProject || !name) return;
     call('list_projects').then(function (projects) {
-      state.projects = projects || []; state.activeTxt = name; buildSidebar();
+      state.projects = projects || []; state.activeTxt = name; buildSidebar(false, true);
       return call('list_versions', state.activeProject, name);
     }).then(function (versions) {
       state.versions = versions || [];
       var t = null;
       for (var i = 0; i < state.versions.length; i++) { if (normalizePath(state.versions[i].path) === targetKey) { t = state.versions[i]; break; } }
       state.activeVersion = t || (state.versions.length ? state.versions[0] : null);
-      state.expandedProject = state.activeProject; buildDateBranches(); buildSidebar();
+      state.expandedProject = state.activeProject; buildDateBranches(); buildSidebar(false, true);
       if (state.activeVersion) loadConfig(state.activeVersion.path); else { state.configData = null; buildCenterBottom(); buildRightPanel(); }
     }).catch(function (e) { setStatus('刷新版本失败：' + e.message); });
   }
@@ -1504,11 +1525,14 @@
   var SKINS = [
     { id: 'white_blue', label: '白蓝', bg: '#F5F5F5', theme: '#4B3FE3' },
     { id: 'Black_Orange', label: '黑橙', bg: '#111113', theme: '#FF6600' },
-    { id: 'Gray_Orange', label: '灰橙', bg: '#333336', theme: '#FF6600' }
+    { id: 'Gray_Orange', label: '灰橙', bg: '#333336', theme: '#FF6600' },
+    { id: 'Maid_Atelier', label: '深海女仆', bg: '#0e1d49', theme: '#c5a468' }
   ];
   function applySkin(id, persist) {
     var target = SKINS.some(function (s) { return s.id === id; }) ? id : SKINS[0].id;
     document.documentElement.setAttribute('data-skin', target);
+    // 皮肤行为层热切换：先 dispose 上一皮肤装饰，再 apply 当前皮肤行为（若有）
+    if (window.VL_SkinRuntime) window.VL_SkinRuntime.sync(target);
     if (persist) call('set_skin', target);
     return target;
   }
@@ -1526,7 +1550,7 @@
   function refreshData(force, busyText, done, skipReflow) {
     if (busyText) showBusy(busyText);
     call('list_projects', force).then(function (projects) {
-      state.projects = projects || []; buildSidebar();
+      state.projects = projects || []; buildSidebar(false, true);
       if (!skipReflow && state.activeProject && state.activeTxt) {
         var foundProj = state.projects.find(function (p) { return p.name === state.activeProject; });
         var foundTxt = foundProj && foundProj.txts.find(function (t) { return t.name === state.activeTxt; });
@@ -1550,7 +1574,7 @@
       if (ml) ml.classList.add('mode-toggle--active');
       if (mf) mf.classList.remove('mode-toggle--active');
       state.expandedProject = project;
-      buildSidebar();
+      buildSidebar(false, true);
       // 点击配置＝用户交互：重建动画中则动画结束再判定，无动画直接判定
       var azB2 = $('azIndexBar');
       if (azB2 && azB2.classList.contains('az-bar--enter')) _azPending = true;
@@ -1570,7 +1594,7 @@
     call('list_versions', project, name).then(function (versions) {
       state.versions = versions || []; state.activeVersion = null;
       if (state.versions.length > 0) { var target = prevLabel ? state.versions.find(function (v) { return v.label === prevLabel; }) : null; state.activeVersion = target || state.versions[0]; }
-      buildSidebar();
+      buildSidebar(false, true);
       // 点击配置＝用户交互：重建动画中则动画结束再判定，无动画直接判定
       var azB3 = $('azIndexBar');
       if (azB3 && azB3.classList.contains('az-bar--enter')) _azPending = true;
@@ -1590,7 +1614,25 @@
       setStatus('已选择:"' + (state.activeVersion && state.activeVersion.path || path) + '"');
     }).catch(function (e) { setStatus('读取配置失败：' + e.message); });
   }
+  // ── 中间配置栏复位到"刚启动"样式 ──
+  // 触发点：点击侧栏品牌名片、或选中配置后收回项目名；无选中时调用为无害空操作。
+  function resetCenterToLaunch() {
+    state.activeProject = null; state.activeTxt = null;
+    state.versions = []; state.activeVersion = null; state.configData = null;
+    state.logContent = null; state.logFiles = []; state.logSearchQuery = '';
+    state.activeLogDate = null; state.activeLogPath = null;
+    state.selectMode = false; state.selectedLogPaths = {};
+    state.mode = 'filelist';
+    state._configOrig = null; state._configOrigSnapshot = null;
+    state._logBranchToken = null;
+    var bar = $('configBar'); if (bar) bar.innerHTML = '';
+    var act = $('sidebarTree').querySelector('.tree-txt-item--active');
+    if (act) act.classList.remove('tree-txt-item--active');
+    buildDateBranches(); buildCenterBottom(); buildRightPanel();
+    setStatus('就绪');
+  }
   function bindStaticEvents() {
+    document.addEventListener('vl:reset-center', function () { resetCenterToLaunch(); });
     $('sidebarTree').addEventListener('scroll', syncAzHighlight);
     $('sidebarTree').addEventListener('click', function (e) {
       var projectHeader = e.target.closest('.tree-project__name');
@@ -1602,9 +1644,16 @@
           // 折叠：项目名反向收回 + azbar 收回；配置区整体从上到下渐隐，重建后仅展开项目下方的项目渐显
           projectHeader.classList.remove('is-filled');
           var bdgFold = projectHeader.querySelector('.tree-project__badge');
-          if (bdgFold) bdgFold.classList.add('tree-project__badge--leave');
+          if (bdgFold) {
+            // 摘除切换配置时加的 --static（animation:none 特异性高于 --leave 的滑出动画），
+            // 让收回时的 az-badge-out 滑出动画正常播放
+            bdgFold.classList.remove('tree-project__badge--static');
+            bdgFold.classList.add('tree-project__badge--leave');
+          }
           if (azBar) azBar.classList.remove('is-show');
           state.expandedProject = null;
+          // 收回项目名时若已选中配置：中间配置栏复位到刚启动样式
+          if (state.activeTxt) resetCenterToLaunch();
           var itemWrap = $('sidebarTree').querySelector('.tree-project__items');
           if (itemWrap) itemWrap.classList.add('tree-project__items--leaving');
           window.setTimeout(function () {
@@ -1629,7 +1678,11 @@
         if (oldHeader) {
           oldHeader.classList.remove('is-filled');
           var bdgOld = oldHeader.querySelector('.tree-project__badge');
-          if (bdgOld) bdgOld.classList.add('tree-project__badge--leave');
+          if (bdgOld) {
+            // 与折叠分支一致：先摘除 --static 再播 --leave 收回动画
+            bdgOld.classList.remove('tree-project__badge--static');
+            bdgOld.classList.add('tree-project__badge--leave');
+          }
         }
         if (oldWrap) oldWrap.classList.add('tree-project__items--leaving');
         var applyExpand = function () {
@@ -1700,6 +1753,13 @@
     // ── 左下角菜单按钮：刷新配置列表 / 选择路径 / 重置预检测缓存 / 设置 ──
     var menuBtn = $('sidebarMenuBtn');
     var menu = $('sidebarMenu');
+    // ── 跳转至列表顶端按钮：平滑滚动到顶部（不打断展开状态） ──
+    var toTopBtn = $('sidebarToTop');
+    if (toTopBtn) toTopBtn.addEventListener('click', function () {
+      var tree = $('sidebarTree');
+      if (!tree) return;
+      tree.scrollTo({ top: 0, behavior: 'smooth' });
+    });
     function closeMenu() { if (menu) menu.style.display = 'none'; }
     if (menuBtn && menu) {
       menuBtn.addEventListener('click', function (e) {
@@ -1746,16 +1806,99 @@
         rz.classList.add('workspace-resizer--active'); document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
       });
     }
-    var vr = $('workspaceVResizer');
     var rp = $('rightPanel');
-    if (vr && rp) {
-      vr.addEventListener('mousedown', function (e) {
+    var collBtn = $('previewCollapseBtn');
+    var roundBtn = $('previewCollapseRound');
+    if (rp && collBtn) {
+      // 按钮定位：16px 宽，中心压住右面板左缘分隔线（right = 面板宽 - 8）；
+      // 折叠(隐藏)时面板宽为 0，按钮整体左移使右边框完整显示在窗口内侧（right 4px）
+      function posCollBtn(w) {
+        var collapsed = document.body.hasAttribute('data-preview-collapsed');
+        if (collapsed && w === undefined) { collBtn.style.right = '4px'; return; }
+        if (w === undefined) w = rp.clientWidth;
+        collBtn.style.right = Math.max(0, w - 8) + 'px';
+      }
+      // 动画化定位：展开/折叠约 300ms 内每帧读取面板实时宽度来定位按钮，
+      // 与面板 width 过渡逐帧同步。起始钳到折叠位 4px：面板宽 <12px 时
+      // （面板左缘尚未越过按钮）按钮保持右缘 4px；≥12px 后随面板左缘平滑左移，
+      // 避免点击瞬间读到宽度 0 导致先跳右缘再走位的视觉错位
+      var _btnAnimFrame = null;
+      function cancelBtnAnim() { if (_btnAnimFrame) { cancelAnimationFrame(_btnAnimFrame); _btnAnimFrame = null; } }
+      function animPosCollBtn() {
+        cancelBtnAnim();
+        var t0 = performance.now();
+        var dur = 300;
+        function step(now) {
+          var p = Math.min(1, (now - t0) / dur);
+          collBtn.style.right = Math.max(4, rp.clientWidth - 8) + 'px';
+          if (p < 1) _btnAnimFrame = requestAnimationFrame(step);
+          else { _btnAnimFrame = null; posCollBtn(); }
+        }
+        _btnAnimFrame = requestAnimationFrame(step);
+      }
+      // 面板展开/收缩有 width 过渡：过渡结束后以最终宽度再对齐一次按钮，
+      // 否则动画期间 clientWidth 读到的是起点值(0)，按钮会停在右缘
+      rp.addEventListener('transitionend', function (e) {
+        if (e.propertyName !== 'width') return;
+        posCollBtn();
+      });
+      // 右侧预览面板展开/折叠：默认折叠（body 标记 data-preview-collapsed，面板整体隐藏）
+      if (state.previewCollapsed) document.body.setAttribute('data-preview-collapsed', '');
+      posCollBtn();
+      // 右侧面板宽度可能被外部代码（如拖拽前记忆恢复）改变，打开时同步一次
+      window.addEventListener('resize', posCollBtn);
+      // 折叠/展开动作（竖条按钮与右上角圆形按钮共用）
+      function togglePreviewCollapsed() {
+        var isCollapsed = document.body.hasAttribute('data-preview-collapsed');
+        if (isCollapsed) {
+          // 展开：恢复记忆宽度
+          document.body.removeAttribute('data-preview-collapsed');
+          rp.style.display = '';
+          var targetW = Math.max(240, state.previewLastWidth || 300);
+          rp.style.width = targetW + 'px';
+          state.previewCollapsed = false;
+          collBtn.setAttribute('title', '折叠预览面板');
+          if (roundBtn) roundBtn.setAttribute('title', '折叠预览面板');
+          // 按钮随面板同速滑到左缘（箭头方向由 CSS 依 body 状态自动交叉淡变）
+          animPosCollBtn();
+        } else {
+          // 折叠：记录当前宽度后隐藏
+          state.previewLastWidth = rp.clientWidth || state.previewLastWidth;
+          document.body.setAttribute('data-preview-collapsed', '');
+          state.previewCollapsed = true;
+          collBtn.setAttribute('title', '展开预览面板');
+          if (roundBtn) roundBtn.setAttribute('title', '展开预览面板');
+          // 箭头方向由 CSS 依 body 状态自动交叉淡变
+          animPosCollBtn();
+        }
+      }
+      // 折叠按钮承载全部交互：点击折叠/展开；按住左右拖动调整预览宽度（替代原拖拽尺寸栏）
+      var _pDragMoved = false; // 持久标志：上一次按下是否发生过拖拽（click 在 mouseup 后触发，需跨事件保留）
+      collBtn.addEventListener('mousedown', function (e) {
+        // 折叠态不响应拖拽（面板已隐藏，宽度由按钮点击控制）
+        if (document.body.hasAttribute('data-preview-collapsed')) return;
         e.preventDefault();
         var startX = e.clientX, startW = rp.clientWidth;
-        function onVMove(ev) { var w = Math.max(240, Math.min(720, startW - (ev.clientX - startX))); rp.style.width = w + 'px'; }
-        function onVUp() { document.removeEventListener('mousemove', onVMove); document.removeEventListener('mouseup', onVUp); vr.classList.remove('workspace-resizer--active'); }
-        vr.classList.add('workspace-resizer--active'); document.addEventListener('mousemove', onVMove); document.addEventListener('mouseup', onVUp);
+        var moved = false;
+        function onVMove(ev) {
+          var dx = ev.clientX - startX;
+          if (Math.abs(dx) > 3) moved = true;
+          if (moved) { var w = Math.max(240, Math.min(720, startW - (ev.clientX - startX))); rp.style.width = w + 'px'; state.previewLastWidth = w; posCollBtn(); }
+        }
+        function onVUp() {
+          document.removeEventListener('mousemove', onVMove);
+          document.removeEventListener('mouseup', onVUp);
+          _pDragMoved = moved;
+        }
+        document.addEventListener('mousemove', onVMove);
+        document.addEventListener('mouseup', onVUp);
       });
+      collBtn.addEventListener('click', function () {
+        // 刚发生拖拽的抬起不再触发折叠/展开
+        if (_pDragMoved) { _pDragMoved = false; return; }
+        togglePreviewCollapsed();
+      });
+      if (roundBtn) roundBtn.addEventListener('click', togglePreviewCollapsed);
     }
   }
   function choosePath() {
@@ -1899,13 +2042,22 @@
     if (!upd) return;
     if (upd.on_update_available) upd.on_update_available(function (info) { showUpdateBanner(info, 'available'); });
     if (upd.on_update_progress) upd.on_update_progress(function (info) {
-      // 下载进行中：提示条最小化到状态栏，任务按钮左侧显示文字与进度条
+      // 下载进行中：提示条最小化到状态栏，任务按钮左侧显示文字与进度条；
+      // 左下角状态栏同步更新，避免停留在「正在连接更新服务器」
       hideUpdateBanner();
       showUpdateMini(info);
+      var p = Math.max(0, Math.min(100, (info && info.percent) || 0));
+      var latest = (info && info.latest) || '';
+      setStatus('正在下载更新' + (latest ? ' v' + latest : '') + ' ' + p + '%');
+    });
+    if (upd.on_update_status) upd.on_update_status(function (text) {
+      // 连接/重试/校验等阶段状态同步到左下角状态栏
+      if (text) setStatus(text);
     });
     if (upd.on_update_downloaded) upd.on_update_downloaded(function (info) {
       hideUpdateMini();
       showUpdateBanner(info, 'downloaded');
+      setStatus('更新包下载完成');
     });
     if (upd.on_update_none) upd.on_update_none(function (info) {
       hideUpdateMini();

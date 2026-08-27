@@ -245,7 +245,7 @@ function createTray() {
 let taskWin = null;
 function createTaskWindow() {
   if (taskWin && !taskWin.isDestroyed()) { taskWin.focus(); return taskWin; }
-  taskWin = new BrowserWindow({ title: 'Video Lab - 任务', width: 760, height: 620, resizable: false, maximizable: false, minimizable: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
+  taskWin = new BrowserWindow({ title: 'Video Lab - 任务', width: 760, height: 620, resizable: false, maximizable: false, minimizable: false, frame: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
   taskWin.loadFile(path.join(__dirname, 'frontend', 'task.html'));
   taskWin.on('closed', () => { taskWin = null; });
   return taskWin;
@@ -256,7 +256,7 @@ function openSettingsWindow() {
   if (settingsWin && !settingsWin.isDestroyed()) { settingsWin.focus(); return settingsWin; }
   // 点击设置按钮时立即让主窗口显示模糊遮罩，与设置窗口出现同步，避免突兀
   if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('settings_window_opened');
-  settingsWin = new BrowserWindow({ title: 'Video Lab - 设置', width: 680, height: 640, resizable: false, maximizable: false, minimizable: false, parent: mainWin, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
+  settingsWin = new BrowserWindow({ title: 'Video Lab - 设置', width: 680, height: 640, resizable: false, maximizable: false, minimizable: false, parent: mainWin, frame: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
   settingsWin.loadFile(path.join(__dirname, 'frontend', 'settings.html'));
   settingsWin.on('blur', handleSettingsBlur);
   // 关闭按钮/X：有未保存修改时拦截，通知设置页在关闭按钮上方弹「取消/确认退出」二级菜单（应用退出路径不受此限制）
@@ -317,6 +317,20 @@ api.onTasksChanged = sendTasksToAll;
 const UPDATE_ENABLED = true;
 const GITHUB_REPO = 'BaronJason/video-lab';
 const UPDATE_API_URL = 'https://api.github.com/repos/' + GITHUB_REPO + '/releases/latest';
+// GitHub 加速前缀链：许多机器直连 GitHub 慢/不稳，更新检查与下载按序尝试各加速站（实测
+// gh-proxy.com 最快），全部不可达最后回退直连；增删/换加速站只需改 UPDATE_PROXIES
+const UPDATE_PROXIES = ['https://gh-proxy.com', 'https://gh-proxy.org'];
+// setup 安装版 electron-updater 的 generic 发布源（对应 package.json 的 publish.url）
+const UPDATE_PUBLISH_URL = 'https://github.com/' + GITHUB_REPO + '/releases/latest/download';
+// 目标为 GitHub 官方域名时生成 [加速1, 加速2, …, 直连] 候选列表，其他地址原样返回单元素
+function accelUrls(url) {
+  if (url && (url.indexOf('https://github.com/') === 0 || url.indexOf('https://api.github.com/') === 0)) {
+    const out = UPDATE_PROXIES.map((p) => p + '/' + url);
+    out.push(url);
+    return out;
+  }
+  return [url];
+}
 const APP_VERSION = (function () { try { return require('./package.json').version || '0.0.0'; } catch (e) { return '0.0.0'; } })();
 let lastUpdateInfo = null; // 最近一次检查结果（含资产信息，供确认后下载使用）
 let updateBusy = false;    // 检查/下载互斥锁：同一时刻仅允许一个更新操作在跑
@@ -418,8 +432,20 @@ async function checkForUpdate(opts) {
   }
   const t0 = Date.now();
   try {
-    const res = await netGet(UPDATE_API_URL, 10000);
-    if (res.status !== 200) throw new Error('HTTP ' + res.status);
+    let res = null;
+    let accelErr = '';
+    for (const cand of accelUrls(UPDATE_API_URL)) {
+      try {
+        res = await netGet(cand, 10000);
+        if (res.status === 200) break;
+        throw new Error('HTTP ' + res.status);
+      } catch (e2) {
+        res = null;
+        accelErr = (e2 && e2.message) || String(e2);
+        writeUpdateLog('检查源不可用：' + cand + ' → ' + accelErr);
+      }
+    }
+    if (!res) throw new Error(accelErr || '检查更新失败');
     const data = JSON.parse(res.body.toString('utf-8'));
     const tag = String(data.tag_name || '').replace(/^v/i, '');
     const assets = Array.isArray(data.assets) ? data.assets : [];
@@ -463,19 +489,36 @@ function sha256File(filePath) {
 }
 // 下载最新便携包到程序根目录（便携版：用户自行关闭应用后解压覆盖）。
 // 支持断点续传 + 自动重试（共 4 次尝试）：网络中断保留部分文件续传，哈希校验失败清空重下
-async function downloadUpdate(info, onProgress) {
+async function downloadUpdate(info, onProgress, onStatus) {
   const dir = projectDir();
   try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
   const zipPath = path.join(dir, 'Video-Lab-' + String(info.latest || '').replace(/^v/i, '') + '-x64-Portable.zip');
   const t0 = Date.now();
   let lastErr = '';
   for (let attempt = 1; attempt <= 4; attempt++) {
+    if (onStatus) {
+      if (attempt === 1) onStatus('正在下载更新（首次尝试）…');
+      else onStatus('下载中断，正在重试（' + attempt + '/4）…');
+    }
     try {
-      const dl = await netDownload(info.url, zipPath, onProgress, info.size);
+      let dl = null;
+      let accelErr = '';
+      for (const cand of accelUrls(info.url)) {
+        try {
+          dl = await netDownload(cand, zipPath, onProgress, info.size);
+          accelErr = '';
+          break;
+        } catch (ep) {
+          accelErr = (ep && ep.message) || String(ep);
+          writeUpdateLog('下载源不可用：' + cand + ' → ' + accelErr);
+        }
+      }
+      if (!dl) throw new Error(accelErr || '下载失败');
       if (dl.complete) return { ok: true, zipPath };
       const size = (() => { try { return fs.statSync(zipPath).size; } catch (e) { return 0; } })();
       // 完整性：优先 sha256（release 资产 digest），无则退回字节数比对
       if (info.sha256) {
+        if (onStatus) onStatus('正在校验更新包完整性…');
         const actual = await sha256File(zipPath);
         if (actual !== String(info.sha256).toLowerCase()) throw new Error('哈希校验失败：期望 ' + String(info.sha256).slice(0, 12) + '… 实际 ' + actual.slice(0, 12) + '…');
       } else if (info.size && size !== info.size) {
@@ -487,7 +530,7 @@ async function downloadUpdate(info, onProgress) {
       lastErr = (e && e.message) || String(e);
       writeUpdateLog('下载失败（尝试 ' + attempt + '/4）：' + lastErr);
       if (/哈希校验失败/.test(lastErr)) { try { fs.unlinkSync(zipPath); } catch (u) {} } // 校验失败：清空重下（续传可能延续损坏）
-      if (attempt < 4) await new Promise((r) => setTimeout(r, 1500)); // 间隔后重试（断点续传）
+      if (attempt < 4) { if (onStatus) onStatus('下载失败（' + lastErr + '），正在重试…'); await new Promise((r) => setTimeout(r, 1500)); } // 间隔后重试（断点续传）
     }
   }
   writeUpdateLog('下载失败：' + lastErr);
@@ -577,6 +620,14 @@ async function runSetupStartUpdate() {
   });
   au.on('update-downloaded', () => {});
   au.on('error', (e) => { writeUpdateLog('electron-updater: ' + (e && e.message)); sendToMain('update_error', { message: e && e.message }); });
+  // 更新源走加速地址（首选 gh-proxy.com）：latest.yml 与安装包都经加速站拉取（generic 源），失败不影响默认源
+  try {
+    const feedUrl = accelUrls(UPDATE_PUBLISH_URL)[0];
+    au.setFeedURL({ provider: 'generic', url: feedUrl });
+    writeUpdateLog('setup 更新源：' + feedUrl);
+  } catch (ef) {
+    writeUpdateLog('setup 设置加速更新源失败（继续使用默认源）：' + ((ef && ef.message) || String(ef)));
+  }
   try {
     const r = await au.checkForUpdates();
     const latest = r && r.updateInfo ? String(r.updateInfo.version || '') : '';
@@ -626,9 +677,15 @@ async function startUpdate() {
     // 操作一开始就给前端反馈（立即出现 0% 状态栏进度，避免"点了没反应"）
     sendToMain('update_downloading', Object.assign({}, lastUpdateInfo || {}, { percent: 0 }));
     // setup 安装版：走 electron-updater 下载 setup 安装包；便携版保持下方 zip 下载逻辑
-    if (!IS_PORTABLE) return await runSetupStartUpdate();
+    if (!IS_PORTABLE) {
+      sendToMain('update_status', '正在连接更新服务器…');
+      return await runSetupStartUpdate();
+    }
     let info = lastUpdateInfo;
-    if (!info || !info.ok || !info.hasUpdate || !info.url) info = await checkForUpdate({ silent: true });
+    if (!info || !info.ok || !info.hasUpdate || !info.url) {
+      sendToMain('update_status', '正在连接更新服务器…');
+      info = await checkForUpdate({ silent: true });
+    }
     if (!info || !info.ok) {
       // 顶层已发 0%：失败必须有收尾事件，否则状态栏进度卡住
       sendToMain('update_error', { message: '检查更新失败：' + ((info && info.error) || '未知错误') });
@@ -642,7 +699,7 @@ async function startUpdate() {
       sendToMain('update_error', { message: 'Release 缺少便携包资产' });
       return { ok: false, error: 'Release 缺少便携包资产' };
     }
-    const dl = await downloadUpdate(info, (p) => sendToMain('update_downloading', Object.assign({}, info, { percent: p })));
+    const dl = await downloadUpdate(info, (p) => sendToMain('update_downloading', Object.assign({}, info, { percent: p })), (text) => sendToMain('update_status', text));
     if (!dl.ok) {
       sendToMain('update_error', { error: dl.error, message: '下载失败：' + dl.error });
       return { ok: false, error: dl.error };
@@ -849,10 +906,30 @@ function registerIpc() {
     const result = await dialog.showOpenDialog(mainWin, { title: '选择要添加的素材路径（文件夹或视频文件）', defaultPath: api.getRoot(), properties: ['openFile', 'openDirectory', 'multiSelections'] });
     return result.canceled || !result.filePaths || result.filePaths.length === 0 ? [] : result.filePaths;
   });
+
+  // ── 自制标题栏（frame:false）窗口控制 ──
+  // 查找请求来源窗口；无来源时回退主窗口
+  function winOf(evt) { return BrowserWindow.fromWebContents(evt.sender) || mainWin; }
+  ipcMain.handle('window_caps', (e) => {
+    const w = winOf(e);
+    return { minimizable: !!w && w.isMinimizable(), maximizable: !!w && w.isMaximizable(), closable: !!w && w.isClosable() };
+  });
+  ipcMain.handle('window_minimize', (e) => { const w = winOf(e); if (w) w.minimize(); return { ok: true }; });
+  ipcMain.handle('window_toggle_maximize', (e) => { const w = winOf(e); if (w) { if (w.isMaximized()) w.unmaximize(); else w.maximize(); } return { ok: true }; });
+  ipcMain.handle('window_close', (e) => { const w = winOf(e); if (w) w.close(); return { ok: true }; });
+  // 最大化状态变化推送给渲染层，用于切换最大化/还原图标
+  ipcMain.on('window_max_changed_listen', (e) => {
+    const w = winOf({ sender: e.sender });
+    if (w) {
+      const emit = () => { try { if (!w.isDestroyed()) w.webContents.send('window_max_changed', w.isMaximized()); } catch (err) {} };
+      w.on('maximize', emit); w.on('unmaximize', emit);
+      emit();
+    }
+  });
 }
 
 function createWindow() {
-  mainWin = new BrowserWindow({ title: 'Video Lab', width: 1360, height: 860, minWidth: 1120, minHeight: 700, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
+  mainWin = new BrowserWindow({ title: 'Video Lab', width: 1360, height: 860, minWidth: 1120, minHeight: 700, frame: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
   mainWin.loadFile(path.join(__dirname, 'frontend', 'index.html'));
   mainWin.on('close', (e) => {
     if (!isQuitting) { e.preventDefault(); mainWin.hide(); }
@@ -866,7 +943,7 @@ let guideWin = null;
 function openGuideWindow() {
   return new Promise((resolve) => {
     if (guideWin && !guideWin.isDestroyed()) { guideWin.focus(); return; }
-    guideWin = new BrowserWindow({ title: 'Video Lab - 首次设置', width: 620, height: 420, resizable: false, maximizable: false, minimizable: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
+    guideWin = new BrowserWindow({ title: 'Video Lab - 首次设置', width: 620, height: 420, resizable: false, maximizable: false, minimizable: false, frame: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
     guideWin.loadFile(path.join(__dirname, 'frontend', 'guide.html'));
     guideWin.on('closed', () => { guideWin = null; resolve(); });
   });

@@ -1,4 +1,4 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 // Video Lab — 设置窗口逻辑（通用设置 / 批量拼接 / 视频复刻）
 'use strict';
 (function () {
@@ -8,7 +8,8 @@
   var THEMES = [
     { id: 'white_blue', label: '白蓝', bg: '#F5F5F5', theme: '#4B3FE3' },
     { id: 'Black_Orange', label: '黑橙', bg: '#111113', theme: '#FF6600' },
-    { id: 'Gray_Orange', label: '灰橙', bg: '#424247', theme: '#FF9500' }
+    { id: 'Gray_Orange', label: '灰橙', bg: '#424247', theme: '#FF9500' },
+    { id: 'Maid_Atelier', label: '深海女仆', bg: '#0e1d49', theme: '#c5a468' }
   ];
   var state = {
     batch: { max_duration: '', max_retry: '', speed_limit: '', txt_prefix: '', producer: '', suffix_mark: '' },

@@ -97,9 +97,11 @@ npm run dist     # 打包
 
 | 创作层 | 作者 | 说明 | 地址 |
 | --- | --- | --- | --- |
-| 一创 | 上善 | 鲸鱼娘（whale-girl）角色形象原作 | <https://www.pixiv.net/users/62155430> |
-| 二创 | zipzip | 女仆鲸鱼娘二次设计（含 DeepSeek 元素，GPT Image 2 生成） | <https://www.pixiv.net/users/18604994> |
-| 三创（皮肤实现） | Small-tailqwq | DeepSeek 元素再设计与皮肤工程实现 | <https://github.com/Small-tailqwq/dsh-deep-whale> |
+| 一创 | 上善（上善无形） | 鲸鱼娘（whale-girl）角色形象原作 | Pixiv：<https://www.pixiv.net/users/62155430> · Bilibili：<https://b23.tv/8h5L4xz> |
+| 二创 | ZipZipPipe | 女仆鲸鱼娘二次设计（含 DeepSeek 元素，GPT Image 2 生成） | Pixiv：<https://www.pixiv.net/users/18604994> · Bilibili：<https://b23.tv/Pnw6nG8> |
+| 三创（皮肤实现） | Small-tailqwq | DeepSeek 元素再设计与皮肤工程实现 | <https://github.com/Small-tailqwq/dsh-deep-whale>（maid-atelier 子目录） |
+
+皮肤工程脚手架来自 [zhu1090093659/dsh-web-ui](https://github.com/zhu1090093659/dsh-web-ui)（作者：Solitude）。
 
 依据授权条款：本皮肤素材仅限**非商业性**使用；对包含本皮肤的部分进行再分发或修改时，须以**相同方式共享（ShareAlike）**并保留上述署名与完整创作链。
 

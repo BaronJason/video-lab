@@ -31,13 +31,22 @@
 
 ```
 Video Lab/
-└─ resources/
-   └─ app/                 # 应用源码
-      ├─ frontend/         # 渲染进程页面与样式（含皮肤 skins/）
-      ├─ main.js           # Electron 主进程
-      ├─ preload.js        # 渲染进程桥接
-      ├─ backend.js        # 后端业务逻辑
-      └─ package.json
+├─ build/               # 打包钩子（afterPack.js）
+├─ frontend/            # 渲染进程页面、样式与脚本
+│  ├─ index.html        # 主窗口页面
+│  ├─ settings.*        # 设置页（html/js/css）
+│  ├─ task.*            # 任务列表（html/js）
+│  ├─ guide.* / preview.html / trayMenu.html / wm_preview.html
+│  ├─ app.js / icons.js / styles.css / titlebar.js
+│  ├─ skins/            # 皮肤（Black_Orange / white_blue / Maid_Atelier + assets）
+│  └─ assets/           # 前端静态资源（内置字体等）
+├─ icon/                # 应用图标
+├─ main.js              # Electron 主进程
+├─ preload.js           # 渲染进程桥接
+├─ backend.js           # 后端业务逻辑
+├─ run.js               # 启动入口（run.js 启动）
+├─ package.json / package-lock.json
+└─ CHANGELOG.md / LICENSE / NOTICE
 ```
 
 > 运行时由 `app.asar` 加载应用源码；修改源码后需用 `@electron/asar` 重新打包才生效。

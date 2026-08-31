@@ -451,3 +451,69 @@ body {
   color: var(--text-onaccent, #fff);
 }
 .update-confirm-pop__btn--primary:hover { background: var(--brand-600); }
+
+/* ═══ 更新日志视图 ═══ */
+/* 直接随右侧视图自然流动，由 .settings-view 整体滚动，不留底部空档 */
+.changelog-box { padding: 0 2px 12px 0; }
+.changelog-box h1 {
+  margin: 2px 0 10px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-default);
+}
+.changelog-box h2 {
+  margin: 18px 0 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-neutral-l1);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-default);
+}
+.changelog-box h3 {
+  margin: 12px 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-brand, var(--brand-600));
+}
+.changelog-box h4 {
+  margin: 10px 0 2px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-default);
+}
+.changelog-box ul {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+}
+.changelog-box li {
+  margin: 3px 0;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+.changelog-box p { margin: 4px 0; color: var(--text-secondary); line-height: 1.55; }
+.changelog-box pre {
+  margin: 6px 0;
+  padding: 8px 10px;
+  background: var(--bg-base-secondary);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-4, 6px);
+  font-family: var(--font-family-mono), Consolas, monospace;
+  font-size: 12px;
+  overflow-x: auto;
+  color: var(--text-default);
+}
+.changelog-hint {
+  color: var(--text-tertiary);
+  font-size: 13px;
+  padding: 8px 0;
+}
+/* 表格 / 行内代码 / 链接 / 引用 */
+.changelog-box table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 13px; }
+.changelog-box th, .changelog-box td { border: 1px solid var(--border-neutral-l2); padding: 6px 10px; text-align: left; color: var(--text-secondary); }
+.changelog-box th { background: var(--bg-overlay-l2); color: var(--text-default); font-weight: 600; }
+.changelog-box code { background: var(--bg-base-secondary); border: 1px solid var(--border-neutral-l1); border-radius: 4px; padding: 1px 5px; font-family: var(--font-family-mono), Consolas, monospace; font-size: 12px; color: var(--text-default); }
+.changelog-box a { color: var(--text-brand, var(--brand-500)); text-decoration: none; }
+.changelog-box a:hover { text-decoration: underline; }
+.changelog-box blockquote { margin: 8px 0; padding: 6px 12px; border-left: 3px solid var(--brand-500); background: var(--bg-overlay-l1); border-radius: 0 6px 6px 0; }
+.changelog-box blockquote p { margin: 2px 0; }
+.changelog-box hr { border: none; border-top: 1px solid var(--border-neutral-l1); margin: 14px 0; }

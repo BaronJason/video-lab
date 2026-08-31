@@ -21,13 +21,29 @@
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
+  // 路径 → 文件名（不含扩展名）；用于水印栏简洁展示
+  function baseNameNoExt(p) {
+    var s = String(p || '').replace(/[\\/]+$/, '');
+    var name = s.replace(/^.*[\\/]/, '');
+    return name.replace(/\.[^.]+$/, '');
+  }
+  // 水印栏行内结构：点击文件名更换水印 + 右侧两个图标按钮（打开文件 / 打开文件夹）
+  function wmRowHtml(wm) {
+    var p = wm ? String(wm) : '';
+    var h = '<div class="config-watermark__row">';
+    if (p) h += '<div class="config-watermark__path" title="' + escapeHtml(p) + '">' + escapeHtml(baseNameNoExt(p)) + '</div>';
+    else h += '<div class="config-watermark__path config-watermark__path--empty" title="点击更换水印">未设置水印</div>';
+    h += '<button type="button" class="config-watermark__btn" data-wm="open" title="打开文件"' + (p ? '' : ' disabled') + '>' + icon('image', 15) + '</button>';
+    h += '<button type="button" class="config-watermark__btn" data-wm="folder" title="打开文件夹"' + (p ? '' : ' disabled') + '>' + icon('folder-open', 15) + '</button>';
+    return h + '</div>';
+  }
   function showDialog(opts) {
     return new Promise(function (resolve) {
       var overlay = document.createElement('div');
       overlay.className = 'modal-overlay';
       var card = document.createElement('div');
       card.className = 'modal-card';
-      var html = '<div class="modal__title">' + escapeHtml(opts.title) + '</div>';
+      var html = '<button type="button" class="modal-close" title="关闭">✕</button><div class="modal__title">' + escapeHtml(opts.title) + '</div>';
       if (opts.message) html += '<div class="modal__message">' + escapeHtml(opts.message) + '</div>';
       html += '<div class="modal__actions">';
       (opts.buttons || []).forEach(function (b) {
@@ -40,8 +56,36 @@
       document.body.appendChild(overlay);
       var done = function (result) { overlay.remove(); resolve(result); };
       overlay.addEventListener('click', function (e) { if (e.target === overlay) done(null); });
+      var closeBtn = card.querySelector('.modal-close');
+      if (closeBtn) closeBtn.addEventListener('click', function () { done(null); });
       var btns = card.querySelectorAll('.modal-btn');
       (opts.buttons || []).forEach(function (b, i) { btns[i].addEventListener('click', function () { done(b.value); }); });
+    });
+  }
+  // 保存归属选择弹窗：每行左侧提示"保存到 XX 项目：<项目名>"，右侧统一「保存」按钮（右对齐、样式一致）
+  function showSaveDestDialog(opts) {
+    return new Promise(function (resolve) {
+      var overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      var card = document.createElement('div');
+      card.className = 'modal-card modal-card--dest';
+      var html = '<button type="button" class="modal-close" title="关闭">✕</button><div class="modal__title">' + escapeHtml(opts.title) + '</div>';
+      if (opts.message) html += '<div class="modal__message">' + escapeHtml(opts.message) + '</div>';
+      html += '<div class="modal__dest-list">';
+      (opts.rows || []).forEach(function (r) {
+        html += '<div class="modal__dest-row"><span class="modal__dest-hint">' + escapeHtml(r.hint) + '</span>';
+        html += '<button type="button" class="modal-btn modal__dest-save">' + escapeHtml(opts.btnLabel || '保存') + '</button></div>';
+      });
+      html += '</div>';
+      card.innerHTML = html;
+      overlay.appendChild(card);
+      document.body.appendChild(overlay);
+      var done = function (result) { overlay.remove(); resolve(result); };
+      overlay.addEventListener('click', function (e) { if (e.target === overlay) done(null); });
+      var closeBtn = card.querySelector('.modal-close');
+      if (closeBtn) closeBtn.addEventListener('click', function () { done(null); });
+      var btns = card.querySelectorAll('.modal__dest-row .modal-btn');
+      (opts.rows || []).forEach(function (r, i) { btns[i].addEventListener('click', function () { done(r.value); }); });
     });
   }
   function showMenu(x, y, items) {
@@ -83,10 +127,14 @@
     configData: null, mode: 'filelist', highlightDup: false, searchQuery: '', logSearchQuery: '',
     expandedProject: null, sortMode: 'name', sortAsc: true, sortTimeDesc: true, rightPreview: true, precheckInvalid: false, logContent: null,
     logFiles: [], activeLogDate: null, activeLogPath: null, selectMode: false, selectedLogPaths: {},
+    logViewMode: 'simple', // 日志预览模式：simple=简化（片段仅显示最后一段文件名）/ raw=完整原始
     focusVideo: null, _searchTimer: null, _fromConfig: false, envMissing: [],
     isPortable: null, // 运行时形态：null=未知（按便携处理）/ true=便携 zip / false=setup 安装版
     previewCollapsed: true, // 右侧预览面板默认折叠（仅留拖拽条上的竖条按钮提示展开）
-    previewLastWidth: 300 // 展开时恢复的预览宽度（记忆折叠前的宽度）
+    previewLastWidth: 320, // 展开时恢复的预览宽度（记忆折叠前的宽度）
+    _sideBeforeLog: false, // 进入日志模式前预览面板是否原本折叠（退出时恢复）
+    precheckBackground: false, // 预检测是否已缩到后台（状态栏 probe-mini 显示进度）
+    _probeActive: false        // 当前是否有一次预检测在进行（防止误点「缩到后台」）
   };
   // 复刻虚拟项目：仅含日志无配置，配置名对应复刻模式；REPLICA_MARK 为路由标记，透传回后端
   var REPLICA_PROJECT = '复刻';
@@ -448,14 +496,14 @@
       if (!logDateHasConfig()) { mf.disabled = true; mf.title = '该日志没有对应日期的配置'; }
     }
   }
-  function buildDateBranches() {
+  function buildDateBranches(silent) {
     var c = $('dateBranches');
     if (state.activeProject === REPLICA_PROJECT) {
-      c.innerHTML = '<span class="date-branch-btn">全部日志</span>';
-      updateModeToggle();
+      // 复刻项目按日志日期分支展示（每个日期=一份复刻日志），便于按天定位成片来源
+      buildLogDateBranches(c, silent);
       return;
     }
-    if (state.mode === 'log') { buildLogDateBranches(c); return; }
+    if (state.mode === 'log') { buildLogDateBranches(c, silent); return; }
     if (!state.activeTxt || state.versions.length === 0) {
       c.innerHTML = '<div class="center-empty" style="padding:var(--spacer-16)">' + icon('arrow-left', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">从左侧选择一个 TXT</span></div>';
       updateModeToggle();
@@ -464,14 +512,14 @@
     var html = '';
     state.versions.forEach(function (v) {
       var active = v.label === state.activeVersion.label;
-      html += '<button class="date-branch-btn' + (active ? ' date-branch-btn--active' : '') + '" data-label="' + escapeHtml(v.label) + '" title="' + escapeHtml(v.path) + '">' + escapeHtml(v.label);
+      html += '<button class="date-branch-btn' + (active ? ' date-branch-btn--active' : '') + (silent ? ' date-branch-btn--static' : '') + '" data-label="' + escapeHtml(v.label) + '" title="' + escapeHtml(v.path) + '">' + escapeHtml(v.label);
       html += '</button>';
     });
     c.innerHTML = html;
     updateModeToggle();
   }
   // 日志模式下：顶部展示该配置的日志文件日期分支（每日期一个），按钮带 data-date 与 data-file
-  function buildLogDateBranches(c) {
+  function buildLogDateBranches(c, silent) {
     if (!state.activeTxt || !state.activeVersion) { c.innerHTML = ''; return; }
     c.innerHTML = '<span class="date-branch-btn">…</span>';
     var token = state.activeProject + '\u0000' + state.activeTxt;
@@ -486,7 +534,8 @@
       var active = fromConfig ? logTargetForVersion(files) : null;
       if (!active && state.activeLogPath) { var hit = files.find(function (f) { return f.path === state.activeLogPath; }); if (hit) active = hit; }
       if (!active && state.activeLogDate) { var hit2 = files.find(function (f) { return f.date === state.activeLogDate; }); if (hit2) active = hit2; }
-      if (!active) active = files[0];
+      // 复刻项目无配置可定位：默认选中最新一天的日志；其余场景回退首个
+      if (!active) active = (state.activeProject === REPLICA_PROJECT && files.length) ? files[files.length - 1] : files[0];
       var had = state.activeLogPath === active.path;
       state.activeLogDate = active.date;
       state.activeLogPath = active.path;
@@ -494,29 +543,27 @@
       files.forEach(function (f) {
         var isActive = f.path === active.path;
         var txt = f.label || f.date;
-        html += '<button class="date-branch-btn' + (isActive ? ' date-branch-btn--active' : '') + '" data-date="' + escapeHtml(f.date) + '" data-file="' + escapeHtml(f.path) + '" title="' + escapeHtml(f.path) + '">' + escapeHtml(txt) + '</button>';
+        html += '<button class="date-branch-btn' + (isActive ? ' date-branch-btn--active' : '') + (silent ? ' date-branch-btn--static' : '') + '" data-date="' + escapeHtml(f.date) + '" data-file="' + escapeHtml(f.path) + '" title="' + escapeHtml(f.path) + '">' + escapeHtml(txt) + '</button>';
       });
       c.innerHTML = html;
       updateModeToggle();
       if (!had && state.mode === 'log' && state.activeTxt) buildCenterBottom();
     }).catch(function () { c.innerHTML = '<span class="date-branch-btn">无日志</span>'; updateModeToggle(); });
   }
-  function buildCenterBottom() {
+  function buildCenterBottom(silent) {
     if (!state.activeTxt || !state.activeVersion) {
       $('centerBottom').innerHTML = '<div class="center-empty">' + icon('file-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">请选择一个日期分支查看内容</span></div>';
       return;
     }
-    if (state.mode === 'log') { buildLogConfigBar(); buildLogList(); }
-    else { buildConfigEditor(); }
-  }
-  function buildConfigEditor() {
+    if (state.mode === 'log') { buildLogConfigBar(); buildLogList(); return; }
     var container = $('centerBottom');
     var data = state.configData;
     if (!data) { container.innerHTML = '<div class="center-empty">' + icon('file-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">正在加载配置…</span></div>'; return; }
     var folders = data.folders || [];
     var excludes = data.excludes || [];
     var watermark = data.watermark || '';
-    var html = '<div class="config-editor">';
+    // 配置间切换（silent）时不给进场动画：与徽章 --static 同思路，避免重建页面时的滑入感
+    var html = '<div class="config-editor' + (silent ? ' config-editor--static' : '') + '">';
     html += '<div class="config-editor__col config-editor__col--paths">';
     html += '<div class="config-path-subheader"><span class="config-path-subheader__sort">排序</span><span class="config-path-subheader__nopoll">取消轮询</span><span class="config-path-subheader__path">路径</span><span class="config-path-subheader__check">预检测结果</span><span class="config-path-subheader__open"></span><span class="config-path-subheader__remove"></span></div>';
     html += '<div class="config-editor__path-list" id="pathList">';
@@ -525,7 +572,7 @@
       html += '<span class="config-path-row__drag" draggable="true" title="按住拖动排序">' + icon('grip-vertical', 14) + '</span>';
       html += '<label class="config-path-row__checkbox" title="勾选 = 不轮询（添加 = 前缀）"><input type="checkbox" class="config-path-row__check" ' + (f.nonround ? 'checked' : '') + '><span class="config-path-row__check-mark"></span></label>';
       html += '<input type="text" class="config-path-row__input" value="' + escapeHtml(f.path) + '" title="' + escapeHtml(f.path) + '">';
-      html += '<span class="config-path-row__precheck precheck--pending" data-index="' + idx + '">检测中…</span>';
+      html += '<span class="config-path-row__precheck" data-index="' + idx + '"><span class="config-path-row__badge precheck--pending">检测中…</span></span>';
       html += '<button class="config-path-row__open" title="打开路径">' + icon('folder-open', 14) + '</button>';
       html += '<button class="config-path-row__remove" title="移除路径">' + icon('x', 14) + '</button></div>';
     });
@@ -542,13 +589,18 @@
     html += '</div>';
     html += '<input type="text" class="config-exclude-input" id="inputExclude" placeholder="输入排除字符串，回车添加" spellcheck="false"></div>';
     html += '<div class="config-editor__col config-editor__col--watermark">';
+    html += '<div class="config-editor__wm-section">';
     html += '<div class="config-editor__col-header">水印 PNG</div>';
     html += '<div class="config-editor__watermark-content">';
-    if (watermark) html += '<div class="config-watermark__path">' + escapeHtml(watermark) + '</div>';
-    else html += '<div class="config-watermark__empty">未设置水印</div>';
-    html += '<button class="config-watermark__change" id="btnChangeWatermark">更换水印</button></div></div>';
+    html += wmRowHtml(watermark);
+    html += '</div></div>';
+    // 框体下半：配置名（标题行 + 内容栏，与其他框体一致）
+    html += '<div class="config-editor__wm-section">';
+    html += '<div class="config-editor__col-header">配置名</div>';
+    html += '<div class="config-editor__wm-field"><input type="text" class="config-bottombar__input config-bottombar__input--name" id="inputConfigName" value="' + escapeHtml((data && data.name) || '') + '"></div></div>';
     html += '</div></div>';
     container.innerHTML = html;
+    bindWatermarkPreview(container);
     buildConfigBar(); bindEditorEvents(); bindResizers(container); bindModifiedWatchers(container); runPrecheck();
     // 仅真正加载配置时（_configOrig 为 null）建立修改基线；局部重建（如水印变更）不重置，保证各部分修改相互独立
     if (state._configOrig === null || state._configOrig === undefined) {
@@ -562,6 +614,31 @@
     }
     refreshConfigModified();
   }
+  // 水印文件名悬浮预览：hover 时经主进程打开独立置顶小窗显示 PNG（可越出主窗口、按图比例自适应），透明 PNG 直接透底显示
+  function bindWatermarkPreview(container) {
+    var shown = false;
+    var lastMove = 0;
+    container.addEventListener('mouseover', function (e) {
+      var t = e.target && e.target.closest ? e.target.closest('.config-watermark__path') : null;
+      if (!t) { if (shown) { call('watermark_preview_hide'); shown = false; } return; }
+      var wm = state.configData && state.configData.watermark ? String(state.configData.watermark) : '';
+      if (!wm) return;
+      call('watermark_preview_move', e.clientX, e.clientY); // 先定位再显示，避免窗口先在默认位置闪现
+      call('watermark_preview_show', wm);
+      shown = true;
+    });
+    container.addEventListener('mousemove', function (e) {
+      if (!shown) return;
+      var now = Date.now();
+      if (now - lastMove < 16) return; // 约 60fps：平滑跟随（位置由主进程按真实光标计算，尺寸有 resizeGuard 兜底）
+      lastMove = now;
+      call('watermark_preview_move', e.clientX, e.clientY);
+    });
+    container.addEventListener('mouseleave', function () {
+      if (shown) { call('watermark_preview_hide'); shown = false; }
+    });
+  }
+
   function buildConfigBar() {
     var bar = $('configBar');
     if (!bar) return;
@@ -575,8 +652,7 @@
     html += '<div class="config-bar__right">';
     html += '<span class="config-bottombar__warn" id="configWarnMark" style="display:none">有不合格路径</span>';
     html += '<span class="config-bottombar__modified" id="configModifiedHint" style="display:none">配置发生改变</span>';
-    html += '<label class="config-bottombar__label">配置名</label>';
-    html += '<input type="text" class="config-bottombar__input config-bottombar__input--name" id="inputConfigName" value="' + escapeHtml(name) + '">';
+    html += '<span class="config-bottombar__error config-bottombar__error--inline" id="watermarkFlagError" style="display:none">水印错误</span>';
     html += '<button class="config-btn config-btn--save" id="btnSaveConfig">' + icon('save', 14) + '覆盖当前配置</button>';
     html += '<button class="config-btn config-btn--save-today" id="btnSaveToday">' + icon('calendar-plus', 14) + '保存为当日配置</button>';
     html += '<button class="config-btn config-btn--run" id="btnRunScript">' + icon('play', 14) + '启动脚本</button></div>';
@@ -614,6 +690,7 @@
     var orig = state._configOrig || {};
     // 路径行：文字变化 → 输入框边框红；仅被拖动的行且不在原位 → 该行整行红
     document.querySelectorAll('.config-path-row').forEach(function (row, i) {
+      if (row.dataset.deleted === '1') { row.classList.remove('is-modified-row', 'config-path-row--invalid-moved'); return; } // 软删除行不参与修改检测
       var inp = row.querySelector('.config-path-row__input');
       var origText = row.getAttribute('data-orig') || '';
       if (inp) inp.classList.toggle('is-modified-input', String(inp.value || '').trim() !== origText.trim());
@@ -792,6 +869,7 @@
     var folders = [];
     var list = $('pathList');
     if (list) list.querySelectorAll('.config-path-row').forEach(function (row) {
+      if (row.dataset.deleted === '1') return; // 软删除行不计入，保存时视为硬删除
       var input = row.querySelector('.config-path-row__input');
       var chk = row.querySelector('.config-path-row__check');
       var p = input.value.trim();
@@ -825,6 +903,7 @@
     precheckDebounceTimer = setTimeout(runPrecheckNow, PRECHECK_DEBOUNCE_MS);
   }
   function runPrecheckNow() {
+    assertWatermark(); // 选中配置进行预检测时联动水印归属判定
     var list = $('pathList');
     if (!list) return;
     var rows = list.querySelectorAll('.config-path-row');
@@ -840,27 +919,33 @@
     if (paths.length === 0) return;
     call('precheck', paths, excludes).then(function (results) {
       results = results || [];
+      var anyWarn = false;
       rows.forEach(function (row, i) {
+        if (row.dataset.deleted === '1') return; // 软删除行不参与预检测判定
         var r = results[i] || { status: 'pending', text: '未检测' };
         row.classList.toggle('config-path-row--invalid', r.status === 'warn');
+        if (r.status === 'warn') anyWarn = true;
         var span = row.querySelector('.config-path-row__precheck');
+        var badge = span ? span.querySelector('.config-path-row__badge') : null;
         var cls = 'precheck--pending';
         if (r.status === 'ok') cls = 'precheck--ok';
         else if (r.status === 'warn') cls = 'precheck--warn';
         else if (r.status === 'group') cls = 'precheck--group';
-        span.className = 'config-path-row__precheck ' + cls;
-        span.textContent = r.text || '';
+        if (badge) { badge.className = 'config-path-row__badge ' + cls; badge.textContent = r.text || ''; }
+        else { span.className = 'config-path-row__precheck ' + cls; span.textContent = r.text || ''; }
       });
       var def = (results.length && results[0] && results[0].total) ? String(results[0].total) : '';
       var filmInput = $('inputFilmCount');
       if (filmInput) filmInput.value = def;
-      state.precheckInvalid = results.some(function (r) { return r && r.status === 'warn'; });
+      state.precheckInvalid = anyWarn;
       applyPrecheckValidity();
     }).catch(function () {
       rows.forEach(function (row) {
+        if (row.dataset.deleted === '1') return;
         var span = row.querySelector('.config-path-row__precheck');
-        span.className = 'config-path-row__precheck precheck--warn';
-        span.textContent = '检测失败';
+        var badge = span ? span.querySelector('.config-path-row__badge') : null;
+        if (badge) { badge.className = 'config-path-row__badge precheck--warn'; badge.textContent = '检测失败'; }
+        else { span.className = 'config-path-row__precheck precheck--warn'; span.textContent = '检测失败'; }
       });
       state.precheckInvalid = true;
       applyPrecheckValidity();
@@ -875,9 +960,24 @@
     var dragged = null;
     var container = $('centerBottom');
     function onContainerClick(e) {
-      var t = e.target.closest('button, .config-path-row__open, .config-path-row__remove');
+      var t = e.target.closest('button, .config-path-row__open, .config-path-row__remove, .config-watermark__path');
       if (!t) return;
-      if (t.classList.contains('config-path-row__remove')) { t.closest('.config-path-row').remove(); updatePathCount(); runPrecheck(); refreshPreviewIfModified(); }
+      if (t.classList.contains('config-path-row__remove')) {
+        // 软删除：第一次点击标记删除（按钮变恢复），再次点击取消删除；保存配置后视为硬删除
+        var pRow = t.closest('.config-path-row');
+        if (pRow.dataset.deleted === '1') {
+          delete pRow.dataset.deleted;
+          pRow.classList.remove('is-path-deleted');
+          t.innerHTML = icon('x', 14);
+          t.title = '移除路径';
+        } else {
+          pRow.dataset.deleted = '1';
+          pRow.classList.add('is-path-deleted');
+          t.innerHTML = icon('repeat', 14);
+          t.title = '恢复该路径';
+        }
+        updatePathCount(); runPrecheck(); refreshPreviewIfModified(); refreshConfigModified();
+      }
       else if (t.classList.contains('config-path-row__open')) { var input = t.closest('.config-path-row').querySelector('.config-path-row__input'); call('open_path', input.value.trim()); }
       else if (t.classList.contains('config-exclude-row__remove')) {
         var exRow = t.closest('.config-exclude-row');
@@ -897,24 +997,40 @@
         updateExcludeCount(); runPrecheck(); refreshPreviewIfModified(); refreshConfigModified();
       }
       else if (t.id === 'btnAddPath') { addPathField(); }
-      else if (t.id === 'btnChangeWatermark') { changeWatermark(); }
+      else if (t.classList.contains('config-watermark__path')) { changeWatermark(); } // 点击水印文件名 = 更换水印
+      else if (t.classList.contains('config-watermark__btn')) {
+        var wmV = state.configData && state.configData.watermark ? String(state.configData.watermark) : '';
+        if (t.dataset.wm === 'open' && wmV) call('open_path', wmV);
+        else if (t.dataset.wm === 'folder' && wmV) call('open_parent', wmV);
+      }
     }
     container.removeEventListener('click', container._delegatedClick);
     container._delegatedClick = onContainerClick;
     container.addEventListener('click', container._delegatedClick);
-    // 排除字段右键菜单：硬删除该字段
+    // 排除字段/路径行右键菜单：移除（硬删除）；（水印栏右键菜单已移除，改由行内按钮承担）
     container.removeEventListener('contextmenu', container._delegatedCtx);
     container._delegatedCtx = function (e) {
       var exRow = e.target.closest('.config-exclude-row');
-      if (!exRow) return;
+      var pRow = e.target.closest('.config-path-row');
+      if (!exRow && !pRow) return;
       e.preventDefault();
-      showMenu(e.clientX, e.clientY, [{
-        label: '移除',
-        action: function () {
-          exRow.remove();
-          updateExcludeCount(); runPrecheck(); refreshPreviewIfModified(); refreshConfigModified();
-        }
-      }]);
+      if (exRow) {
+        showMenu(e.clientX, e.clientY, [{
+          label: '移除',
+          action: function () {
+            exRow.remove();
+            updateExcludeCount(); runPrecheck(); refreshPreviewIfModified(); refreshConfigModified();
+          }
+        }]);
+      } else {
+        showMenu(e.clientX, e.clientY, [{
+          label: '移除',
+          action: function () {
+            pRow.remove();
+            updatePathCount(); runPrecheck(); refreshPreviewIfModified(); refreshConfigModified();
+          }
+        }]);
+      }
     };
     container.addEventListener('contextmenu', container._delegatedCtx);
     var exInput = $('inputExclude');
@@ -977,7 +1093,7 @@
     var idx = $('pathList').querySelectorAll('.config-path-row').length;
     var row = document.createElement('div');
     row.className = 'config-path-row'; row.dataset.index = idx;
-    row.innerHTML = '<span class="config-path-row__drag" draggable="true" title="按住拖动排序">' + icon('grip-vertical', 14) + '</span><label class="config-path-row__checkbox" title="勾选 = 不轮询（添加 = 前缀）"><input type="checkbox" class="config-path-row__check"><span class="config-path-row__check-mark"></span></label><input type="text" class="config-path-row__input" value="' + escapeHtml(p) + '" title="' + escapeHtml(p) + '"><span class="config-path-row__precheck precheck--pending">检测中…</span><button class="config-path-row__open" title="打开路径">' + icon('folder-open', 14) + '</button><button class="config-path-row__remove" title="移除路径">' + icon('x', 14) + '</button>';
+    row.innerHTML = '<span class="config-path-row__drag" draggable="true" title="按住拖动排序">' + icon('grip-vertical', 14) + '</span><label class="config-path-row__checkbox" title="勾选 = 不轮询（添加 = 前缀）"><input type="checkbox" class="config-path-row__check"><span class="config-path-row__check-mark"></span></label><input type="text" class="config-path-row__input" value="' + escapeHtml(p) + '" title="' + escapeHtml(p) + '"><span class="config-path-row__precheck"><span class="config-path-row__badge precheck--pending">检测中…</span></span><button class="config-path-row__open" title="打开路径">' + icon('folder-open', 14) + '</button><button class="config-path-row__remove" title="移除路径">' + icon('x', 14) + '</button>';
     $('pathList').appendChild(row);
     updatePathCount(); runPrecheck(); refreshPreviewIfModified();
   }
@@ -986,54 +1102,115 @@
       (paths || []).forEach(function (p) { addPathRow(p); });
     }).catch(function (e) { setStatus('添加路径失败：' + e.message); });
   }
+  // 水印归属警告开关（红字 + 水印上半区浅红底一并控制，下半配置名框不受影响）
+  function setWatermarkError(on) {
+    var flag = $('watermarkFlagError'); if (flag) flag.style.display = on ? '' : 'none';
+    var sec = document.querySelector('.config-editor__col--watermark .config-editor__wm-section');
+    if (sec) sec.classList.toggle('is-watermark-error', !!on);
+  }
+  // 水印归属判定（可传路径；不传则读当前配置），token 防竞态：仅应用最新一次判定结果
+  var _wmCheckToken = 0;
+  function assertWatermark(wm) {
+    var w = (wm !== undefined) ? wm : (state.configData ? (state.configData.watermark || '') : '');
+    if (!state.activeProject || !w) { setWatermarkError(false); return; }
+    var token = ++_wmCheckToken;
+    call('check_watermark_project', state.activeProject, w).then(function (res) {
+      if (token !== _wmCheckToken) return;
+      setWatermarkError(res && res.inProject === false);
+    }).catch(function () { if (token === _wmCheckToken) setWatermarkError(false); });
+  }
   function changeWatermark() {
       call('pick_watermark').then(function (p) {
         if (!p) return;
         state.configData.watermark = p;
-        // 局部更新水印区内容（按钮无需重绑：容器级 click 委托按 id 命中 changeWatermark，重复直接绑定会弹两次）
+        // 更换后立刻用新水印重新判定：项目内移除警告，仍出界则保留
+        assertWatermark(p);
+        // 局部更新水印区内容（点击更换按钮后整体重绘行结构）
         var wc = document.querySelector('.config-editor__col--watermark .config-editor__watermark-content');
-        if (wc) {
-          wc.innerHTML = (p
-            ? '<div class="config-watermark__path">' + escapeHtml(p) + '</div><button class="config-watermark__change" id="btnChangeWatermark">更换水印</button>'
-            : '<div class="config-watermark__empty">未设置水印</div><button class="config-watermark__change" id="btnChangeWatermark">更换水印</button>');
-        }
+        if (wc) { wc.innerHTML = wmRowHtml(p); }
         refreshPreviewIfModified();
         refreshConfigModified();
       });
     }
+  // 归属确认：当前水印命中其他项目主流时，弹窗让用户选择保存到的目标项目；未命中/取消 → 留在当前项目
+  function resolveDestProject() {
+    var wmV = state.configData && state.configData.watermark ? String(state.configData.watermark) : '';
+    if (!wmV || !state.activeProject) return Promise.resolve(state.activeProject);
+    return call('find_watermark_project', state.activeProject, wmV).then(function (r) {
+      r = r || {};
+      var hits = (r.hits || []).filter(function (h) { return h !== state.activeProject; });
+      if (!hits.length) return state.activeProject; // 无其他项目命中：现状
+      // 行式选择：每行左侧提示"保存到 XX 项目：<项目名>"，右侧统一「保存」按钮
+      var rows = [{ hint: '保存到原始项目：' + state.activeProject, value: state.activeProject }];
+      hits.forEach(function (h) { rows.push({ hint: '保存到新项目：' + h, value: h }); });
+      var message = hits.length === 1
+        ? '当前水印与项目「' + hits[0] + '」的主流水印一致。\n保存的内容将归属到哪个项目？'
+        : '该水印在多个项目中均为主流水印，请选择归属项目：';
+      return showSaveDestDialog({ title: '水印归属提示', message: message, rows: rows }).then(function (v) { return v == null ? state.activeProject : v; });
+    }).catch(function () { return state.activeProject; });
+  }
+  // 另存到其他项目：目标项目已有同名配置 → 覆盖其最新版本；无 → 保存为当日配置（原文件保留）
+  function saveAsToProject(dest, ed) {
+    var nm = ($('inputConfigName') ? $('inputConfigName').value.trim() : '') || state.activeTxt;
+    return call('list_versions', dest, nm).then(function (vs) {
+      if (vs && vs.length) {
+        return call('save_config', vs[0].path, ed.folders, ed.excludes, ed.watermark).then(function (r) {
+          return { ok: !!(r && r.ok), path: vs[0].path };
+        });
+      }
+      return call('save_config_today', dest, nm, nm, ed.folders, ed.excludes, ed.watermark).then(function (r) {
+        return { ok: !!(r && r.ok), path: r.path };
+      });
+    });
+  }
   function saveConfig() {
     if (!state.configData) return;
     var ed = getEditorState();
     var path = state.configData.path;
-    showDialog({ title: '确认覆盖', message: '将覆盖原文件：\n' + path + '\n是否继续？', buttons: [ { label: '取消', value: false }, { label: '确认覆盖', value: true, danger: true, primary: true } ] }).then(function (ok) {
-      if (!ok) { setStatus('已取消保存'); return; }
-      call('save_config', path, ed.folders, ed.excludes, ed.watermark).then(function (r) {
-        if (r && r.ok) { setStatus('已保存：' + path); refreshData(); document.querySelectorAll('.config-exclude-row[data-deleted="1"]').forEach(function (rr) { rr.remove(); }); state._configOrigSnapshot = configSnapshot(); refreshConfigModified(); } else setStatus('保存失败：' + ((r && r.error) || '未知错误'));
-      }).catch(function (e) { setStatus('保存失败：' + e.message); });
+    resolveDestProject().then(function (dest) {
+      if (dest !== state.activeProject) {
+        // 另存到其他项目：原文件保留
+        saveAsToProject(dest, ed).then(function (r) {
+          if (r.ok) { setStatus('已另存到项目「' + dest + '」：' + r.path); refreshData(); }
+          else setStatus('保存失败：' + ((r && r.error) || '未知错误'));
+        }).catch(function (e) { setStatus('保存失败：' + e.message); });
+        return;
+      }
+      showDialog({ title: '确认覆盖', message: '将覆盖原文件：\n' + path + '\n是否继续？', buttons: [ { label: '取消', value: false }, { label: '确认覆盖', value: true, danger: true, primary: true } ] }).then(function (ok) {
+        if (!ok) { setStatus('已取消保存'); return; }
+        call('save_config', path, ed.folders, ed.excludes, ed.watermark).then(function (r) {
+          if (r && r.ok) { setStatus('已保存：' + path); refreshData(); document.querySelectorAll('.config-exclude-row[data-deleted="1"]').forEach(function (rr) { rr.remove(); }); document.querySelectorAll('.config-path-row[data-deleted="1"]').forEach(function (rr) { rr.remove(); }); state._configOrigSnapshot = configSnapshot(); refreshConfigModified(); } else setStatus('保存失败：' + ((r && r.error) || '未知错误'));
+        }).catch(function (e) { setStatus('保存失败：' + e.message); });
+      });
     });
   }
   function saveConfigToday() {
     if (!state.activeProject || !state.activeTxt) return;
     var ed = getEditorState();
     var configName = $('inputConfigName').value.trim() || state.activeTxt;
-    call('save_config_today', state.activeProject, state.activeTxt, configName, ed.folders, ed.excludes, ed.watermark).then(function (r) {
-      if (r && r.ok) { setStatus('已保存为当日配置：' + r.path); jumpToVersionPath(r.path); } else setStatus('保存失败：' + ((r && r.error) || '未知错误'));
-    }).catch(function (e) { setStatus('保存失败：' + e.message); });
+    resolveDestProject().then(function (dest) {
+      call('save_config_today', dest, state.activeTxt, configName, ed.folders, ed.excludes, ed.watermark).then(function (r) {
+        if (r && r.ok) { setStatus('已保存为当日配置：' + r.path); jumpToVersionPath(r.path, dest); } else setStatus('保存失败：' + ((r && r.error) || '未知错误'));
+      }).catch(function (e) { setStatus('保存失败：' + e.message); });
+    });
   }
   function normalizePath(p) { return String(p || '').replace(/[\\/]+/g, '\\').toLowerCase(); }
-  function jumpToVersionPath(targetPath) {
+  function jumpToVersionPath(targetPath, proj) {
     var targetKey = normalizePath(targetPath);
     var name = String(targetPath).replace(/[\\/]+/g, '\\').split('\\').pop().replace(/\.txt$/i, '');
-    if (!state.activeProject || !name) return;
+    var pr = proj || state.activeProject;
+    if (!pr || !name) return;
     call('list_projects').then(function (projects) {
-      state.projects = projects || []; state.activeTxt = name; buildSidebar(false, true);
-      return call('list_versions', state.activeProject, name);
+      state.projects = projects || []; state.activeTxt = name; state.activeProject = pr; buildSidebar(false, true);
+      return call('list_versions', pr, name);
     }).then(function (versions) {
       state.versions = versions || [];
       var t = null;
       for (var i = 0; i < state.versions.length; i++) { if (normalizePath(state.versions[i].path) === targetKey) { t = state.versions[i]; break; } }
       state.activeVersion = t || (state.versions.length ? state.versions[0] : null);
-      state.expandedProject = state.activeProject; buildDateBranches(); buildSidebar(false, true);
+      if (pruneEmptyTxt(pr, name, state.versions)) return;
+      syncTxtCount(pr, name, state.versions);
+      state.expandedProject = pr; buildDateBranches(); buildSidebar(false, true);
       if (state.activeVersion) loadConfig(state.activeVersion.path); else { state.configData = null; buildCenterBottom(); buildRightPanel(); }
     }).catch(function (e) { setStatus('刷新版本失败：' + e.message); });
   }
@@ -1048,12 +1225,15 @@
     if (!state.activeProject || !state.activeTxt) return;
     var ed = getEditorState();
     var configName = $('inputConfigName').value.trim() || state.activeTxt;
-    call('save_config_today', state.activeProject, state.activeTxt, configName, ed.folders, ed.excludes, ed.watermark).then(function (saved) {
-      if (!saved || !saved.ok) { setStatus('保存失败：' + ((saved && saved.error) || '未知错误')); return; }
-      setStatus('已保存并启动脚本：' + saved.path);
-      call('run_batch', saved.path, count, group).then(function (r) { if (!(r && r.ok)) setStatus('启动失败：' + ((r && r.error) || '未知错误')); });
-      jumpToVersionPath(saved.path);
-    }).catch(function (e) { setStatus('启动失败：' + e.message); });
+    resolveDestProject().then(function (dest) {
+      call('save_config_today', dest, state.activeTxt, configName, ed.folders, ed.excludes, ed.watermark).then(function (saved) {
+        if (!saved || !saved.ok) { setStatus('保存失败：' + ((saved && saved.error) || '未知错误')); return; }
+        setStatus('已保存并启动脚本：' + saved.path);
+        // 水印归属在选中配置预检测时已判定并提示，此处不再阻断启动
+        call('run_batch', saved.path, count, group).then(function (r) { if (!(r && r.ok)) setStatus('启动失败：' + ((r && r.error) || '未知错误')); });
+        jumpToVersionPath(saved.path, dest);
+      }).catch(function (e) { setStatus('启动失败：' + e.message); });
+    });
   }
   // 展开成片时对其片段列表做一次存在性预检测，不存在的片段标记变红
   function precheckClips(entry) {
@@ -1094,7 +1274,7 @@
         var e = entries[i];
         if (e.offsetTop + e.offsetHeight >= st && e.offsetTop <= st + viewH) { found = e; break; }
       }
-      if (found) scrollLogRightTo(logRowFor(found.getAttribute('data-video'), found.getAttribute('data-log-path')) || 0);
+      if (found) highlightLogBlock(logRowFor(found.getAttribute('data-video'), found.getAttribute('data-log-path')) || 0, found.getAttribute('data-video'), found.getAttribute('data-log-path'));
     };
   }
   function buildLogList() {
@@ -1102,7 +1282,10 @@
     container.innerHTML = '<div class="center-empty">' + icon('scroll-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">正在加载日志…</span></div>';
     // 按当前选中的日志分支（精确到日志文件）定位查询目录，切换分支后取对应日志成片
     var probeLog = null;
-    if (state.activeLogPath) probeLog = state.activeLogPath;
+    if (state.activeProject === REPLICA_PROJECT) {
+      // 复刻：聚合全部复刻日志，所属日期在下文按分支日志文件过滤
+      probeLog = state.activeVersion.path;
+    } else if (state.activeLogPath) probeLog = state.activeLogPath;
     else if (state.activeLogDate) {
       var pf = (state.logFiles || []).find(function (f) { return f.date === state.activeLogDate; });
       if (pf) probeLog = pf.path;
@@ -1324,12 +1507,49 @@
     if (ed.watermark && ed.watermark.trim()) { out.push(''); out.push(ed.watermark.trim()); }
     return out;
   }
+  // 右侧预览栏模式切换按钮组：配置模式显示「实时/原始」，日志模式显示「简化/原始」，与当前模式同步
+  function syncRightToggle() {
+    var isLog = state.mode === 'log';
+    ['btnPreviewModified', 'btnPreviewRaw'].forEach(function (id) { var el = $(id); if (el) { el.style.display = isLog ? 'none' : ''; el.classList.toggle('preview-toggle--active', id === 'btnPreviewModified' ? !!state.rightPreview : !state.rightPreview); } });
+    ['btnLogSimple', 'btnLogRaw'].forEach(function (id) { var el = $(id); if (el) { el.style.display = isLog ? '' : 'none'; el.classList.toggle('preview-toggle--active', id === 'btnLogSimple' ? state.logViewMode === 'simple' : state.logViewMode === 'raw'); } });
+  }
+  // 退出日志模式时恢复预览面板折叠（仅当进入日志前本就折叠）
+  function restorePreviewFromLog() {
+    if (!state._sideBeforeLog) return;
+    state._sideBeforeLog = false;
+    var rp1 = $('rightPanel');
+    if (rp1) state.previewLastWidth = rp1.clientWidth || state.previewLastWidth;
+    document.body.setAttribute('data-preview-collapsed', '');
+    state.previewCollapsed = true;
+    var rb1 = $('previewCollapseRound'); if (rb1) rb1.setAttribute('title', '展开预览面板');
+  }
+  // 强制折叠右侧预览面板（点击品牌名片复位时使用，回到启动态）
+  function collapsePreviewPanel() {
+    var rp = $('rightPanel');
+    if (rp) state.previewLastWidth = rp.clientWidth || state.previewLastWidth;
+    document.body.setAttribute('data-preview-collapsed', '');
+    state.previewCollapsed = true;
+    state._sideBeforeLog = false;
+    var rb = $('previewCollapseRound'); if (rb) rb.setAttribute('title', '展开预览面板');
+  }
   function buildRightPanel() {
     var lineNumbers = $('rightLineNumbers');
     var code = $('rightCode');
     var subtitle = $('rightPanelSubtitle');
-    var toggle = document.querySelector('.right-panel__toggle');
-    if (toggle) toggle.style.display = state.mode === 'log' ? 'none' : '';
+    syncRightToggle();
+    // 进入日志模式自动展开右侧预览面板；退出日志模式恢复到进入前状态
+    if (state.mode === 'log') {
+      if (document.body.hasAttribute('data-preview-collapsed')) {
+        state._sideBeforeLog = true;
+        var rp0 = $('rightPanel');
+        document.body.removeAttribute('data-preview-collapsed');
+        if (rp0) { rp0.style.display = ''; rp0.style.width = Math.max(240, state.previewLastWidth || 320) + 'px'; }
+        state.previewCollapsed = false;
+        var rb0 = $('previewCollapseRound'); if (rb0) rb0.setAttribute('title', '折叠预览面板');
+      }
+    } else if (state._sideBeforeLog) {
+      restorePreviewFromLog();
+    }
     if (!state.activeTxt || !state.activeVersion) { lineNumbers.innerHTML = ''; code.innerHTML = ''; subtitle.textContent = '请选择一个日期分支'; return; }
     if (state.mode === 'log') { buildLogRightPanel(); return; }
     if (!state.configData) { lineNumbers.innerHTML = ''; code.innerHTML = ''; subtitle.textContent = '请选择一个日期分支'; return; }
@@ -1369,24 +1589,41 @@
   function renderLogRightPanel() {
     var nums = $('rightLineNumbers'); var code = $('rightCode'); var subtitle = $('rightPanelSubtitle');
     var d = state.logContent; var files = (d && d.files) || [];
+    syncRightToggle();
+    var simple = state.logViewMode === 'simple';
+    if (nums) nums.style.display = simple ? 'none' : ''; // 简化模式不显示行号
+    var content = $('rightPanelContent');
+    if (content) content.classList.toggle('log-simple', simple); // 简化模式：成片块间分隔
     var logPath = state.activeLogPath || (files[0] && files[0].path) || state.activeVersion.path;
     subtitle.textContent = '日志:"' + relToProject(logPath) + '"';
     subtitle.title = subtitle.textContent;
     if (files.length === 0) { nums.innerHTML = ''; code.innerHTML = '<div style="padding:8px 12px;color:var(--text-tertiary)">暂无日志文件</div>'; return; }
     var numHtml = ''; var codeHtml = ''; var row = 0;
+    var inBlock = false; // 简化模式：当前是否处于成片块容器内
     files.forEach(function (f) {
       f.lines.forEach(function (line, li) {
         row++;
         numHtml += '<span class="right-panel__line-num" data-row="' + row + '">' + row + '</span>';
         var t = line == null ? '' : line;
+        var tt = String(t).trim();
+        // 简化模式：去掉原始 txt 自带的分割线行（==== / ---- 等）
+        if (state.logViewMode === 'simple' && /^[\-=_—\.\*]{2,}$/.test(tt)) return;
         var cls = 'right-panel__code-line';
-        var isVideoHeader = li > 0 && f.lines[li - 1] != null && String(f.lines[li - 1]).trim() === '使用片段列表：';
+        // 成片名行："使用片段列表："的上一行（该行下方紧跟"使用片段列表："）
+        var isVideoHeader = li + 1 < f.lines.length && f.lines[li + 1] != null && String(f.lines[li + 1]).trim() === '使用片段列表：';
+        if (state.logViewMode === 'simple' && /[\\/]/.test(tt)) t = tt.split(/[\\/]+/).pop(); // 简化模式：路径仅保留最后一段文件名（带后缀）
+        if (state.logViewMode === 'simple' && isVideoHeader) {
+          if (inBlock) codeHtml += '</div>'; // 闭合上一个成片块
+          codeHtml += '<div class="log-block" data-start="' + row + '">';
+          inBlock = true;
+        }
         if (isVideoHeader) cls += ' code-line--log-video';
-        else if (t.trim() === '') cls += ' code-line--empty';
+        else if (tt === '') cls += ' code-line--empty';
         else cls += ' code-line--path';
         codeHtml += '<span class="' + cls + '" data-row="' + row + '">' + escapeHtml(t === '' ? ' ' : t) + '</span>';
       });
     });
+    if (inBlock) codeHtml += '</div>';
     nums.innerHTML = numHtml; code.innerHTML = codeHtml;
     if (state._pendingLogJump) { var p = state._pendingLogJump; state._pendingLogJump = null; jumpLogRightByVideo(p.video, p.logPath); }
   }
@@ -1403,32 +1640,71 @@
     var line = logRowFor(video, logPath);
     if (line) highlightLogBlock(line, video, logPath);
   }
-  // 高亮整个成片块：成片名行（lineStart-1）到下一个成片名行之前的所有行
+  // 高亮整个成片块：从成片名行（"使用片段列表："上一行）到块内末尾水印png行；
+  // 跳过分隔线/空行；仅高亮行号列，不高亮文字
   function highlightLogBlock(line, video, logPath) {
-    var entries = (state.logContent && state.logContent.entries) || [];
+    var d = state.logContent;
+    if (!d) return;
+    var entries = d.entries || [];
+    var files = d.files || [];
+    var l = Number(line);
+    if (!l || l < 1) return;
     var idx = -1;
     for (var i = 0; i < entries.length; i++) {
       if (entries[i].video === video && (entries[i].logPath === logPath || normalizePath(entries[i].logPath) === normalizePath(logPath))) { idx = i; break; }
     }
     if (idx < 0) { for (var j = 0; j < entries.length; j++) { if (entries[j].video === video) { idx = j; break; } } }
-    var startRow = Number(line) - 1; // 成片名行
-    var endRow = null;
-    if (idx >= 0 && entries[idx + 1]) endRow = Number(entries[idx + 1].lineStart) - 2; // 下一个成片名行之前
-    scrollLogRightTo(startRow, endRow);
+    var startRow = l - 1; // 成片名行
+    var endRow = idx >= 0 && entries[idx + 1] ? Number(entries[idx + 1].lineStart) - 2 : null;
+    // 行号 → 行内容（不含后端行尾截断误差）
+    function rowText(r) {
+      var acc = 1;
+      for (var k = 0; k < files.length; k++) {
+        if (r >= acc && r < acc + files[k].lines.length) return files[k].lines[r - acc] == null ? '' : String(files[k].lines[r - acc]);
+        acc += files[k].lines.length;
+      }
+      return '';
+    }
+    // 最后一个成片块无 next：以所属文件末行为终点
+    if (endRow == null) {
+      var run = 1;
+      for (var fi = 0; fi < files.length; fi++) {
+        if (l >= run && l < run + files[fi].lines.length) { endRow = run + files[fi].lines.length - 1; break; }
+        run += files[fi].lines.length;
+      }
+    }
+    if (!endRow || endRow < startRow) endRow = startRow;
+    // 排除分割线行（纯分隔符行）；空行保持高亮，使成片块在两个分隔线之间完整覆盖
+    var skip = {};
+    for (var r2 = startRow; r2 <= endRow; r2++) {
+      var t2 = rowText(r2).trim();
+      if (t2 !== '' && /^[\-=_—\.\*]{2,}$/.test(t2)) skip[r2] = true;
+    }
+    scrollLogRightTo(startRow, endRow, skip);
   }
-  function scrollLogRightTo(line, endLine) {
+  function scrollLogRightTo(line, endLine, skipRows) {
     var content = $('rightPanelContent');
     if (!content) return;
     var n = Number(line);
     if (!n || n < 1) return;
     var end = Number(endLine);
     if (!end || end < n) end = n;
-    content.querySelectorAll('.right-panel__line-num.log-target, .right-panel__code-line.log-target').forEach(function (el) { el.classList.remove('log-target'); });
-    for (var r = n; r <= end; r++) {
-      var num = content.querySelector('.right-panel__line-num[data-row="' + r + '"]');
-      var cod = content.querySelector('.right-panel__code-line[data-row="' + r + '"]');
-      if (num) num.classList.add('log-target');
-      if (cod) cod.classList.add('log-target');
+    content.querySelectorAll('.right-panel__line-num.log-target, .right-panel__code-line.log-target, .log-block--active').forEach(function (el) { el.classList.remove('log-target', 'log-block--active'); });
+    if (state.logViewMode === 'simple') {
+      // 简化模式：以成片块为高亮单元（圆角金边浅蓝方块）
+      content.querySelectorAll('.log-block').forEach(function (blk) {
+        var s = Number(blk.getAttribute('data-start'));
+        var sp = blk.querySelectorAll('.right-panel__code-line');
+        var en = sp.length ? Number(sp[sp.length - 1].getAttribute('data-row')) : s;
+        if (s <= end && en >= n) blk.classList.add('log-block--active');
+      });
+    } else {
+      var skip = skipRows || {};
+      for (var r = n; r <= end; r++) {
+        if (skip[r]) continue;
+        var num = content.querySelector('.right-panel__line-num[data-row="' + r + '"]');
+        if (num) num.classList.add('log-target'); // 原始模式：仅高亮行号列
+      }
     }
     var lineHeight = 18;
     var targetTop = 8 + (n - 1) * lineHeight;
@@ -1438,12 +1714,12 @@
   function setStatusDone(msg) { var el = $('statusLeft'); if (!el) return; el.classList.add('status-bar__success'); el.textContent = msg; }
 
   // 载入遮罩：工作路径扫描时提示用户
-  function showBusy(text) { var o = $('busyOverlay'); if (!o) return; var p = $('busyProgress'); if (p) p.style.display = 'none'; $('busyText').textContent = text || '正在检测…'; o.style.display = 'flex'; }
-  function hideBusy() { var o = $('busyOverlay'); if (o) o.style.display = 'none'; }
+  function showBusy(text) { var o = $('busyOverlay'); if (!o) return; var p = $('busyProgress'); if (p) p.style.display = 'none'; var mb = $('busyMinBtn'); if (mb) mb.style.display = 'none'; $('busyText').textContent = text || '正在检测…'; o.style.display = 'flex'; }
+  function hideBusy() { var o = $('busyOverlay'); if (o) o.style.display = 'none'; var mb = $('busyMinBtn'); if (mb) mb.style.display = 'none'; }
   // 设置窗口开/关时的主窗口模糊遮罩
   function showSettingsDim() { var o = $('settingsDim'); if (o) { hideBusy(); o.style.display = 'block'; } }
   function hideSettingsDim() { var o = $('settingsDim'); if (o) o.style.display = 'none'; }
-  // 带进度条的等待窗口：重置预检测全量检测期间使用
+  // 带进度条的等待窗口：重置预检测全量检测期间使用；提供「缩到后台」入口
   function showBusyProgress(text) {
     var o = $('busyOverlay'); if (!o) return;
     $('busyText').textContent = text || '正在检测…';
@@ -1451,10 +1727,43 @@
     if (p) p.style.display = 'flex';
     if (fill) fill.style.width = '0%';
     if (pt) pt.textContent = '正在收集视频…';
+    var mb = $('busyMinBtn'); if (mb) mb.style.display = '';
     o.style.display = 'flex';
+  }
+  // 预检测后台化：遮罩「缩到后台」后，进度转入状态栏右侧 probe-mini（排版配色参考更新条）
+  function hideProbeMini() {
+    state.precheckBackground = false;
+    var el = $('probeMini'); if (el) el.style.display = 'none';
+    var fl = $('probeMiniFill'); if (fl) fl.style.width = '0%';
+  }
+  function showProbeMini() {
+    var el = $('probeMini'); if (!el) return;
+    var lb = $('probeMiniLabel'); if (lb) lb.textContent = '预检测 0/0';
+    var fl = $('probeMiniFill'); if (fl) fl.style.width = '0%';
+    el.style.display = '';
+  }
+  function updateProbeMini(s) {
+    var el = $('probeMini'); if (!el || el.style.display === 'none') return;
+    var total = (s && s.total) || 0, done = (s && s.done) || 0;
+    var pct = total > 0 ? Math.min(100, Math.round(done / total * 100)) : 0;
+    var lb = $('probeMiniLabel'); if (lb) lb.textContent = '预检测 ' + done + '/' + total;
+    var fl = $('probeMiniFill'); if (fl) fl.style.width = pct + '%';
+    if (s && s.finished) {
+      hideProbeMini();
+      setStatus(s.cancelled ? '后台预检测已取消（已保存 ' + done + ' 个探测结果）' : '后台预检测完成：共检测 ' + total + ' 个视频');
+    }
+  }
+  function enterProbeBackground() {
+    if (state.precheckBackground) return;
+    if (!state._probeActive) { setStatus('当前没有进行中的预检测'); return; }
+    state.precheckBackground = true;
+    hideBusy();
+    showProbeMini();
+    setStatus('预检测已转入后台，请在右下角查看进度');
   }
   function onResetProgress(s) {
     if (!s) return;
+    if (state.precheckBackground) { updateProbeMini(s); return; }
     var total = s.total || 0, done = s.done || 0;
     var pct = total > 0 ? Math.min(100, Math.round(done / total * 100)) : 0;
     var fill = $('busyProgressFill'), pt = $('busyProgressText');
@@ -1469,15 +1778,18 @@
     if (api && typeof api.on_reset_progress === 'function') {
       try { dismiss = api.on_reset_progress(onResetProgress); } catch (e) { dismiss = null; }
     }
-    var cleanup = function () { if (dismiss) { try { dismiss(); } catch (e) {} dismiss = null; } };
+    var cleanup = function () { state._probeActive = false; if (dismiss) { try { dismiss(); } catch (e) {} dismiss = null; } };
+    state._probeActive = true;
+    state.precheckBackground = false;
     call('reset_precheck').then(function (r) {
-      hideBusy();
+      if (state.precheckBackground) hideProbeMini(); else hideBusy();
       cleanup();
-      setStatus('预检测已重置：共检测 ' + (r && r.total || 0) + ' 个视频，合规 ' + (r && r.valid || 0) + ' 个');
+      setStatus('预检测已重置：共检测 ' + (r && r.total || 0) + ' 个视频，合规 ' + (r && r.valid || 0) + ' 个' + ((r && r.cancelled) ? '（已中断）' : ''));
       if (state.activeTxt && state.activeVersion) runPrecheck();
     }).catch(function (e) {
       hideBusy();
       cleanup();
+      hideProbeMini();
       setStatus('重置预检测失败：' + e.message);
     });
   }
@@ -1490,6 +1802,44 @@
       if (!v) { setStatus('已取消重置预检测'); return; }
       showBusyProgress('正在重置预检测缓存并全量检测，请耐心等待…');
       resetPrecheckAll();
+    });
+  }
+  // 刷新预缓存菜单：点击后弹窗二选一；「全部重置」走原流程（内部仍保留二次确认）
+  function refreshPrecacheMenu() {
+    showDialog({
+      title: '刷新预缓存',
+      message: '仅刷新：更新缺失或已变化的视频，不重置缓存；\n全部重置：清空缓存后重新检测（视频较多时较耗时）。',
+      buttons: [
+        { label: '仅刷新', value: 'refresh', primary: true },
+        { label: '全部重置', value: 'reset', danger: true }
+      ]
+    }).then(function (v) {
+      if (!v) { setStatus('已取消刷新预缓存'); return; }
+      if (v === 'refresh') refreshPrecacheFlow();
+      else resetPrecheckFlow(); // 内部含「确认重置」二次确认
+    });
+  }
+  // 仅刷新预缓存：不删缓存、不重置，只对缺失/变化的视频增量更新（进度与取消/缩后台同「重置预检测」）
+  function refreshPrecacheFlow() {
+    var dismiss = null;
+    var api = getApi();
+    if (api && typeof api.on_reset_progress === 'function') {
+      try { dismiss = api.on_reset_progress(onResetProgress); } catch (e) { dismiss = null; }
+    }
+    var cleanup = function () { state._probeActive = false; if (dismiss) { try { dismiss(); } catch (e) {} dismiss = null; } };
+    state._probeActive = true;
+    state.precheckBackground = false;
+    showBusyProgress('正在刷新预缓存（增量更新，不重置）…');
+    call('refresh_precache').then(function (r) {
+      if (state.precheckBackground) hideProbeMini(); else hideBusy();
+      cleanup();
+      setStatus('预缓存已刷新：更新 ' + ((r && r.updated) || 0) + ' / ' + ((r && r.total) || 0) + ' 个视频' + ((r && r.cancelled) ? '（已中断）' : ''));
+      if (state.activeTxt && state.activeVersion) runPrecheck();
+    }).catch(function (e) {
+      hideBusy();
+      cleanup();
+      hideProbeMini();
+      setStatus('刷新预缓存失败：' + e.message);
     });
   }
   // 刷新配置列表：先扫描历史遗留的重复外部 * 配置（与成片正本内容一致的副本），
@@ -1547,27 +1897,54 @@
     if (window.txapi && window.txapi.on_settings_window_closed) window.txapi.on_settings_window_closed(hideSettingsDim);
   }
 
+  // 扫描/重建环节 → 中文提示（后端 listProjects/索引重建按环节上报，前端一一对应显示）
+  var SCAN_PHASE_TEXT = {
+    clear: '清空缓存', walk: '扫描配置', log: '收集日志', list: '汇总项目',
+    clip: '重建成片索引', mark: '统计水印归属', done: '检测完成'
+  };
   function refreshData(force, busyText, done, skipReflow) {
-    if (busyText) showBusy(busyText);
+    var dismissScan = null;
+    if (busyText) {
+      showBusy(busyText);
+      var api0 = getApi();
+      if (api0 && typeof api0.on_scan_progress === 'function') {
+        try {
+          dismissScan = api0.on_scan_progress(function (p) {
+            var o = $('busyOverlay'), bt = $('busyText');
+            if (!o || o.style.display === 'none' || !bt) return;
+            var label = (p && SCAN_PHASE_TEXT[p.phase]) ? SCAN_PHASE_TEXT[p.phase] : '';
+            if (label) {
+              if (p.phase === 'clip' && p.total > 0) label += ' ' + p.done + '/' + p.total;
+              bt.textContent = busyText + '（' + label + '）';
+            }
+          });
+        } catch (e) { dismissScan = null; }
+      }
+    }
     call('list_projects', force).then(function (projects) {
       state.projects = projects || []; buildSidebar(false, true);
-      if (!skipReflow && state.activeProject && state.activeTxt) {
+      // 刷新后始终校验当前选中配置是否仍存在：已删/迁移则清空重建视图，仍存在则重拉版本重建日期分支
+      if (state.activeProject && state.activeTxt) {
         var foundProj = state.projects.find(function (p) { return p.name === state.activeProject; });
         var foundTxt = foundProj && foundProj.txts.find(function (t) { return t.name === state.activeTxt; });
         if (!foundTxt) { state.activeProject = null; state.activeTxt = null; state.versions = []; state.activeVersion = null; state.configData = null; buildDateBranches(); buildCenterBottom(); buildRightPanel(); setStatus('就绪'); }
         else selectTxt(state.activeProject, state.activeTxt, true);
       }
       if (busyText) hideBusy();
+      if (dismissScan) { try { dismissScan(); } catch (e) {} dismissScan = null; }
       if (done) done();
-    }).catch(function (e) { setStatus('数据加载失败：' + e.message); if (busyText) hideBusy(); });
+    }).catch(function (e) { setStatus('数据加载失败：' + e.message); if (busyText) hideBusy(); if (dismissScan) { try { dismissScan(); } catch (e) {} dismissScan = null; } });
   }
   function selectTxt(project, name, keepVersion) {
     state.activeLogDate = null;
+    // 本次是否为"已选中后再次切换"（决定重建配置页时是否静止，参考徽章 --static）
+    var switchingTxt = !!state.activeTxt;
     // 复刻虚拟项目：仅含日志无配置，点击直接进入日志视图
     if (project === REPLICA_PROJECT) {
       state.activeProject = project; state.activeTxt = name;
       state.versions = [{ label: '全部日志', path: REPLICA_MARK + name, is_latest: true }];
       state.activeVersion = state.versions[0];
+      state.activeLogDate = null; state.activeLogPath = null; state.logFiles = [];
       state.configData = null; state.logContent = null;
       state.mode = 'log';
       var ml = $('modeLog'), mf = $('modeFilelist');
@@ -1594,23 +1971,50 @@
     call('list_versions', project, name).then(function (versions) {
       state.versions = versions || []; state.activeVersion = null;
       if (state.versions.length > 0) { var target = prevLabel ? state.versions.find(function (v) { return v.label === prevLabel; }) : null; state.activeVersion = target || state.versions[0]; }
+      if (pruneEmptyTxt(project, name, state.versions)) return;
+      syncTxtCount(project, name, state.versions);
       buildSidebar(false, true);
       // 点击配置＝用户交互：重建动画中则动画结束再判定，无动画直接判定
       var azB3 = $('azIndexBar');
       if (azB3 && azB3.classList.contains('az-bar--enter')) _azPending = true;
       else syncAzHighlight();
-      buildDateBranches();
-      if (state.activeVersion) loadConfig(state.activeVersion.path);
+      buildDateBranches(switchingTxt);
+      if (state.activeVersion) loadConfig(state.activeVersion.path, switchingTxt);
       else { state.configData = null; buildCenterBottom(); buildRightPanel(); setStatus('该配置无可用版本'); }
     }).catch(function (e) { setStatus('加载版本失败：' + e.message); });
   }
-  function selectVersion(label) { var v = state.versions.find(function (x) { return x.label === label; }); if (!v) return; state.activeVersion = v; buildDateBranches(); loadConfig(v.path); }
-  function loadConfig(path) {
+  // 用最新版本列表同步侧栏该配置徽章：计数 + 最新日期（日期分支实时刷新时徽章跟随）
+  function syncTxtCount(project, name, versions) {
+    var p = (state.projects || []).find(function (x) { return x.name === project; });
+    if (!p) return;
+    var t = p.txts.find(function (x) { return x.name === name; });
+    if (!t) return;
+    var vs = versions || [];
+    t.count = vs.length;
+    t.latest = vs.length ? String(vs[0].label || '') : '';
+  }
+  // 配置全部版本已删除/迁移：从侧栏移除该配置项，避免遗留"0 版本"空壳；若为当前选中配置则一并复位视图
+  function pruneEmptyTxt(project, name, versions) {
+    if ((versions || []).length > 0) return false;
+    var p = (state.projects || []).find(function (x) { return x.name === project; });
+    if (p) {
+      var i = p.txts.findIndex(function (x) { return x.name === name; });
+      if (i >= 0) p.txts.splice(i, 1);
+    }
+    buildSidebar(false, true);
+    if (state.activeProject === project && state.activeTxt === name) {
+      resetCenterToLaunch();
+      setStatus('该配置已无可用版本，已从列表移除');
+    }
+    return true;
+  }
+  function selectVersion(label) { var v = state.versions.find(function (x) { return x.label === label; }); if (!v) return; var switching = !!state.activeVersion; state.activeVersion = v; buildDateBranches(switching); loadConfig(v.path, true); }
+  function loadConfig(path, silent) {
     state.logContent = null;
     call('read_config', path).then(function (data) {
       state.configData = data;
       state._configOrig = null; // 新配置加载：重建修改基线
-      buildCenterBottom(); buildRightPanel();
+      buildCenterBottom(silent); buildRightPanel();
       setStatus('已选择:"' + (state.activeVersion && state.activeVersion.path || path) + '"');
     }).catch(function (e) { setStatus('读取配置失败：' + e.message); });
   }
@@ -1628,11 +2032,17 @@
     var bar = $('configBar'); if (bar) bar.innerHTML = '';
     var act = $('sidebarTree').querySelector('.tree-txt-item--active');
     if (act) act.classList.remove('tree-txt-item--active');
+    // 收回项目/品牌名片视为退出日志模式：进入日志时若折叠，此处恢复折叠
+    restorePreviewFromLog();
     buildDateBranches(); buildCenterBottom(); buildRightPanel();
     setStatus('就绪');
   }
   function bindStaticEvents() {
-    document.addEventListener('vl:reset-center', function () { resetCenterToLaunch(); });
+    // 预检测后台化：遮罩「缩到后台」与状态栏取消按钮
+    var busyMin = $('busyMinBtn'), probeCancel = $('probeMiniCancel');
+    if (busyMin) busyMin.addEventListener('click', enterProbeBackground);
+    if (probeCancel) probeCancel.addEventListener('click', function () { setStatus('正在取消后台预检测…'); call('cancel_precheck'); });
+    document.addEventListener('vl:reset-center', function () { collapsePreviewPanel(); resetCenterToLaunch(); });
     $('sidebarTree').addEventListener('scroll', syncAzHighlight);
     $('sidebarTree').addEventListener('click', function (e) {
       var projectHeader = e.target.closest('.tree-project__name');
@@ -1717,7 +2127,7 @@
     });
     $('btnSortName').addEventListener('click', function () { if (state.sortMode === 'name') state.sortAsc = !state.sortAsc; else state.sortMode = 'name'; updateSortButtons(); buildSidebar(); });
     $('btnSortTime').addEventListener('click', function () { if (state.sortMode === 'time') state.sortTimeDesc = !state.sortTimeDesc; else state.sortMode = 'time'; updateSortButtons(); buildSidebar(); });
-    $('dateBranches').addEventListener('click', function (e) { var btn = e.target.closest('.date-branch-btn'); if (!btn) return; if (btn.getAttribute('data-date') != null) { state.activeLogDate = btn.getAttribute('data-date'); state.activeLogPath = btn.getAttribute('data-file') || null; buildDateBranches(); buildCenterBottom(); return; } selectVersion(btn.getAttribute('data-label')); });
+    $('dateBranches').addEventListener('click', function (e) { var btn = e.target.closest('.date-branch-btn'); if (!btn) return; if (btn.getAttribute('data-date') != null) { var switching = state.activeLogPath != null; state.activeLogDate = btn.getAttribute('data-date'); state.activeLogPath = btn.getAttribute('data-file') || null; buildDateBranches(switching); buildCenterBottom(); return; } selectVersion(btn.getAttribute('data-label')); });
     $('dateBranches').addEventListener('dblclick', function (e) { var btn = e.target.closest('.date-branch-btn'); if (!btn) return; var fp = btn.getAttribute('data-file'); if (fp) { call('open_parent', fp); return; } var label = btn.getAttribute('data-label'); var v = state.versions.find(function (x) { return x.label === label; }); if (v) call('open_parent', v.path); });
     $('dateBranches').addEventListener('contextmenu', function (e) {
       var btn = e.target.closest('.date-branch-btn');
@@ -1788,115 +2198,73 @@
       // 菜单项动作
       $('menuRefreshConfigs').addEventListener('click', function () { closeMenu(); refreshConfigsFlow(); });   // 刷新配置列表（含清理重复外部 *）
       $('menuChoosePath').addEventListener('click', function () { closeMenu(); choosePath(); });
-      $('menuResetPrecheck').addEventListener('click', function () { closeMenu(); resetPrecheckFlow(); });
+      // 「刷新预缓存」点击弹窗二选一：仅刷新（增量）/ 全部重置（原功能）
+      var lmrp = $('menuResetPrecheck');
+      if (lmrp) lmrp.addEventListener('click', function () { closeMenu(); refreshPrecacheMenu(); });
       $('menuSettings').addEventListener('click', function () { closeMenu(); call('open_settings_window').catch(function () { setStatus('打开设置窗口失败'); }); });
     }
     $('btnOpenTasks').addEventListener('click', function () { call('open_task_window').catch(function () { setStatus('打开任务窗口失败'); }); });
     $('btnPreviewRaw').addEventListener('click', function () { state.rightPreview = false; $('btnPreviewRaw').classList.add('preview-toggle--active'); $('btnPreviewModified').classList.remove('preview-toggle--active'); buildRightPanel(); });
     $('btnPreviewModified').addEventListener('click', function () { state.rightPreview = true; $('btnPreviewModified').classList.add('preview-toggle--active'); $('btnPreviewRaw').classList.remove('preview-toggle--active'); buildRightPanel(); });
-    $('btnExternalEdit').addEventListener('click', function () { if (!state.activeVersion) return flashNeedSelect(); call('external_edit', state.activeVersion.path); });
-    var rz = $('workspaceResizer');
+    $('btnLogSimple').addEventListener('click', function () { state.logViewMode = 'simple'; syncRightToggle(); renderLogRightPanel(); });
+    $('btnLogRaw').addEventListener('click', function () { state.logViewMode = 'raw'; syncRightToggle(); renderLogRightPanel(); });
+    $('btnExternalEdit').addEventListener('click', function () { if (!state.activeVersion) return flashNeedSelect(); var p = state.activeVersion.path; if (String(p).indexOf(REPLICA_MARK) === 0) { var lf = state.logFiles || []; var cur = null; if (state.activeLogPath) cur = lf.find(function (f) { return f.path === state.activeLogPath; }); if (!cur && state.activeLogDate) cur = lf.find(function (f) { return f.date === state.activeLogDate; }); if (!cur && lf.length) cur = lf[lf.length - 1]; if (cur) p = cur.path; } call('external_edit', p); });
+    var rz = $('sidebarResizeBtn');
     var sidebarEl = document.querySelector('.sidebar');
     if (rz && sidebarEl) {
+      // 拖拽调宽交互只绑在按钮本体上；铆钉栏不可见、无功能（仅定位锚定）
       rz.addEventListener('mousedown', function (e) {
         e.preventDefault();
         var startX = e.clientX, startW = sidebarEl.clientWidth;
         function onMove(ev) { var w = Math.max(285, Math.min(520, startW + (ev.clientX - startX))); sidebarEl.style.width = w + 'px'; }
-        function onUp() { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); rz.classList.remove('workspace-resizer--active'); }
-        rz.classList.add('workspace-resizer--active'); document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+        function onUp() { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); }
+        document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
       });
     }
     var rp = $('rightPanel');
-    var collBtn = $('previewCollapseBtn');
+    var resizerBar = $('previewResizer');
     var roundBtn = $('previewCollapseRound');
-    if (rp && collBtn) {
-      // 按钮定位：16px 宽，中心压住右面板左缘分隔线（right = 面板宽 - 8）；
-      // 折叠(隐藏)时面板宽为 0，按钮整体左移使右边框完整显示在窗口内侧（right 4px）
-      function posCollBtn(w) {
-        var collapsed = document.body.hasAttribute('data-preview-collapsed');
-        if (collapsed && w === undefined) { collBtn.style.right = '4px'; return; }
-        if (w === undefined) w = rp.clientWidth;
-        collBtn.style.right = Math.max(0, w - 8) + 'px';
-      }
-      // 动画化定位：展开/折叠约 300ms 内每帧读取面板实时宽度来定位按钮，
-      // 与面板 width 过渡逐帧同步。起始钳到折叠位 4px：面板宽 <12px 时
-      // （面板左缘尚未越过按钮）按钮保持右缘 4px；≥12px 后随面板左缘平滑左移，
-      // 避免点击瞬间读到宽度 0 导致先跳右缘再走位的视觉错位
-      var _btnAnimFrame = null;
-      function cancelBtnAnim() { if (_btnAnimFrame) { cancelAnimationFrame(_btnAnimFrame); _btnAnimFrame = null; } }
-      function animPosCollBtn() {
-        cancelBtnAnim();
-        var t0 = performance.now();
-        var dur = 300;
-        function step(now) {
-          var p = Math.min(1, (now - t0) / dur);
-          collBtn.style.right = Math.max(4, rp.clientWidth - 8) + 'px';
-          if (p < 1) _btnAnimFrame = requestAnimationFrame(step);
-          else { _btnAnimFrame = null; posCollBtn(); }
-        }
-        _btnAnimFrame = requestAnimationFrame(step);
-      }
-      // 面板展开/收缩有 width 过渡：过渡结束后以最终宽度再对齐一次按钮，
-      // 否则动画期间 clientWidth 读到的是起点值(0)，按钮会停在右缘
-      rp.addEventListener('transitionend', function (e) {
-        if (e.propertyName !== 'width') return;
-        posCollBtn();
-      });
+    if (rp && resizerBar) {
       // 右侧预览面板展开/折叠：默认折叠（body 标记 data-preview-collapsed，面板整体隐藏）
       if (state.previewCollapsed) document.body.setAttribute('data-preview-collapsed', '');
-      posCollBtn();
-      // 右侧面板宽度可能被外部代码（如拖拽前记忆恢复）改变，打开时同步一次
-      window.addEventListener('resize', posCollBtn);
-      // 折叠/展开动作（竖条按钮与右上角圆形按钮共用）
+      // 折叠/展开动作（右上角圆形按钮入口）；尺寸栏为中间固定布局位，随面板宽度自然左移
       function togglePreviewCollapsed() {
         var isCollapsed = document.body.hasAttribute('data-preview-collapsed');
         if (isCollapsed) {
           // 展开：恢复记忆宽度
           document.body.removeAttribute('data-preview-collapsed');
           rp.style.display = '';
-          var targetW = Math.max(240, state.previewLastWidth || 300);
+          var targetW = Math.max(240, state.previewLastWidth || 320);
           rp.style.width = targetW + 'px';
           state.previewCollapsed = false;
-          collBtn.setAttribute('title', '折叠预览面板');
           if (roundBtn) roundBtn.setAttribute('title', '折叠预览面板');
-          // 按钮随面板同速滑到左缘（箭头方向由 CSS 依 body 状态自动交叉淡变）
-          animPosCollBtn();
         } else {
           // 折叠：记录当前宽度后隐藏
           state.previewLastWidth = rp.clientWidth || state.previewLastWidth;
           document.body.setAttribute('data-preview-collapsed', '');
           state.previewCollapsed = true;
-          collBtn.setAttribute('title', '展开预览面板');
           if (roundBtn) roundBtn.setAttribute('title', '展开预览面板');
-          // 箭头方向由 CSS 依 body 状态自动交叉淡变
-          animPosCollBtn();
         }
       }
-      // 折叠按钮承载全部交互：点击折叠/展开；按住左右拖动调整预览宽度（替代原拖拽尺寸栏）
-      var _pDragMoved = false; // 持久标志：上一次按下是否发生过拖拽（click 在 mouseup 后触发，需跨事件保留）
-      collBtn.addEventListener('mousedown', function (e) {
-        // 折叠态不响应拖拽（面板已隐藏，宽度由按钮点击控制）
+      // 尺寸栏承载调宽：按住左右拖动调整预览宽度（仅展开态；折叠态由右上角圆形按钮控制）
+      resizerBar.addEventListener('mousedown', function (e) {
+        // 折叠态不响应拖拽（面板已隐藏）
         if (document.body.hasAttribute('data-preview-collapsed')) return;
         e.preventDefault();
+        // 拖拽期间禁用面板 width 过渡：style.width 逐帧即时生效，避免 0.3s 过渡滞后
+        rp.style.transition = 'none';
         var startX = e.clientX, startW = rp.clientWidth;
-        var moved = false;
         function onVMove(ev) {
-          var dx = ev.clientX - startX;
-          if (Math.abs(dx) > 3) moved = true;
-          if (moved) { var w = Math.max(240, Math.min(720, startW - (ev.clientX - startX))); rp.style.width = w + 'px'; state.previewLastWidth = w; posCollBtn(); }
+          var w = Math.max(240, Math.min(720, startW - (ev.clientX - startX)));
+          rp.style.width = w + 'px'; state.previewLastWidth = w;
         }
         function onVUp() {
           document.removeEventListener('mousemove', onVMove);
           document.removeEventListener('mouseup', onVUp);
-          _pDragMoved = moved;
+          rp.style.transition = ''; // 恢复宽度过渡（展开/折叠动画仍生效）
         }
         document.addEventListener('mousemove', onVMove);
         document.addEventListener('mouseup', onVUp);
-      });
-      collBtn.addEventListener('click', function () {
-        // 刚发生拖拽的抬起不再触发折叠/展开
-        if (_pDragMoved) { _pDragMoved = false; return; }
-        togglePreviewCollapsed();
       });
       if (roundBtn) roundBtn.addEventListener('click', togglePreviewCollapsed);
     }
@@ -1924,16 +2292,19 @@
     if (api && typeof api.on_reset_progress === 'function') {
       try { dismiss = api.on_reset_progress(onResetProgress); } catch (e) { dismiss = null; }
     }
-    var cleanup = function () { if (dismiss) { try { dismiss(); } catch (e) {} dismiss = null; } };
+    var cleanup = function () { state._probeActive = false; if (dismiss) { try { dismiss(); } catch (e) {} dismiss = null; } };
+    state._probeActive = true;
+    state.precheckBackground = false;
     showBusyProgress('正在根据新路径重置预检测…');
     call('reset_precheck').then(function (r) {
-      hideBusy();
+      if (state.precheckBackground) hideProbeMini(); else hideBusy();
       cleanup();
-      setStatusDone('重新检测完成：共检测 ' + ((r && r.total) || 0) + ' 个视频，合规 ' + ((r && r.valid) || 0) + ' 个');
+      setStatusDone('重新检测完成：共检测 ' + ((r && r.total) || 0) + ' 个视频，合规 ' + ((r && r.valid) || 0) + ' 个' + ((r && r.cancelled) ? '（已中断）' : ''));
       if (state.activeTxt && state.activeVersion) runPrecheck();
     }).catch(function (e) {
       hideBusy();
       cleanup();
+      hideProbeMini();
       setStatus('重置预检测失败：' + e.message);
     });
   }
@@ -2076,6 +2447,96 @@
     });
   }
 
+  // 轻量 Markdown 渲染（标题 / 有序无序列表 / 表格 / 引用 / 行内链接与粗体 / 代码块 / 空行）
+  function renderMdMd(text) {
+    var esc = function (s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+    function inline(s) {
+      s = String(s == null ? '' : s).replace(/<img[^>]*>/gi, '');
+      s = s.replace(/!\[[^\]]*\]\([^)]*\)/g, ''); // 剥离 markdown 图片语法（badge 图等）
+      s = esc(s);
+      s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+      s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      // [text](url)：仅文字非空才渲染链接；剥图残留的空 [](url) 直接移除不显示
+      s = s.replace(/\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g, function (m, txt, u) {
+        if (!txt) return '';
+        return '<a href="' + u + '">' + txt + '</a>';
+      });
+      // 尖括号裸链：< > 已转义为实体，需按实体匹配
+      s = s.replace(/&lt;((?:https?:\/\/)[^>&\s]+)&gt;/g, '<a href="$1">$1</a>');
+      return s;
+    }
+    var lines = String(text || '').split(/\r?\n/);
+    var html = '', inList = false, inCode = false, inBlock = false;
+    var flushList = function () { if (inList) { html += '</ul>'; inList = false; } };
+    var flushBlock = function () { if (inBlock) { html += '</blockquote>'; inBlock = false; } };
+    for (var i = 0; i < lines.length; i++) {
+      var t = lines[i];
+      if (/^\s*```/.test(t)) { flushList(); flushBlock(); html += inCode ? '</pre>' : '<pre>'; inCode = !inCode; continue; }
+      if (inCode) { html += esc(t) + '\n'; continue; }
+      if (/^\s*\|/.test(t)) {
+        var rows = [];
+        while (i < lines.length && /^\s*\|/.test(lines[i])) { rows.push(lines[i]); i++; }
+        i--;
+        flushList(); flushBlock();
+        var header = rows[0].replace(/^\s*\|\s*/, '').replace(/\s*\|\s*$/, '').split(/\s*\|\s*/);
+        var bodyStart = 1;
+        if (rows[1] && /^\s*\|?\s*:?-{2,}/.test(rows[1])) bodyStart = 2;
+        html += '<table><thead><tr><th>' + header.map(inline).join('</th><th>') + '</th></tr></thead><tbody>';
+        for (var r = bodyStart; r < rows.length; r++) {
+          var cells = rows[r].replace(/^\s*\|\s*/, '').replace(/\s*\|\s*$/, '').split(/\s*\|\s*/);
+          html += '<tr><td>' + cells.map(inline).join('</td><td>') + '</td></tr>';
+        }
+        html += '</tbody></table>';
+        continue;
+      }
+      var q = /^>\s?(.*)$/.exec(t);
+      if (q) { flushList(); if (!inBlock) { html += '<blockquote>'; inBlock = true; } html += '<p>' + inline(q[1] || '') + '</p>'; continue; }
+      if (inBlock) { flushBlock(); }
+      var h = /^(#{1,6})\s+(.*)$/.exec(t);
+      if (h) { flushList(); var lv = Math.min(h[1].length, 4); html += '<h' + lv + '>' + inline(h[2]) + '</h' + lv + '>'; continue; }
+      var ul = /^\s*[-*]\s+(.*)$/.exec(t);
+      if (ul) { if (!inList) { html += '<ul>'; inList = true; } html += '<li>' + inline(ul[1]) + '</li>'; continue; }
+      flushList();
+      if (/^\s*<(\/)?(div|br)[^>]*>\s*$/i.test(t)) { continue; }
+      if (/^-{3,}\s*$/.test(t)) { flushList(); flushBlock(); html += '<hr>'; continue; }
+      if (!t.trim()) { continue; } // 空行不输出，避免多余空隙
+      var para = inline(t);
+      if (para) html += '<p>' + para + '</p>';
+    }
+    flushList(); flushBlock();
+    return html;
+  }
+
+  // 启动弹更新日志：仅版本更新后（或初次启动）首次弹出，之后不再打扰
+  function showStartupChangelog() {
+    call('get_changelog_popup').then(function (r) {
+      if (r && r.ok && r.show && r.content) showChangelogPopup(r.content);
+    }).catch(function () {});
+  }
+
+  // 更新日志弹窗：大卡片 + 可滚动正文，右上角圆X / 点击遮罩 / 底部按钮关闭
+  function showChangelogPopup(content) {
+    var old = document.getElementById('changelogModal');
+    if (old) old.remove();
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.id = 'changelogModal';
+    var card = document.createElement('div');
+    card.className = 'modal-card changelog-card';
+    card.innerHTML =
+      '<button type="button" class="modal-close" title="关闭">✕</button>' +
+      '<div class="changelog-card__body"></div>' +
+      '<div class="changelog-card__actions"><button type="button" class="modal-btn modal-btn--primary">知道了</button></div>';
+    var body = card.querySelector('.changelog-card__body');
+    body.innerHTML = renderMdMd(content);
+    var done = function () { overlay.remove(); };
+    card.querySelector('.modal-close').addEventListener('click', done);
+    card.querySelector('.modal-btn').addEventListener('click', done);
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) done(); });
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+  }
+
   // 未配置工作路径时的引导态：项目列表为空，中央「选择路径」指引
   function showBootGuide() { var el = $('bootGuide'); if (el) el.style.display = 'flex'; }
   function hideBootGuide() { var el = $('bootGuide'); if (el) el.style.display = 'none'; }
@@ -2090,6 +2551,8 @@
     hydrateIcons(document); bindStaticEvents(); initSkin(); buildAzIndex();
     updateSortButtons();
     initUpdateBanner();
+    // 启动弹更新日志（当前每次启动弹出以确认样式，后续改为更新后首次弹出）
+    showStartupChangelog();
     // 状态栏左下角常驻版本号
     if (getApi().get_app_version) {
       getApi().get_app_version().then(function (v) {
@@ -2116,6 +2579,14 @@
         ]
       }).then(function (ok) { if (ok && getApi().confirm_quit) getApi().confirm_quit(); });
     });
+    // 文档内 http 链接统一用系统默认浏览器打开（更新日志弹窗等）
+    document.addEventListener('click', function (e) {
+      var a = e.target && e.target.closest ? e.target.closest('a[href^="http"]') : null;
+      if (!a) return;
+      e.preventDefault();
+      var ap = getApi();
+      if (ap && ap.open_external) ap.open_external(a.getAttribute('href')).catch(function () {});
+    });
   }
   function checkEnv() {
     call('check_env').then(function (r) {
@@ -2127,8 +2598,14 @@
       state.envMissing = miss;
       var mark = $('envWarnMark');
       if (mark) {
-        if (miss.length) { mark.textContent = '缺少环境: ' + miss.join('、') + '（见 README 安装）'; mark.className = 'status-bar__envwarn'; }
-        else { mark.textContent = '环境正常'; mark.className = 'status-bar__envok'; }
+        if (miss.length) {
+          mark.textContent = '缺少环境: ' + miss.join('、') + '（见 README 安装）';
+          mark.className = 'status-bar__envwarn';
+          mark.style.display = '';
+        } else {
+          mark.textContent = '';
+          mark.style.display = 'none'; // 环境正常不显示相关内容
+        }
       }
       applyEnvDisabled();
     }).catch(function () { state.envMissing = ['pwsh', 'ffmpeg', 'ffprobe']; applyEnvDisabled(); });

@@ -8,7 +8,7 @@
 
 <br>
 
-[![版本](https://img.shields.io/badge/版本-1.4.7-0078D7?style=flat-square)](https://github.com/BaronJason/video-lab/releases)
+[![版本](https://img.shields.io/badge/版本-1.5.0-0078D7?style=flat-square)](https://github.com/BaronJason/video-lab/releases)
 ![Platform](https://img.shields.io/badge/平台-Windows%2010%2F11-00A4EF?style=flat-square)
 ![PowerShell](https://img.shields.io/badge/运行时-PowerShell%207-5391FE?style=flat-square)
 ![FFmpeg](https://img.shields.io/badge/FFmpeg-必需-FF7F2A?style=flat-square)
@@ -95,11 +95,11 @@ npm run dist     # 打包
 
 按 CC BY-NC-SA 4.0 的署名要求，本皮肤保留完整创作链，原始作者与主页如下：
 
-| 创作层 | 作者 | 说明 | 地址 |
+| 创作层 | 作者 | 说明 | 来源 |
 | --- | --- | --- | --- |
-| 一创 | 上善（上善无形） | 鲸鱼娘（whale-girl）角色形象原作 | Pixiv：<https://www.pixiv.net/users/62155430> · Bilibili：<https://b23.tv/8h5L4xz> |
-| 二创 | ZipZipPipe | 女仆鲸鱼娘二次设计（含 DeepSeek 元素，GPT Image 2 生成） | Pixiv：<https://www.pixiv.net/users/18604994> · Bilibili：<https://b23.tv/Pnw6nG8> |
-| 三创（皮肤实现） | Small-tailqwq | DeepSeek 元素再设计与皮肤工程实现 | <https://github.com/Small-tailqwq/dsh-deep-whale>（maid-atelier 子目录） |
+| 一创 | 上善（上善无形） | 鲸鱼娘（whale-girl）角色形象原作 | [Pixiv](https://www.pixiv.net/users/62155430) · [Bilibili](https://b23.tv/8h5L4xz) |
+| 二创 | ZipZipPipe | 女仆鲸鱼娘二次设计（含 DeepSeek 元素，GPT Image 2 生成） | [Pixiv](https://www.pixiv.net/users/18604994) · [Bilibili](https://b23.tv/Pnw6nG8) |
+| 三创（皮肤实现） | Small-tailqwq | DeepSeek 元素再设计与皮肤工程实现 | [GitHub](https://github.com/Small-tailqwq/dsh-deep-whale) |
 
 皮肤工程脚手架来自 [zhu1090093659/dsh-web-ui](https://github.com/zhu1090093659/dsh-web-ui)（作者：Solitude）。
 

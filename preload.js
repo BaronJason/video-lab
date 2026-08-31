@@ -16,16 +16,27 @@ contextBridge.exposeInMainWorld('txapi', {
     invoke('save_config_today', project, name, configName, folders, excludes, watermark),
   precheck: (paths, excludes) => invoke('precheck', paths, excludes),
   reset_precheck: () => invoke('reset_precheck'),
+  refresh_precache: () => invoke('refresh_precache'),
+  cancel_precheck: () => invoke('cancel_precheck'),
+  get_autostart: () => invoke('get_autostart'),
+  set_autostart: (en) => invoke('set_autostart', !!en),
   on_reset_progress: (cb) => {
     const ch = (e, s) => { try { cb(s); } catch (err) {} };
     ipcRenderer.on('reset_progress', ch);
     return () => { ipcRenderer.removeListener('reset_progress', ch); };
+  },
+  on_scan_progress: (cb) => {
+    const ch = (e, p) => { try { cb(p); } catch (err) {} };
+    ipcRenderer.on('scan_progress', ch);
+    return () => { ipcRenderer.removeListener('scan_progress', ch); };
   },
   list_logs: (project, name, versionPath) => invoke('list_logs', project, name, versionPath),
   search_logs: (query) => invoke('search_logs', query),
   get_log_content: (fromPath, configName) => invoke('get_log_content', fromPath, configName),
   list_log_files: (fromPath, configName) => invoke('list_log_files', fromPath, configName),
   check_exists: (paths) => invoke('check_exists', paths),
+  check_watermark_project: (project, wm) => invoke('check_watermark_project', project, wm),
+  find_watermark_project: (project, wm) => invoke('find_watermark_project', project, wm),
   run_batch: (p, count, group) => invoke('run_batch', p, count, group),
   run_replica: (logPath, mode, entryVideo) => invoke('run_replica', logPath, mode, entryVideo),
   list_tasks: () => invoke('list_tasks'),
@@ -35,6 +46,13 @@ contextBridge.exposeInMainWorld('txapi', {
   pause_task: (id) => invoke('pause_task', id),
   resume_task: (id) => invoke('resume_task', id),
   clear_finished_tasks: (statuses) => invoke('clear_finished_tasks', statuses),
+  clear_done_tasks: (opts) => invoke('clear_done_tasks', opts),
+  get_changelog: () => invoke('get_changelog'),
+  get_changelog_popup: () => invoke('get_changelog_popup'),
+  get_readme: () => invoke('get_readme'),
+  watermark_preview_show: (fileUrl) => invoke('watermark_preview_show', fileUrl),
+  watermark_preview_move: (x, y) => invoke('watermark_preview_move', x, y),
+  watermark_preview_hide: () => invoke('watermark_preview_hide'),
   clear_task: (id) => invoke('clear_task', id),
   resume_all_tasks: () => invoke('resume_all_tasks'),
   pause_all_tasks: () => invoke('pause_all_tasks'),

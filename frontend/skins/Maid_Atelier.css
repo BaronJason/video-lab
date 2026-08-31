@@ -3,6 +3,21 @@
    深海蓝底 + 柔金品牌 + 长春花蓝强调，搭配宫殿背景虚化与蕾丝装饰
    素材来源：maid-atelier (CC BY-NC-SA 4.0)
    ═══════════════════════════════════════════════════════════════ */
+
+/* 品牌名片标题字体：Cinzel（SIL OFL 1.1，可商用分发，见 assets/fonts/OFL-Cinzel.txt）。
+   内嵌 Regular/Bold 两字重，确保各端渲染一致、不依赖客户端装字体；
+   url() 相对本 CSS（frontend/skins/）解析到 assets/fonts/ */
+@font-face {
+  font-family: 'Cinzel';
+  font-weight: 400;
+  src: url('assets/fonts/Cinzel-Regular.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Cinzel';
+  font-weight: 600 900;
+  src: url('assets/fonts/Cinzel-Bold.ttf') format('truetype');
+}
+
 html[data-skin="Maid_Atelier"] {
   /* ── 背景层：深海蓝色阶 ── */
   --bg-base-default: #091333;
@@ -508,11 +523,11 @@ html[data-skin="Maid_Atelier"] [data-skin-brand="icon"] {
   user-select: none;
   -webkit-user-drag: none;
 }
-/* 标题：黑体（无衬线）放大，加粗，紧凑字距 */
+/* 标题：Cinzel 装饰衬线（内嵌 OFL），粗字重，紧凑字距 */
 html[data-skin="Maid_Atelier"] [data-skin-brand="title"] {
-  font-family: 'Microsoft YaHei', 'SimHei', 'PingFang SC', sans-serif;
-  font-size: 20px;
-  font-weight: 600;
+  font-family: 'Cinzel', 'Georgia', 'Merriweather', serif;
+  font-size: 18px;
+  font-weight: 700;
   letter-spacing: 0.5px;
   color: #f4ead5;
   text-shadow: 0 1px 3px rgba(4, 11, 35, 0.55);
@@ -631,13 +646,148 @@ html[data-skin="Maid_Atelier"] .mode-toggle:disabled:hover {
   color: var(--text-disabled);
   border-color: transparent;
 }
+/* 任务窗口 tab（正在运行/已完成/已停止）：与主界面模式切换同款风格 —— 透明底 + 激活态金色下划线 */
+html[data-skin="Maid_Atelier"] .task-tab {
+  position: relative;
+  background: transparent;
+  border-color: transparent;
+  color: #d7def0;
+  text-shadow: 0 1px 3px rgba(4, 11, 35, 0.55);
+  transition: color 0.15s ease, background 0.15s ease;
+}
+html[data-skin="Maid_Atelier"] .task-tab:hover {
+  background: rgba(255, 252, 243, 0.08);
+  color: var(--maid-gold-soft);
+  border-color: transparent;
+}
+html[data-skin="Maid_Atelier"] .task-tab--active {
+  background: transparent;
+  border-color: transparent;
+  color: #fff7e6;
+}
+html[data-skin="Maid_Atelier"] .task-tab--active:hover {
+  background: rgba(255, 252, 243, 0.08);
+  color: #fff7e6;
+  border-color: transparent;
+}
+html[data-skin="Maid_Atelier"] .task-tab--active::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  width: 60%;
+  height: 2px;
+  background: var(--maid-gold);
+  box-shadow: 0 0 8px rgba(235, 204, 143, 0.45);
+  border-radius: 1px;
+  pointer-events: none;
+}
+html[data-skin="Maid_Atelier"] .task-tab--active .task-tab__count {
+  background: rgba(255, 247, 230, 0.16);
+  color: #fff7e6;
+}
+/* 三 tab 之间的悬浮细金分隔线：整高渐隐（上下不再留空），绝对定位不参与排布，hover/激活背景不影响 */
+html[data-skin="Maid_Atelier"] .task-tab:nth-child(1)::before,
+html[data-skin="Maid_Atelier"] .task-tab:nth-child(2)::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -4.5px; /* 位于 gap:8px 的中点 */
+  width: 1px;
+  background: linear-gradient(180deg, transparent, var(--maid-gold) 50%, transparent);
+  opacity: 0.65;
+  pointer-events: none;
+}
+/* 任务窗口 tab 栏背景：参考主界面日志分支标题行的牛皮纸（top-trim 布纹）材质 */
+html[data-skin="Maid_Atelier"] .task-tabs {
+  background:
+    url('assets/top-trim-tile.webp') center -2px / auto 149px repeat-x,
+    rgba(8, 20, 50, 0.9);
+  border-bottom-color: rgba(225, 191, 124, 0.4);
+}
+/* 任务列表背景：参考主界面项目列表的多层叠加（径向高光 + 上亮下暗 + 微噪点 + 内阴影） */
+html[data-skin="Maid_Atelier"] .task-list {
+  position: relative;
+  background:
+    radial-gradient(circle at 50% 14%, rgba(91, 119, 188, 0.23), transparent 31%),
+    linear-gradient(180deg, rgba(16, 36, 86, 0.97), rgba(5, 14, 43, 0.96)),
+    repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.026) 0 1px, transparent 1px 7px);
+  box-shadow:
+    inset 0 6px 14px rgba(255, 255, 255, 0.02),
+    inset 0 -10px 22px rgba(0, 0, 0, 0.32);
+}
+/* chibi 参考项目列表：位于列表多层背景之上、任务卡片之下（可见），
+   尺寸不变 260px、左下角、左右镜像；上方再盖一层半透明黑底遮罩压暗（同侧栏） */
+html[data-skin="Maid_Atelier"] .task-list::after {
+  content: '';
+  position: absolute;
+  left: 12px;
+  bottom: 8px;
+  z-index: 0;
+  width: 260px;
+  height: 196px;
+  background: url('assets/maid-chibi.webp') center / contain no-repeat;
+  transform: scaleX(-1) translateZ(0);
+  opacity: 0.92;
+  filter: drop-shadow(0 5px 12px rgba(2, 7, 24, 0.24));
+  pointer-events: none;
+}
+/* 半透明黑底遮罩：盖在 chibi 之上、任务卡片之下（对齐侧栏 sidebar__root::after） */
+html[data-skin="Maid_Atelier"] .task-list::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  background: rgba(8, 17, 42, 0.55);
+  pointer-events: none;
+}
+html[data-skin="Maid_Atelier"] .task-list > * {
+  position: relative;
+  z-index: 2; /* 任务卡片半透明遮罩之上 */
+}
 
-/* ── 状态栏：花边 + 玻璃 + 冠饰 ── */
+/* 设置窗口右上角 git 按钮：除位置/大小外，各状态样式对齐侧栏置顶按钮
+   （常态 底色+淡金边框+内金投影；hover 主题底白字去边框） */
+html[data-skin="Maid_Atelier"] .settings-gh {
+  background: var(--bg-base-default);
+  border: 1px solid rgba(242, 217, 143, 0.55);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--text-default) 12%, transparent),
+    inset 0 0 4px rgba(242, 217, 143, 0.12);
+}
+html[data-skin="Maid_Atelier"] .settings-gh:hover {
+  background: var(--brand-500);
+  color: var(--text-onaccent);
+  border: none;
+  transform: translateY(-2px);
+}
+/* 日志预览高亮块：浅蓝（替代金色 brand-100/200，避免金色高亮刺眼） */
+html[data-skin="Maid_Atelier"] .right-panel__code-line.log-target,
+html[data-skin="Maid_Atelier"] .right-panel__line-num.log-target {
+  background: rgba(105, 158, 216, 0.24);
+}
+html[data-skin="Maid_Atelier"] .right-panel__code-line.log-target.code-line--log-video {
+  background: rgba(105, 158, 216, 0.34);
+}
+/* 日志选择模式选中行：浅黄底上白字看不清，整行文字改深蓝色（hover 态恢复默认浅字，避免深蓝叠深背景） */
+html[data-skin="Maid_Atelier"] .log-list--selecting .log-entry--selected:not(:hover),
+html[data-skin="Maid_Atelier"] .log-list--selecting .log-entry--selected:not(:hover) .log-entry__video-name,
+html[data-skin="Maid_Atelier"] .log-list--selecting .log-entry--selected:not(:hover) .log-entry__clip-count,
+html[data-skin="Maid_Atelier"] .log-list--selecting .log-entry--selected:not(:hover) .log-entry__clip-path {
+  color: #14335e;
+}
+
+/* ── 状态栏：背景参考日志分支标题行的纸张材质（top-trim 布纹 + 深蓝纯色覆盖 + 上缘金线） ── */
 html[data-skin="Maid_Atelier"] .status-bar {
   position: relative;
-  background: var(--maid-glass-bg);
-  backdrop-filter: blur(10px);
-  border-top: 1px solid var(--maid-glass-border);
+  background:
+    url('assets/top-trim-tile.webp') center -2px / auto 149px repeat-x,
+    rgba(8, 20, 50, 0.9);
+  border-top: 1px solid rgba(225, 191, 124, 0.35);
 }
 html[data-skin="Maid_Atelier"] .status-bar::before {
   content: '';
@@ -723,14 +873,6 @@ html[data-skin="Maid_Atelier"] .tree-txt-item:hover {
   border-color: var(--border-neutral-l2);
 }
 
-/* ── 工作区调整条 ── */
-html[data-skin="Maid_Atelier"] .workspace-resizer {
-  background: var(--maid-glass-border);
-}
-html[data-skin="Maid_Atelier"] .workspace-resizer:hover,
-html[data-skin="Maid_Atelier"] .workspace-resizer--active {
-  background: var(--maid-gold);
-}
 html[data-skin="Maid_Atelier"] .config-resizer {
   background: var(--maid-glass-border);
 }
@@ -739,8 +881,9 @@ html[data-skin="Maid_Atelier"] .config-resizer--active {
   background: var(--maid-gold);
 }
 
-/* ── 预览面板展开/折叠按钮（右侧面板左缘，蓝金）── */
-html[data-skin="Maid_Atelier"] .preview-collapse {
+/* ── 左侧列表栏三竖线按钮 + 右侧预览栏中缝尺寸栏（蓝金）── */
+html[data-skin="Maid_Atelier"] .sidebar-resize-btn,
+html[data-skin="Maid_Atelier"] .preview-resizer {
   background: linear-gradient(180deg, rgba(23, 46, 106, 0.95), rgba(11, 24, 64, 0.95));
   border: 1px solid rgba(242, 217, 143, 0.55);
   color: #e8c77f;
@@ -748,14 +891,24 @@ html[data-skin="Maid_Atelier"] .preview-collapse {
     inset 0 0 0 1px rgba(5, 15, 45, 0.64),
     0 4px 12px rgba(1, 7, 24, 0.3);
 }
-html[data-skin="Maid_Atelier"] .preview-collapse:hover {
+html[data-skin="Maid_Atelier"] .sidebar-resize-btn:hover,
+html[data-skin="Maid_Atelier"] .preview-resizer:hover {
   background: linear-gradient(180deg, rgba(44, 78, 152, 0.95), rgba(15, 33, 82, 0.95));
   border-color: rgba(244, 218, 164, 0.9);
   color: #fff3cf;
 }
-html[data-skin="Maid_Atelier"] .preview-collapse__icon {
+html[data-skin="Maid_Atelier"] .sidebar-resize-btn svg {
   width: 14px;
   height: 14px;
+}
+/* 女仆皮肤：三竖线按钮右移 1.5px（净 -8.5px，骑在金边框中间）与实色背景（不透明，不透背景） */
+html[data-skin="Maid_Atelier"] .sidebar-resize-btn {
+  transform: translate(-50%, -50%) translateX(-8.5px);
+  background: #142a59;
+}
+/* 女仆皮肤：按钮 hover 同样使用实色，避免常态实色↔hover 半透明渐变切换时出现"丢背景"闪变 */
+html[data-skin="Maid_Atelier"] .sidebar-resize-btn:hover {
+  background: #1c326b;
 }
 /* 界面右上角圆形折叠按钮：蓝金皮肤（同侧栏置顶按钮风格） */
 html[data-skin="Maid_Atelier"] .preview-collapse-round {
@@ -852,6 +1005,24 @@ html[data-skin="Maid_Atelier"] .tree-txt-item--active:hover {
 }
 html[data-skin="Maid_Atelier"] .tree-txt-item--active .tree-txt-item__icon {
   color: var(--maid-gold-light);
+}
+/* ── 水印文件名：严格匹配左侧配置选中常规态（金描边 + 蓝渐变底 + 浅金文字） ── */
+html[data-skin="Maid_Atelier"] .config-watermark__path {
+  background: linear-gradient(90deg, rgba(30, 58, 120, 0.85), rgba(42, 79, 155, 0.65));
+  color: var(--maid-gold-light);
+  font-weight: var(--font-weight-medium);
+  border: 1px solid rgba(245, 220, 120, 0.6);
+  border-radius: var(--radius-6);
+  box-shadow: 0 0 8px rgba(245, 220, 120, 0.15), inset 0 0 12px rgba(30, 58, 120, 0.3);
+}
+html[data-skin="Maid_Atelier"] .config-watermark__path:hover {
+  /* 与激活态常态一致：hover 不再加深/变色 */
+  background: linear-gradient(90deg, rgba(30, 58, 120, 0.85), rgba(42, 79, 155, 0.65));
+  border-color: rgba(245, 220, 120, 0.6);
+}
+html[data-skin="Maid_Atelier"] .config-watermark__path--empty {
+  color: var(--maid-gold-light);
+  opacity: 0.55;
 }
 /* 激活/填充态项目行：整行白色文字 + 透明底（缎带悬浮，去掉其下深色背景） */
 html[data-skin="Maid_Atelier"] .tree-project__name--sticky {
@@ -1026,10 +1197,12 @@ html[data-skin="Maid_Atelier"] .config-editor__col-header {
   background: rgba(14, 29, 73, 0.6);
   border-bottom-color: rgba(255, 255, 255, 0.06);
 }
-html[data-skin="Maid_Atelier"] .config-editor__col--paths,
-html[data-skin="Maid_Atelier"] .config-editor__col--exclude,
-html[data-skin="Maid_Atelier"] .config-editor__col--watermark {
+html[data-skin="Maid_Atelier"] .config-editor__col--watermark,
+html[data-skin="Maid_Atelier"] .config-editor__wm-section {
   background: transparent;
+}
+html[data-skin="Maid_Atelier"] .config-editor__wm-section.is-watermark-error {
+  background: var(--status-error-surface-l1);
 }
 html[data-skin="Maid_Atelier"] .config-path-row {
   border-bottom-color: rgba(255, 255, 255, 0.05);
@@ -1122,12 +1295,20 @@ html[data-skin="Maid_Atelier"] .date-branch-btn {
   from { opacity: 0; transform: translateY(5px); }
   to { opacity: 1; transform: none; }
 }
+/* 配置间切换时静默：按钮不重放进场动画（与徽章/config-editor --static 同思路） */
+html[data-skin="Maid_Atelier"] .date-branch-btn.date-branch-btn--static {
+  animation: none;
+}
 html[data-skin="Maid_Atelier"] .config-editor {
   animation: maidPaneIn 340ms cubic-bezier(0.22, 0.78, 0.2, 1) both;
 }
 @keyframes maidPaneIn {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: none; }
+}
+/* 配置间切换静默：不重放进场动画（与徽章 --static 同思路） */
+html[data-skin="Maid_Atelier"] .config-editor.config-editor--static {
+  animation: none;
 }
 
 /* 未选中配置时：两个空态提示框都隐藏（dates 内「从左侧选择一个 TXT」、
@@ -1282,7 +1463,6 @@ html[data-skin="Maid_Atelier"] .win-titlebar {
 }
 html[data-skin="Maid_Atelier"] .win-titlebar__title {
   color: #f4e3bf;
-  font-weight: 500;
   letter-spacing: 0.06em;
   text-shadow: 0 1px 3px rgba(2, 7, 25, 0.55);
 }
@@ -1296,4 +1476,28 @@ html[data-skin="Maid_Atelier"] .win-titlebar__btn:hover {
 html[data-skin="Maid_Atelier"] .win-titlebar__btn--close:hover {
   background: #d34a3f;
   color: #ffffff;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   金色按钮提亮：主按钮（保存为当日配置）与弹窗强调按钮
+   改用更亮的金色阶（brand-300/400），深色文字保持对比；
+   仅影响按钮，不影响其他金色装饰元素
+   ═══════════════════════════════════════════════════════════════ */
+html[data-skin="Maid_Atelier"] .config-btn--save-today {
+  background: var(--brand-300);
+  border-color: var(--brand-300);
+  color: var(--text-onbrand);
+}
+html[data-skin="Maid_Atelier"] .config-btn--save-today:hover {
+  background: var(--brand-200);
+  border-color: var(--brand-200);
+}
+html[data-skin="Maid_Atelier"] .modal-btn--primary {
+  background: var(--brand-400);
+  border-color: var(--brand-400);
+  color: var(--text-onaccent);
+}
+html[data-skin="Maid_Atelier"] .modal-btn--primary:hover {
+  background: var(--brand-500);
+  border-color: var(--brand-500);
 }

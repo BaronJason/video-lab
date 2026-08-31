@@ -11,8 +11,8 @@
   <link rel="stylesheet" href="skins/Maid_Atelier.css">
 </head>
 <body>
-  <!-- 自制标题栏（frame:false） -->
-  <div class="win-titlebar" id="winTitlebar">
+  <!-- 自制标题栏（frame:false）；data-main-titlebar 标记主窗口，仅此处使用品牌字体 -->
+  <div class="win-titlebar" id="winTitlebar" data-main-titlebar>
     <span class="win-titlebar__title">Video Lab</span>
     <div class="win-titlebar__controls">
       <button class="win-titlebar__btn" data-wctl="min" title="最小化">
@@ -38,6 +38,7 @@
         <div class="busy-progress__bar"><div class="busy-progress__fill" id="busyProgressFill" style="width:0%"></div></div>
         <div class="busy-progress__text" id="busyProgressText"></div>
       </div>
+      <button type="button" class="busy-min-btn" id="busyMinBtn" style="display:none">缩到后台（状态栏显示进度）</button>
     </div>
   </div>
   <!-- 设置窗口打开时的模糊遮罩（类似预检测） -->
@@ -70,8 +71,8 @@
               <button class="sidebar-menu__item" id="menuRefreshConfigs" title="重新扫描工作路径下的所有配置，并清理重复的外部 * 配置">
                 <i data-icon="refresh-cw" data-size="14"></i>刷新配置列表
               </button>
-              <button class="sidebar-menu__item" id="menuResetPrecheck" title="重置预检测物理缓存，并对所有配置指向的路径重新预检测">
-                <i data-icon="rotate-ccw" data-size="14"></i>重置预检测缓存
+              <button class="sidebar-menu__item" id="menuResetPrecheck" title="刷新预缓存：仅刷新为增量更新；全部重置为清空后全量重新检测">
+                <i data-icon="rotate-ccw" data-size="14"></i>刷新预缓存
               </button>
               <button class="sidebar-menu__item" id="menuChoosePath" title="选择工作路径">
                 <i data-icon="folder" data-size="14"></i>选择路径
@@ -92,8 +93,12 @@
         </div>
       </div>
 
-      <!-- 侧栏宽度调节 -->
-      <div class="workspace-resizer" id="workspaceResizer" title="拖拽调整项目列表宽度"></div>
+      <!-- 左侧列表栏宽度调节：铆钉透明栏承载三竖线按钮，拖拽调整项目列表宽度 -->
+      <div class="workspace-resizer sidebar-resizer" id="workspaceResizer" title="拖拽调整项目列表宽度">
+        <button class="sidebar-resize-btn" id="sidebarResizeBtn" title="拖拽调整项目列表宽度">
+          <i data-icon="grip-lines" data-size="14"></i>
+        </button>
+      </div>
 
       <!-- Workspace -->
       <div class="workspace">
@@ -124,6 +129,12 @@
             <div class="center-bottom" id="centerBottom"></div>
           </div>
 
+          <!-- 预览栏宽度调节尺寸栏：位于中间配置列表与右侧预览栏之间的固定 5px 布局位，
+               贯穿预览栏全高，常态不显示、hover 面板或条本体时浮现，拖拽调整预览宽度 -->
+          <div class="preview-resizer-anchor" id="previewResizerAnchor">
+            <div class="preview-resizer" id="previewResizer" title="拖拽调整预览宽度"></div>
+          </div>
+
           <!-- Right Panel: 预览 -->
           <div class="right-panel" id="rightPanel">
             <div class="right-panel__header">
@@ -132,6 +143,12 @@
                   <i data-icon="save" data-size="12"></i>实时
                 </button>
                 <button class="preview-toggle" id="btnPreviewRaw" title="显示原始 TXT 内容">
+                  <i data-icon="file-text" data-size="12"></i>原始
+                </button>
+                <button class="preview-toggle preview-toggle--active" id="btnLogSimple" title="简化显示日志片段路径（默认）" style="display:none">
+                  <i data-icon="list" data-size="12"></i>简化
+                </button>
+                <button class="preview-toggle" id="btnLogRaw" title="显示日志完整原始内容" style="display:none">
                   <i data-icon="file-text" data-size="12"></i>原始
                 </button>
               </div>
@@ -147,15 +164,6 @@
               <div class="right-panel__code" id="rightCode"></div>
             </div>
           </div>
-
-          <!-- 预览面板分隔/折叠按钮：细亮金线分隔由 right-panel 左缘 border 承担，
-               按钮独立置于 workspace-body 层、右面板之后（相邻兄弟，
-               保证 hover 区仅为右侧面板区域时按钮可显隐），
-               点击折叠/展开，按住拖动调宽 -->
-          <button class="preview-collapse" id="previewCollapseBtn" title="展开预览面板">
-            <svg class="preview-collapse__icon ico-left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="m15 18-6-6 6-6"/></svg>
-            <svg class="preview-collapse__icon ico-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="m9 18 6-6-6-6"/></svg>
-          </button>
 
           <!-- 界面右上角圆形折叠按钮：独立于预览栏，始终可见，
                点击折叠/展开预览栏；颜色风格同侧栏置顶按钮 -->
@@ -178,15 +186,20 @@
         <span id="statusLeft">就绪</span>
       </span>
       <span class="status-bar__right">
+        <span class="probe-mini" id="probeMini" style="display:none">
+          <span class="probe-mini__label" id="probeMiniLabel">预检测 0/0</span>
+          <span class="probe-mini__track"><span class="probe-mini__fill" id="probeMiniFill" style="width:0%"></span></span>
+          <button type="button" class="probe-mini__cancel" id="probeMiniCancel" title="取消后台预检测">✕</button>
+        </span>
         <span class="update-mini" id="updateMini" style="display:none">
           <span class="update-mini__label" id="updateMiniLabel">更新中…</span>
           <span class="update-mini__track"><span class="update-mini__fill" id="updateMiniFill" style="width:0%"></span></span>
           <span class="update-mini__text" id="updateMiniText">0%</span>
         </span>
+        <span id="envWarnMark" class="status-bar__envwarn" style="display:none"></span>
         <button class="status-bar__tasks-btn" id="btnOpenTasks" title="打开任务列表，查看脚本实时输出">
           <i data-icon="list" data-size="12"></i>任务<span class="status-bar__tasks-count" id="tasksCount" style="display:none"></span>
         </button>
-        <span id="envWarnMark" class="status-bar__envwarn"></span>
       </span>
     </div>
 

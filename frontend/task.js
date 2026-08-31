@@ -56,8 +56,8 @@
       var overlay = document.createElement('div');
       overlay.className = 'modal-overlay';
       var card = document.createElement('div');
-      card.className = 'modal-card';
-      var html = '<div class="modal__title">' + escapeHtml(opts.title) + '</div>';
+      card.className = 'modal-card' + (opts.cardClass ? ' ' + opts.cardClass : '');
+      var html = '<button type="button" class="modal-close" title="关闭">✕</button><div class="modal__title">' + escapeHtml(opts.title) + '</div>';
       if (opts.message) html += '<div class="modal__message">' + escapeHtml(opts.message) + '</div>';
       html += '<div class="modal__actions">';
       (opts.buttons || []).forEach(function (b) {
@@ -70,6 +70,8 @@
       document.body.appendChild(overlay);
       var done = function (result) { overlay.remove(); resolve(result); };
       overlay.addEventListener('click', function (e) { if (e.target === overlay) done(null); });
+      var closeBtn = card.querySelector('.modal-close');
+      if (closeBtn) closeBtn.addEventListener('click', function () { done(null); });
       var btns = card.querySelectorAll('.modal-btn');
       (opts.buttons || []).forEach(function (b, i) { btns[i].addEventListener('click', function () { done(b.value); }); });
     });
@@ -99,6 +101,61 @@
   // 已完成列表按日期分组的展开状态：dayKey -> true(展开)/false(折叠)；未记录时首组展开、其余折叠
   var doneGroupsExpanded = {};
 
+  // 控制台日志滚动辅助：logAtBottom 判断是否停在最新一行（底部），
+  // scrollLogBottom 直接滚到底。
+  // 跟随语义：following=true 表示「该跟随最新」——初始为 true；每次滚动实时
+  // 同步（在底部→ true，上滚看历史→ false）；日志不可见时（折叠卡片 / 切换 tab
+  // / 关闭列表重开后）一律重置为 true，保证再次展开即最新一行
+  function logAtBottom(el) { return el.scrollHeight - (el.scrollTop + el.clientHeight) <= 2; }
+  function scrollLogBottom(el) { el.scrollTop = el.scrollHeight; }
+  // 时间格式跟随实际用时：几十秒只显秒；1m1s / 10m10s / 1h0m10s（分秒含 0 亦保留）
+  function humanDuration(sec) {
+    var s = Math.max(0, Math.round(sec));
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+    if (h > 0) return h + 'h' + m + 'm' + x + 's';
+    if (m > 0) return m + 'm' + x + 's';
+    return x + 's';
+  }
+  // ffmpeg 状态行 elapsed：HH:MM:SS.mmm 或纯秒数 float，统一解析成秒
+  function parseElapsedSec(v) {
+    var s = String(v).trim(), p = s.split(':');
+    if (p.length === 3) {
+      var sec = parseFloat(p[2]);
+      return (parseInt(p[0], 10) || 0) * 3600 + (parseInt(p[1], 10) || 0) * 60 + (isNaN(sec) ? 0 : sec);
+    }
+    var f = parseFloat(s);
+    return isNaN(f) ? NaN : f;
+  }
+  // ffmpeg 实时进度行直译：顺序按原文，fps/重复帧不显示，质量字段保留 q 标签，
+  // 体积换算 MB（KiB/1024，1 位小数）；丢帧字段缺失时补 0 不留空；elapsed（秒）格式化为时分秒
+  function mbText(v) {
+    var m = String(v).match(/^([\d.]+)\s*kib$/i);
+    return m ? (parseFloat(m[1]) / 1024).toFixed(1) + 'MB' : v;
+  }
+  function liveLineText(o) {
+    if (!o) return '';
+    var order = [['frame', '总帧数'], ['q', 'q'], ['size', '大小'], ['time', '时间'], ['bitrate', '码率'], ['drop', '丢帧'], ['elapsed', '已用时'], ['speed', '速度']];
+    var out = [];
+    for (var i = 0; i < order.length; i++) {
+      var k = order[i][0], label = order[i][1], v = o[k];
+      if (k === 'drop') { if (!(parseFloat(v) > 0)) continue; } // 丢帧为 0（或缺省）不显示
+      if (v === undefined || v === null || v === '') continue;
+      if (k === 'size') v = mbText(v);
+      if (k === 'elapsed') { var sec = parseElapsedSec(v); v = isNaN(sec) ? v : humanDuration(sec); }
+      out.push(label + '=' + v);
+    }
+    return out.join(' ');
+  }
+
+  function bindLogFollow(rec) {
+    rec.following = true;
+    rec.logEl.addEventListener('scroll', function () {
+      // 程序性滚动（重绘/跟随滚底触发）不改变跟随意图，仅响应用户滚动
+      if (rec._progScroll) { rec._progScroll = false; return; }
+      rec.following = logAtBottom(rec.logEl);
+    });
+  }
+
   function buildCard(t) {
     var card = document.createElement('div');
     card.className = 'task-card task-card--' + (t.lockState === 'waiting' ? 'waiting' : t.status);
@@ -124,7 +181,7 @@
     var progress = document.createElement('div');
     progress.className = 'task-card__progress';
     progress.innerHTML =
-      '<div class="task-card__progress-text"><span class="task-card__progress-label"></span><span class="task-card__progress-pct"></span></div>' +
+      '<div class="task-card__progress-text"><span class="task-card__progress-label"></span><span class="task-card__progress-elapsed"></span><span class="task-card__progress-pct"></span></div>' +
       '<div class="task-card__progress-track"><div class="task-card__progress-fill"></div></div>';
     card.appendChild(progress);
 
@@ -136,14 +193,17 @@
     body.appendChild(log);
     card.appendChild(body);
 
-    var record = { el: card, header: header, logEl: log, body: body, logCount: 0, expanded: false, progressEl: progress, progressLabel: progress.querySelector('.task-card__progress-label'), progressPct: progress.querySelector('.task-card__progress-pct'), progressFill: progress.querySelector('.task-card__progress-fill') };
+    var record = { el: card, header: header, logEl: log, body: body, logCount: 0, expanded: false, progressEl: progress, progressLabel: progress.querySelector('.task-card__progress-label'), progressElapsed: progress.querySelector('.task-card__progress-elapsed'), progressPct: progress.querySelector('.task-card__progress-pct'), progressFill: progress.querySelector('.task-card__progress-fill') };
+    bindLogFollow(record);
     header.addEventListener('click', function (e) {
       if (e.target.closest('.task-card__stop')) return;
       if (e.target.closest('.task-card__pause')) return;
       if (e.target.closest('.task-card__handle')) return;
       record.expanded = !record.expanded;
       body.style.display = record.expanded ? '' : 'none';
-      if (record.expanded) log.scrollTop = log.scrollHeight;
+      if (record.expanded) { record.following = true; record._progScroll = true; scrollLogBottom(log); requestAnimationFrame(function () { record._progScroll = true; scrollLogBottom(log); }); }
+      // 折叠（日志不可见）时重置跟随：下次展开直接到最新一行
+      else record.following = true;
     });
     header.querySelector('.task-card__stop').addEventListener('click', function (e) {
       e.stopPropagation();
@@ -317,37 +377,65 @@
     var delBtn = rec.header.querySelector('.task-card__del');
     var isEnded = t.status === 'done' || t.status === 'stopped' || t.status === 'error' || t.status === 'interrupted';
     delBtn.style.display = (isEnded && state.tab !== 'running') ? '' : 'none';
-    // 进度条：数字行（当前/总）+ 下方进度条，仅解析到总进度后显示
+    // 进度条：数字行（当前/总）+ 下方进度条，仅解析到总进度后显示；
+    // 排队任务也显示预计成片数（后端创建时预填 total）；分组数>0 时追加「分 N 组」
     var prog = t.progress || {};
     var total = prog.total || 0;
+    var groupCount = parseInt(prog.groupCount || '0', 10) || 0;
     var clipTarget = prog.clipTarget || 0;
     var clip = Math.max(0, prog.clip || 0);
+    var groupText = groupCount > 0 ? ' · 分' + groupCount + '组' : '';
     if (clipTarget > 0) {
       var pct = Math.max(0, Math.min(clip / clipTarget, 1));
-      rec.progressLabel.textContent = '成片 ' + (prog.current || 0) + '/' + total;
+      var curClip = prog.current || 0;
+      rec.progressLabel.textContent = (curClip > 0 ? '成片 ' + curClip + '/' + total : '预计成片 ' + total) + groupText;
       rec.progressPct.textContent = Math.round(pct * 100) + '%';
       rec.progressFill.style.width = (pct * 100) + '%';
       rec.progressEl.style.display = 'flex';
     } else if (total > 0) {
       var cur = Math.max(0, Math.min(prog.current || 0, total));
-      rec.progressLabel.textContent = cur + '/' + total;
+      rec.progressLabel.textContent = (cur > 0 ? '成片 ' + cur + '/' + total : '预计成片 ' + total) + groupText;
       rec.progressPct.textContent = Math.round(cur / total * 100) + '%';
       rec.progressFill.style.width = (cur / total * 100) + '%';
       rec.progressEl.style.display = 'flex';
     } else {
       rec.progressEl.style.display = 'none';
     }
-    // 追加新增日志（增量更新，避免整表重渲染）
+    // 任务总用时：进度条文字行内、百分比左侧（动态时分秒格式）；
+    // 宽度由 CSS min-width 固定，未开始时内容留空保持占位，避免 % 位数变化/用时出现造成跳变
+    var es = parseInt(t.elapsedSec || '0', 10) || 0;
+    if (rec.progressElapsed) rec.progressElapsed.textContent = es > 0 ? '总用时 ' + humanDuration(es) : '';
+    // 日志重绘：后端下发的 log 是最近 500 行窗口（slice(-500)），行数不会一直增长，
+    // 按行数增量追加会在追平窗口后永不更新（重开/切 tab 才见一次最新）。
+    // 改为窗口内容整体重绘 + 滚动保持：跟随状态滚到底，查看历史时保持相对阅读位置。
+    // 末尾追加实时进度行（liveLine）：ffmpeg 折叠单行，中文标签按序直译
     var lines = t.log || [];
-    if (lines.length > rec.logCount) {
-      var frag = document.createDocumentFragment();
-      for (var i = rec.logCount; i < lines.length; i++) {
-        frag.appendChild(document.createTextNode(lines[i]));
-        frag.appendChild(document.createTextNode('\n'));
-      }
-      rec.logCount = lines.length;
-      rec.logEl.appendChild(frag);
-      if (rec.expanded) rec.logEl.scrollTop = rec.logEl.scrollHeight;
+    var joined = lines.join('\n');
+    // 已结束任务：实时进度行已由"成片完成"固化进日志，不再叠加显示，避免与固化行内容重复
+    var ended = t.status === 'done' || t.status === 'stopped' || t.status === 'error' || t.status === 'interrupted';
+    var live = ended ? '' : liveLineText((t.progress || {}).liveLine);
+    var logChanged = joined !== rec._lastLog;
+    var liveChanged = live !== rec._lastLive;
+    if (logChanged) {
+      var rel = rec.logEl.scrollHeight - rec.logEl.scrollTop;
+      rec.logEl.textContent = joined;
+      rec._lastLog = joined;
+    }
+    // 实时进度行：textContent 覆盖会清掉它，统一在此重建/挂回日志末尾
+    if (live) {
+      if (!rec._liveNode) rec._liveNode = document.createElement('div');
+      rec._liveNode.className = 'task-card__live';
+      rec._liveNode.textContent = live;
+      if (rec._liveNode.parentNode !== rec.logEl) rec.logEl.appendChild(rec._liveNode);
+    } else if (rec._liveNode) {
+      if (rec._liveNode.parentNode) rec._liveNode.parentNode.removeChild(rec._liveNode);
+      rec._liveNode = null;
+    }
+    rec._lastLive = live;
+    // 滚动：跟随状态滚到底（日志或进度行任一变化）；上滚看历史时保持相对阅读位
+    if (logChanged || liveChanged) {
+      if (rec.expanded && rec.following) { rec._progScroll = true; scrollLogBottom(rec.logEl); }
+      else if (logChanged && rec.expanded) { rec._progScroll = true; rec.logEl.scrollTop = Math.max(0, rec.logEl.scrollHeight - rel); }
     }
   }
 
@@ -432,9 +520,9 @@
     });
     var emptyEl = list.querySelector('.task-empty');
     if (emptyEl) emptyEl.remove();
-    // 旧的日期分组头整体移除，按当前顺序重建（卡片节点复用）
-    Array.prototype.slice.call(list.querySelectorAll('.task-day-group')).forEach(function (h) { h.parentNode.removeChild(h); });
     if (state.tab !== 'done') {
+      // 非已完成列表不用日期分组：清掉切换 tab 时可能残留的分组头
+      Array.prototype.slice.call(list.querySelectorAll('.task-day-group')).forEach(function (h) { h.parentNode.removeChild(h); });
       cur.forEach(function (t) {
         var rec = rendered[t.id];
         if (!rec) { rec = buildCard(t); rendered[t.id] = rec; }
@@ -442,7 +530,9 @@
         // 清理在已完成 tab 可能残留的分组标记与隐藏
         delete rec.el.dataset.day;
         rec.el.style.display = '';
-        list.appendChild(rec.el);
+        // 已在列表中的节点不移动：移动会 detach/attach 导致卡片内部
+        // 日志滚动位置被重置（每秒轮询时控制台会被强行拉回顶部）
+        if (rec.el.parentNode !== list) list.appendChild(rec.el);
       });
       return;
     }
@@ -457,6 +547,13 @@
       dayCount[d] += n;
     });
     var firstDay = dayOrder.length ? dayOrder[0] : null;
+    // 清理已过期的日期分组头（该日已无任务）；仍在的头保留 DOM 原位，
+    // 避免每轮整体删除重建导致头被追加到该组卡片之后、顺序错乱（首行分组头跳动）
+    var keepDays = {};
+    dayOrder.forEach(function (d) { keepDays[d] = 1; });
+    Array.prototype.slice.call(list.querySelectorAll('.task-day-group')).forEach(function (h) {
+      if (!keepDays[h.getAttribute('data-day')]) h.parentNode.removeChild(h);
+    });
     dayOrder.forEach(function (day, di) {
       // 默认首组展开、其余折叠；记录过展开状态则保持
       if (!(day in doneGroupsExpanded)) doneGroupsExpanded[day] = (di === 0);
@@ -467,27 +564,34 @@
       var day = dayKey(t.endedAt);
       if (day !== lastDay) {
         lastDay = day; curDay = day;
-        var expanded = !!doneGroupsExpanded[day];
-        var hdr = document.createElement('div');
-        hdr.className = 'task-day-group';
-        hdr.dataset.day = day;
-        hdr.innerHTML =
-          '<span class="task-day-group__label">' + day + '</span>' +
-          '<span class="task-day-group__line"></span>' +
-          '<span class="task-day-group__count">共 ' + dayCount[day] + ' 个视频</span>';
-        if (!expanded) hdr.classList.add('is-collapsed');
-        list.appendChild(hdr);
-        // 点击整个分组头即展开/折叠该日列表（按钮已移除）
-        hdr.addEventListener('click', function () {
-          doneGroupsExpanded[day] = !doneGroupsExpanded[day];
-          applyDoneGroupState(day);
-        });
+        // 分组头复用：存在则保留原位仅更新计数（避免重建追加到卡片后被甩到组尾），
+        // 不存在才创建；新组此刻没有卡片在列表，尾部追加即正确组序（头在卡片前）
+        var hdr = list.querySelector('.task-day-group[data-day="' + day + '"]');
+        if (!hdr) {
+          hdr = document.createElement('div');
+          hdr.className = 'task-day-group';
+          hdr.dataset.day = day;
+          hdr.innerHTML =
+            '<span class="task-day-group__label">' + day + '</span>' +
+            '<span class="task-day-group__line"></span>' +
+            '<span class="task-day-group__count">共 ' + dayCount[day] + ' 个视频</span>';
+          // 点击整个分组头即展开/折叠该日列表（按钮已移除）
+          hdr.addEventListener('click', function () {
+            doneGroupsExpanded[day] = !doneGroupsExpanded[day];
+            applyDoneGroupState(day);
+          });
+          list.appendChild(hdr);
+        } else {
+          var cntEl = hdr.querySelector('.task-day-group__count');
+          if (cntEl) cntEl.textContent = '共 ' + dayCount[day] + ' 个视频';
+        }
+        hdr.classList.toggle('is-collapsed', !doneGroupsExpanded[day]);
       }
       var rec = rendered[t.id];
       if (!rec) { rec = buildCard(t); rendered[t.id] = rec; }
       updateCard(rec, t);
       rec.el.dataset.day = day;
-      list.appendChild(rec.el);
+      if (rec.el.parentNode !== list) list.appendChild(rec.el);
     });
     // 应用各日期组隐显与分组头按钮状态
     dayOrder.forEach(function (day) { applyDoneGroupState(day); });
@@ -546,17 +650,50 @@
     if (state.tab === 'running') { actions.style.display = ''; fab.style.display = 'none'; }
     else { actions.style.display = 'none'; fab.style.display = ''; }
   }
-  function onFabClearClick() {
+  // 右下角清除按钮：已完成/已停止均弹出三按钮清除弹窗（全部清除另有二次确认）
+  function onFabClearClick() { openClearDialog(null); }
+
+  // 清除弹窗：仅清除列表 / 清除列表和成片(仅mp4) / 全部清除；文件删除均由后端移入回收站
+  function openClearDialog(day) {
     var isDone = state.tab === 'done';
-    var which = isDone ? '已完成' : '已停止';
-    // 二次确认弹窗与主窗口样式一致
-    confirmDialog('确定要清除「' + which + '」列表中的所有任务吗？此操作不可恢复。').then(function (ok) {
-      if (!ok) return;
-      var statuses = isDone ? ['done'] : ['stopped', 'error', 'interrupted'];
-      call('clear_finished_tasks', statuses).then(function (r) {
-        if (r && !r.ok) alertDialog('清除失败：' + (r.error || '未知错误'));
-      }).catch(function (e) { alertDialog('清除失败：' + e.message); });
+    var scopeName = isDone ? '已完成' : '已停止';
+    var title = day ? '清除当日任务' : '清除全部' + scopeName + '任务';
+    var msg = (day ? '将清除 ' + day + ' 这一天的' : '将清除全部' + scopeName) + '任务，请选择清除方式：';
+    var statuses = isDone ? ['done'] : ['stopped', 'error', 'interrupted'];
+    showDialog({
+      title: title,
+      message: msg,
+      cardClass: 'modal-card--wide',
+      buttons: [
+        { label: '仅清除列表', value: 'list', primary: true },
+        { label: '清除列表和成片', value: 'video', primary: true },
+        { label: '全部清除', value: 'all', danger: true }
+      ]
+    }).then(function (v) {
+      if (!v || v === 'cancel') return;
+      if (v === 'all') {
+        // 全部清除二次确认：删除后无法根据日志和配置恢复成片
+        showDialog({
+          title: '确认全部清除',
+          message: '删除后无法根据日志和配置恢复成片，是否继续？',
+          buttons: [
+            { label: '继续删除', value: 'go', danger: true, primary: true }
+          ]
+        }).then(function (ok) {
+          if (!ok || ok === 'cancel') return;
+          doClearDone(day, 'all', statuses);
+        });
+      } else doClearDone(day, v, statuses);
     });
+  }
+
+  function doClearDone(day, scope, statuses) {
+    call('clear_done_tasks', { day: day || null, scope: scope, statuses: statuses }).then(function (r) {
+      if (!r || !r.ok) { alertDialog('清除失败：' + ((r && r.error) || '未知错误')); return; }
+      if (r.errors && r.errors.length) alertDialog('部分项目清除失败：\n' + r.errors.slice(0, 5).join('\n'));
+      var api = getApi();
+      if (api && api.list_tasks) api.list_tasks().then(renderTasks).catch(function () {});
+    }).catch(function (e) { alertDialog('清除失败：' + e.message); });
   }
 
   function switchTab(tab) {
@@ -595,6 +732,15 @@
       call('pause_all_tasks').then(function (r) {
         if (r && !r.ok) alertDialog('暂无排队中的任务');
       }).catch(function (e) { alertDialog('全部暂停失败：' + e.message); });
+    });
+    // 已完成分组头右键：清除当日任务（后续三按钮弹窗二次确认）
+    var taskListEl = $('taskList');
+    if (taskListEl) taskListEl.addEventListener('contextmenu', function (e) {
+      var hdr = e.target.closest('.task-day-group');
+      if (!hdr) return;
+      e.preventDefault();
+      var day = hdr.getAttribute('data-day');
+      showMenu(e.clientX, e.clientY, [{ label: '清除当日任务', action: function () { openClearDialog(day); } }]);
     });
     $('taskFab').addEventListener('click', onFabClearClick);
     updateFab();

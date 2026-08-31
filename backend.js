@@ -144,8 +144,57 @@ function dedupeByDir(list) {
   return out;
 }
 
+// 任务总用时（秒）：未开始为 0；已结束取 endedAt；运行中取当前时间
+function taskElapsed(t) {
+  if (!t || !t.startedAt) return 0;
+  const ended = t.status === 'done' || t.status === 'stopped' || t.status === 'error' || t.status === 'interrupted';
+  const end = ended ? (t.endedAt || Date.now()) : Date.now();
+  return Math.max(0, Math.round((end - t.startedAt) / 1000));
+}
+// 时间格式跟随实际用时：几十秒只显秒；1m1s / 10m10s / 1h0m10s（分秒含 0 亦保留）
+function zhDuration(sec) {
+  const s = Math.max(0, Math.round(sec));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+  if (h > 0) return h + 'h' + m + 'm' + x + 's';
+  if (m > 0) return m + 'm' + x + 's';
+  return x + 's';
+}
+// ffmpeg 状态行的 elapsed 字段：6.x 后为 HH:MM:SS.mmm，部分版本为纯秒数 float，统一解析成秒
+function parseElapsedSec(v) {
+  const s = String(v).trim();
+  const p = s.split(':');
+  if (p.length === 3) {
+    const sec = parseFloat(p[2]);
+    return (parseInt(p[0], 10) || 0) * 3600 + (parseInt(p[1], 10) || 0) * 60 + (Number.isNaN(sec) ? 0 : sec);
+  }
+  const f = parseFloat(s);
+  return Number.isNaN(f) ? NaN : f;
+}
+// ffmpeg 帧进度中文直译（与前端 frontend/task.js 的 liveLineText 保持一致）：
+// 顺序：帧(总帧数)/q/大小/时间/码率/丢帧(为 0 不显示)/已用时/速度；体积换算 MB（KiB/1024，1 位小数）；
+// elapsed（秒）格式化为时分秒。成片完成时将最后一行帧进度以此形式固化进任务日志
+function zhLiveLine(kv) {
+  const order = [['frame', '总帧数'], ['q', 'q'], ['size', '大小'], ['time', '时间'], ['bitrate', '码率'], ['drop', '丢帧'], ['elapsed', '已用时'], ['speed', '速度']];
+  const parts = [];
+  for (const [k, label] of order) {
+    let v = kv[k];
+    if (k === 'drop') { if (!(parseFloat(v) > 0)) continue; } // 丢帧为 0（或缺省）不显示
+    if (v === undefined || v === null || v === '') continue;
+    if (k === 'size') {
+      const m = String(v).match(/^([\d.]+)\s*kib$/i);
+      v = m ? (parseFloat(m[1]) / 1024).toFixed(1) + 'MB' : v;
+    }
+    if (k === 'elapsed') {
+      const sec = parseElapsedSec(v);
+      v = Number.isNaN(sec) ? String(v) : zhDuration(sec);
+    }
+    parts.push(label + '=' + v);
+  }
+  return parts.join(' ');
+}
+
 class Api {
-  constructor(root, config, cachePath, videoCachePath, logCachePath, scriptsDir, clipIndexCachePath, taskStatePath) {
+  constructor(root, config, cachePath, videoCachePath, logCachePath, scriptsDir, clipIndexCachePath, taskStatePath, watermarkCachePath) {
     this.root = root;
     this.config = Object.assign({}, DEFAULT_CONFIG, config || {});
     this.cachePath = cachePath || '';
@@ -154,10 +203,15 @@ class Api {
     this.scriptsDirFixed = scriptsDir || ''; // 脚本固定位置（main 进程传入 resources\Scripts），无需用户配置
     this.clipIndexCachePath = clipIndexCachePath || ''; // 成片名搜索索引缓存文件（Cache 子文件夹）
     this.taskStatePath = taskStatePath || '';           // 任务列表持久化文件（Cache 子文件夹）
+    this.watermarkCachePath = watermarkCachePath || ''; // 水印主流水印固化缓存（Cache 子文件夹，随工作目录重置）
     this._persistTimer = null;                          // 任务持久化节流定时器
     this._clipIndex = null;        // Map<baseDir, {mtime, entries}>
     this._clipIndexRoot = '';
     this._clipIndexDirty = false;
+    this._rebuildingClip = false; // 成片索引后台分批重建进行中标志（防并发重复触发）
+    this.onScanProgress = null;   // 各扫描/重建环节进度回调（main 注入，推送主窗口渲染实时状态）
+    this._precheckToken = 0;      // 预检测取消令牌：token 变化即中断旧探测（重置/换路径/手动取消）
+    this._inlineProbing = 0;      // 行内预检测进行中计数：后台大探测遇其让路，保证用户操作优先
     // ffprobe 探测并发上限：保持低值，避免占用过多 CPU/IO 拖慢整机
     this.probeConcurrency = 4;
     this._videoCache = null;
@@ -166,12 +220,16 @@ class Api {
     this._txtTreeRoot = null;
     this._projectsCache = null;
     this._versionsCache = new Map();
+    this._versionsFp = new Map(); // 各配置版本列表的「目录级指纹」，list_versions 入口核对自动失效
     this._scanCache = new Map();
     this._scanLoadedRoot = '';
     this._scanDirty = false;
     // 日志 txt 缓存：刷新配置时一次性收集全部日志，供日期分支/对应关系直接使用
     this._logCache = null;
     this._logCacheRoot = '';
+    // 水印主流水印固化缓存：按 root 隔离加载，换工作目录时重置（_wmCacheLoadedRoot !== root 视为未加载）
+    this._wmCache = null;
+    this._wmCacheLoadedRoot = null;
     // 任务管理：实时捕获 ps1 输出并推送，支持多任务与停止排队任务
     this.tasks = new Map();
     this.taskSeq = 0;
@@ -201,10 +259,28 @@ class Api {
   getRoot() { return this.root; }
 
   setRoot(newRoot) {
+    // 更换工作目录（即使重选相同目录）：水印主流缓存物理重置+清内存，
+    // 与全缓存重置同语义——下次判定/刷新按新目录现场重新计算归属
+    if (this.watermarkCachePath) { try { fs.unlinkSync(this.watermarkCachePath); } catch (e) {} }
+    this._wmCache = null;
+    this._wmCacheLoadedRoot = null;
     this.root = newRoot;
     this._videoCache = null;
     this._videoInfoCache.clear();
     this._invalidateCaches();
+    // 成片索引随工作目录重置：清内存并取消进行中的后台重建，避免旧目录写入新缓存
+    this._clipIndex = new Map();
+    this._clipIndexRoot = '';
+    this._clipIndexDirty = false;
+    this._rebuildingClip = false;
+    // 预检测随工作目录取消：旧路径的探测结果不写入新目录缓存
+    this._precheckToken++;
+  }
+
+  // 手动取消进行中的预检测（前端"缩到后台"后点击 ✕、或再次重置/换路径时自动取消防重复）
+  cancelPrecheck() {
+    this._precheckToken++;
+    return { ok: true };
   }
 
   // 清理项目/TXT 相关内存缓存（保存配置、重建列表时调用；不清持久化指纹缓存）
@@ -213,6 +289,7 @@ class Api {
     this._txtTreeRoot = null;
     this._projectsCache = null;
     this._versionsCache.clear();
+    this._versionsFp.clear();
     this._logCache = null;
     this._logCacheRoot = '';
   }
@@ -352,14 +429,27 @@ class Api {
     return out;
   }
 
+  // 扫描/重建环节状态上报：phase ∈ clear/walk/log/clip/mark/list/done，前端按阶段映射中文提示
+  _emitScan(phase, done, total) {
+    if (typeof this.onScanProgress !== 'function') return;
+    try { this.onScanProgress({ phase: String(phase || ''), done: done || 0, total: total || 0 }); } catch (e) {}
+  }
+
   listProjects(force = false) {
     if (force) {
+      this._emitScan('clear');
       this._invalidateCaches();
-      this._rebuildClipIndex(); // 重新检测配置时一并重建成片名搜索缓存
+      // 重建成片索引：后台分批重建（解析日志+写大缓存），不阻塞本次列表返回；搜索仍走按目录惰性命中
+      this._rebuildClipIndexAsync();
+      // 刷新配置时预填充水印缓存：缺失项目归属补算，已有条目不动（后台，不阻塞本次列表返回）
+      try { setImmediate(() => { this._emitScan('mark'); this._warmWatermarkCache(); }); } catch (e) {}
     }
     if (!force && this._projectsCache) return this._projectsCache;
+    this._emitScan('walk');
     this._collectLogFiles(); // 刷新配置时一并收集日志 txt 缓存
+    this._emitScan('log');
     const data = this._buildProjectsData();
+    this._emitScan('list');
     this._projectsCache = data;
     return data;
   }
@@ -419,15 +509,52 @@ class Api {
     const pdir = path.join(this.root, project);
     if (!fs.existsSync(pdir) || !fs.statSync(pdir).isDirectory()) return [];
     const key = this.root + '\u0000' + project + '\u0000' + name;
-    if (this._versionsCache.has(key)) return this._versionsCache.get(key);
+    if (this._versionsCache.has(key)) {
+      // 自动失效：目录级指纹核对——成片夹/日期目录 mtime 变化（新增成片、外部 * 被挪走等）
+      // 说明缓存树过期，失效重扫一次让版本列表自愈（排队任务渐进 -1/-2 无需手动刷新）
+      if (this._versionsFp.get(key) === this._versionFingerprint(pdir, name)) {
+        // 防御：命中缓存仍校验磁盘存在性（指纹秒级竞态等极端情况兜底），已删除/迁移的版本决不返回
+        const cached = this._versionsCache.get(key);
+        const alive = cached.filter((v) => { try { return fs.existsSync(v.path); } catch (e) { return false; } });
+        if (alive.length === cached.length) return alive;
+        this._versionsCache.set(key, alive);
+        return alive;
+      }
+      this._invalidateCaches();
+    }
     const versions = this._buildVersions(pdir, name);
+    // 安全网：磁盘已不存在的版本（删除/迁移）一律过滤，缓存不再返回残留分支
+    const alive = versions.filter((v) => { try { return fs.existsSync(v.path); } catch (e) { return false; } });
     // 每版本是否有可跳日志：配对锚点是「成片文件夹」
     //   - 成片内配置：仅当同一成片文件夹内存在对应日志才可跳
     //   - 外部(label含*)配置：当日有任何日志即可跳（多成片跳 -1、单成片跳唯一）
     const logs = this._collectLogFiles().files;
-    versions.forEach((v) => { v.hasLog = this._versionHasLog(v, project, name, logs); });
-    this._versionsCache.set(key, versions);
-    return versions;
+    alive.forEach((v) => { v.hasLog = this._versionHasLog(v, project, name, logs); });
+    this._versionsCache.set(key, alive);
+    this._versionsFp.set(key, this._versionFingerprint(pdir, name));
+    return alive;
+  }
+
+  // 该配置所有相关目录（成片夹→日期→月份→项目，逐级上溯）的 mtime 摘要，作为版本列表自愈指纹。
+  // mtime 对子目录/文件增减敏感：新增成片夹、外部 * 被挪走都会体现在父目录 mtime 上
+  _versionFingerprint(pdir, name) {
+    const pdirAbs = path.resolve(pdir);
+    const target = name.toLowerCase();
+    const dirs = new Set();
+    for (const t of this._collectAllTxt()) {
+      if (path.resolve(t.pdir) !== pdirAbs || t.name.toLowerCase() !== target) continue;
+      let d = path.resolve(path.dirname(t.full));
+      dirs.add(d);
+      while (true) {
+        const up = path.dirname(d);
+        dirs.add(up);
+        if (up === d || path.resolve(up) === pdirAbs) break;
+        d = up;
+      }
+    }
+    const arr = [...dirs].sort();
+    const sig = arr.map((d) => { try { return fs.statSync(d).mtimeMs; } catch (e) { return null; } });
+    return arr.join('|') + '\u0000' + sig.join(',');
   }
 
   _versionHasLog(v, project, name, logs) {
@@ -627,24 +754,32 @@ class Api {
     });
   }
 
-  // 并发限流执行器：同一时刻最多并发 limit 个，全部完成后按输入顺序返回结果数组
-  _runWithLimit(items, worker, limit) {
+  // 并发限流执行器：同一时刻最多并发 limit 个，全部完成后按输入顺序返回结果数组。
+// shouldStop 可选：每轮分发前调用，返回 true 即停止分发新任务（已分发者自然完成），并尽快 resolve 已完成部分
+  _runWithLimit(items, worker, limit, shouldStop) {
     return new Promise((resolve) => {
       const n = items.length;
       if (n === 0) return resolve([]);
       const limitN = Math.max(1, limit | 0);
       const results = new Array(n);
-      let i = 0, running = 0, done = 0;
+      let i = 0, running = 0, done = 0, stopped = false;
       const pump = () => {
-        while (running < limitN && i < n) {
+        if (!stopped && shouldStop && shouldStop()) stopped = true; // 中断
+        while (running < limitN && i < n && !stopped) {
           const idx = i++;
           running++;
           Promise.resolve()
             .then(() => worker(items[idx], idx))
             .catch(() => undefined)
             .then((v) => { results[idx] = v; })
-            .then(() => { running--; done++; if (done === n) resolve(results); else pump(); });
+            .then(() => {
+              running--; done++;
+              if (done === n) resolve(results);
+              else if (stopped && running === 0) resolve(results);
+              else pump();
+            });
         }
+        if (stopped && running === 0) resolve(results);
       };
       pump();
     });
@@ -769,7 +904,18 @@ class Api {
           }
         } else if (st.isFile()) {
           if (VIDEO_EXTS.has(path.extname(key).toLowerCase())) {
-            const info = this._fetchCachedVideoInfo(key) || await this._probeVideoAsync(key);
+            let info = this._fetchCachedVideoInfo(key);
+            if (!info) {
+              // 行内预检测优先：探测期间后台大探测遇 _inlineProbing>0 会主动让路
+              this._inlineProbing++;
+              try {
+                info = await this._probeVideoAsync(key);
+                // 新探测结果写入内存缓存（不落盘，后台下次保存时一并合并；避免两种探测互相覆盖）
+                const cc = this._loadVideoCache();
+                cc[key] = { LastWriteTime: this._ticksToStr(this._mtimeToTicks(key)), Duration: info.duration, Valid: info.valid, Width: info.width, Height: info.height };
+                this._videoInfoCache.set(key, info);
+              } finally { this._inlineProbing--; }
+            }
             const valid = !this._isExcludedPath(key, excludes) && info.valid;
             r = valid ? { status: 'ok', text: '1 个视频', total: 1, groupCount: 1, exists: true } : { status: 'warn', text: '非合规视频', total: 0, groupCount: 0, exists: true };
           } else r = { status: 'warn', text: '非视频文件', total: 0, groupCount: 0, exists: true };
@@ -804,15 +950,8 @@ class Api {
   }
 
   // 重置预检测：清除物理缓存，收集所有配置指向的路径并全量探测（跨路径去重），可实时回报进度
-  async resetPrecheck(onProgress) {
-    try {
-      const cf = this.videoCachePath || '';
-      if (cf && fs.existsSync(cf)) fs.unlinkSync(cf);
-    } catch (e) {}
-    this._videoCache = {};
-    this._videoInfoCache = new Map();
-
-    // 收集所有配置指向的素材路径（跨配置去重）
+  // 收集所有配置指向的视频候选：跨配置路径去重、目录递归收集、跳过非视频扩展名
+  _gatherAllVideos() {
     const all = this._collectAllTxt();
     const pathSet = new Set();
     for (const t of all) {
@@ -823,8 +962,6 @@ class Api {
         if (p) pathSet.add(p);
       }
     }
-
-    // 收集所有视频候选（跨路径去重）
     const seen = new Set();
     const allVideos = [];
     for (const p of pathSet) {
@@ -836,22 +973,74 @@ class Api {
       } else if (st.isFile() && VIDEO_EXTS.has(path.extname(p).toLowerCase())) cands.push(p);
       for (const f of cands) if (!seen.has(f)) { seen.add(f); allVideos.push(f); }
     }
+    return allVideos;
+  }
+
+  async resetPrecheck(onProgress) {
+    try {
+      const cf = this.videoCachePath || '';
+      if (cf && fs.existsSync(cf)) fs.unlinkSync(cf);
+    } catch (e) {}
+    this._videoCache = {};
+    this._videoInfoCache = new Map();
+
+    // 收集所有配置指向的素材路径（跨路径去重）
+    const allVideos = this._gatherAllVideos();
 
     const report = (s) => { if (onProgress) { try { onProgress(s); } catch (e) {} } };
     const total = allVideos.length;
     let probed = 0, valid = 0;
     const cache = this._loadVideoCache();
-    await this._runWithLimit(allVideos, (f) => this._probeVideoAsync(f).then((info) => {
+    const token = ++this._precheckToken; // 本次探测的令牌：作废任何更早的后台探测
+    await this._runWithLimit(allVideos, async (f) => {
+      // 行内预检测优先：后台探测遇用户操作让路（每批轮询，短暂让出 IO）
+      if (this._inlineProbing > 0) await new Promise((r) => setTimeout(r, 80));
+      const info = await this._probeVideoAsync(f);
       cache[f] = { LastWriteTime: this._ticksToStr(this._mtimeToTicks(f)), Duration: info.duration, Valid: info.valid, Width: info.width, Height: info.height };
       this._videoInfoCache.set(f, info);
       probed++;
       if (info.valid) valid++;
       report({ done: probed, total });
-    }), this.probeConcurrency);
+    }, this.probeConcurrency, () => token !== this._precheckToken);
 
     this._saveVideoCache();
-    report({ done: probed, total, finished: true });
-    return { ok: true, total, valid, invalid: total - valid };
+    const cancelled = token !== this._precheckToken;
+    report({ done: probed, total, finished: true, cancelled });
+    return { ok: true, total, valid, invalid: total - probed, cancelled };
+  }
+
+  // 仅刷新预缓存：不删缓存、不重置，只对「缺失或 mtime 已变」的视频重新探测更新；
+  // 命中（缓存有效）的路径直接跳过，进度按全量候选回报（起始即跳过数）
+  async refreshPrecache(onProgress) {
+    const report = (s) => { if (onProgress) { try { onProgress(s); } catch (e) {} } };
+    const allVideos = this._gatherAllVideos();
+    const total = allVideos.length;
+    const cache = this._loadVideoCache();
+    const toProbe = [];
+    for (const f of allVideos) {
+      const c = cache[f];
+      const ticks = this._ticksToStr(this._mtimeToTicks(f));
+      if (c && String(c.LastWriteTime) === ticks) continue; // 已缓存且文件未变：跳过
+      toProbe.push(f);
+    }
+    const base = total - toProbe.length; // 进度起点 = 已跳过数
+    const token = ++this._precheckToken; // 作废旧探测，保证只跑本次
+    let probed = 0, valid = 0;
+    await this._runWithLimit(toProbe, async (f) => {
+      // 行内预检测优先：与全量重置同一让路策略
+      if (this._inlineProbing > 0) await new Promise((r) => setTimeout(r, 80));
+      const info = await this._probeVideoAsync(f);
+      cache[f] = { LastWriteTime: this._ticksToStr(this._mtimeToTicks(f)), Duration: info.duration, Valid: info.valid, Width: info.width, Height: info.height };
+      this._videoInfoCache.set(f, info);
+      probed++;
+      if (info.valid) valid++;
+      report({ done: base + probed, total });
+    }, this.probeConcurrency, () => token !== this._precheckToken);
+
+    this._saveVideoCache();
+    const cancelled = token !== this._precheckToken;
+    report({ done: base + probed, total, finished: true, cancelled });
+    return { ok: true, total, updated: probed, valid, cancelled };
   }
 
   // 收集某配置目录下的日志候选并解析为成片条目（按目录 mtime 缓存）
@@ -974,19 +1163,42 @@ class Api {
   }
 
   // 重新检测配置时全量重建索引并落盘（后续搜索/日志列表直接命中，无需再逐目录解析）
-  _rebuildClipIndex() {
+  // onStep(done,total)：每批目录解析完回调一次（供实时进度），末批后落盘
+  _rebuildClipIndex(onStep) {
     this._loadClipIndex();
     this._clipIndex.clear();
     const dirs = new Set();
     for (const t of this._collectAllTxt()) dirs.add(path.dirname(t.full));
-    for (const d of [...dirs]) {
-      const entries = this._collectLogEntries(d);
-      let mtime = 0;
-      try { mtime = fs.statSync(d).mtimeMs; } catch (e) {}
-      this._clipIndex.set(d, { mtime, entries });
-      this._clipIndexDirty = true;
-    }
-    this._saveClipIndex();
+    const list = [...dirs];
+    const total = list.length;
+    const tick = (done) => { if (typeof onStep === 'function') { try { onStep(done, total); } catch (e) {} } };
+    const step = () => {
+      if (!this._rebuildingClip) { this._saveClipIndex(); return; } // 换工作目录等取消信号：停止并落盘当前进度
+      const batch = list.splice(0, 20);
+      for (const d of batch) {
+        let entries;
+        try { entries = this._collectLogEntries(d); } catch (e) { entries = []; }
+        let mtime = 0;
+        try { mtime = fs.statSync(d).mtimeMs; } catch (e) {}
+        this._clipIndex.set(d, { mtime, entries });
+        this._clipIndexDirty = true;
+      }
+      tick(total - list.length);
+      if (list.length > 0) setImmediate(step);
+      else {
+        this._saveClipIndex();
+        this._rebuildingClip = false;
+        this._emitScan('done');
+      }
+    };
+    setImmediate(step);
+  }
+
+  // 成片索引后台重建入口：防并发重复触发；每 20 目录让出一次事件循环，避免长时间阻塞主线程
+  _rebuildClipIndexAsync() {
+    if (this._rebuildingClip) return;
+    this._rebuildingClip = true;
+    this._rebuildClipIndex((done, total) => this._emitScan('clip', done, total));
   }
 
   _logsForTxt(txtFull) {
@@ -1142,7 +1354,7 @@ class Api {
       id, type, title, script: scriptPath, env: Object.assign({}, env),
       pid: null, status: 'queued', lockState: 'unknown', progress: { current: 0, total: 0 },
       failReason: '', log: [],
-      createdAt: Date.now(), endedAt: null, _stopRequested: false,
+      createdAt: Date.now(), startedAt: null, endedAt: null, _stopRequested: false,
       planPos: 0,
       outDir: srcPath ? this._taskOutDir(srcPath) : '',
     };
@@ -1271,11 +1483,15 @@ class Api {
   snapshotTasks() {
     const list = [];
     this.tasks.forEach((t) => {
+      // 首次进入运行态时打点（惰性：覆盖直接启动/队列轮到/恢复启动所有路径）
+      if (t.status === 'running' && !t.startedAt) t.startedAt = Date.now();
       list.push({
         id: t.id, type: t.type, title: t.title, script: t.script, pid: t.pid,
         status: t.status, lockState: t.lockState, paused: !!t.paused,
         progress: t.progress || { current: 0, total: 0 }, failReason: t.failReason || '',
         createdAt: t.createdAt, endedAt: t.endedAt, outDir: t.outDir || '',
+        // 任务总用时（秒）：首次开始至今的墙钟时间；已结束任务取结束时间
+        elapsedSec: taskElapsed(t),
         // 计划序号：排队任务=队列第几位；暂停任务=冻结的显示顺位；显示与恢复插队都以此为准
         pos: t.planPos || 0,
         resumeIdx: typeof t.resumeIdx === 'number' ? t.resumeIdx : null,
@@ -1333,7 +1549,7 @@ class Api {
         id: t.id, type: t.type, title: t.title, script: t.script, env: t.env || {},
         status: t.status, lockState: t.lockState, progress: t.progress || { current: 0, total: 0 },
         failReason: t.failReason || '', paused: !!t.paused,
-        createdAt: t.createdAt, endedAt: t.endedAt, planPos: t.planPos || 0,
+        createdAt: t.createdAt, startedAt: t.startedAt || null, endedAt: t.endedAt, planPos: t.planPos || 0,
         resumeIdx: typeof t.resumeIdx === 'number' ? t.resumeIdx : null,
         outDir: t.outDir || '', log: (t.log || []).slice(-500), _stopRequested: !!t._stopRequested,
       })),
@@ -1460,6 +1676,85 @@ class Api {
     return { ok: true };
   }
 
+  // 清除已完成/已停止任务：支持按日期分组与三种作用域（仅列表 / 列表+mp4 / 全部清除）。
+  // 先删任务列表；文件删除均移动至系统回收站。
+  async clearDoneTasks(opts) {
+    const { day, scope, statuses } = opts || {};
+    const allow = new Set(Array.isArray(statuses) && statuses.length ? statuses : ['done']);
+    const dayOf = (ts) => {
+      if (!ts) return '';
+      const d = new Date(ts);
+      const p = (n) => (n < 10 ? '0' : '') + n;
+      return String(d.getFullYear()).slice(2) + '.' + p(d.getMonth() + 1) + '.' + p(d.getDate());
+    };
+    const targets = [...this.tasks.values()].filter((t) => allow.has(t.status) && (!day || dayOf(t.endedAt) === day));
+    // 先清任务列表
+    for (const t of targets) this.tasks.delete(t.id);
+    const errors = [];
+    if (scope && scope !== 'list') {
+      const { shell } = require('electron');
+      const trash = async (p) => {
+        try { await shell.trashItem(p); }
+        catch (e) { if (fs.existsSync(p)) throw e; } // 原路径已不存在视为成功
+      };
+      for (const t of targets) {
+        if (!t.outDir) continue;
+        const abs = path.resolve(t.outDir);
+        if (scope === 'video') {
+          // 仅清除 mp4 成片，不影响文件夹内的配置与日志
+          let files = [];
+          try { files = fs.readdirSync(abs).filter((f) => path.extname(f).toLowerCase() === '.mp4'); }
+          catch (e) { errors.push('读取成片目录失败：' + abs); continue; }
+          for (const f of files) {
+            try { await trash(path.join(abs, f)); }
+            catch (e) { errors.push('清除成片失败：' + path.join(abs, f)); }
+          }
+        } else if (scope === 'all') {
+          // 全部清除：整个成片文件夹移入回收站（仅限识别为「成片」的目录，回退目录保守只清 mp4）
+          if (path.basename(abs).endsWith('成片')) {
+            try { await trash(abs); }
+            catch (e) { errors.push('清除成片文件夹失败：' + abs); continue; }
+            const parent = path.dirname(abs);
+            if (parent && parent !== abs) {
+              try { if (fs.readdirSync(parent).length === 0) await trash(parent); }
+              catch (e) { errors.push('清除空上级文件夹失败：' + parent); }
+            }
+          } else {
+            let files = [];
+            try { files = fs.readdirSync(abs).filter((f) => path.extname(f).toLowerCase() === '.mp4'); }
+            catch (e) { errors.push('读取成片目录失败：' + abs); continue; }
+            for (const f of files) {
+              try { await trash(path.join(abs, f)); }
+              catch (e) { errors.push('清除成片失败：' + path.join(abs, f)); }
+            }
+          }
+        }
+      }
+    }
+    this._emitTasks();
+    return { ok: true, removed: targets.length, errors };
+  }
+
+  // 更新日志（CHANGELOG.md 位于应用目录内，随 app.asar 打包）
+  getChangelog() {
+    try {
+      const p = path.join(__dirname, 'CHANGELOG.md');
+      return { ok: true, content: fs.readFileSync(p, 'utf8') };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  }
+
+  // 关于页（README.md 位于应用目录内，随 app.asar 打包）
+  getReadme() {
+    try {
+      const p = path.join(__dirname, 'README.md');
+      return { ok: true, content: fs.readFileSync(p, 'utf8') };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  }
+
   // 暂停：仅排队中的任务可暂停——移出执行队列并冻结当前显示顺位（前方待运行任务数），继续时按该顺位插队
   pauseTask(id) {
     const t = this.tasks.get(id);
@@ -1525,24 +1820,8 @@ class Api {
         const pushLine = (buf) => {
           const s = decodeLine(buf).replace(/\r$/, '').trim();
           if (!s || task.status !== 'running') return;
-          task.log.push(s);
-          // 进度解析：匹配 "共 N 个" 与 "生成第 X / Y 个成片" / "复刻第 X / Y 个成片"
-          const totalMatch = s.match(/共\s*(\d+)\s*个/);
-          if (totalMatch) {
-            const n = parseInt(totalMatch[1], 10);
-            if (n > 0) task.progress.total = n;
-          }
-          const curMatch = s.match(/(?:生成|复刻)第\s*(\d+)\s*\/\s*(\d+)\s*个成片/);
-          if (curMatch) {
-            const c = parseInt(curMatch[1], 10), t = parseInt(curMatch[2], 10);
-            if (t > 0) task.progress.total = t;
-            task.progress.current = c;
-            // 新成片开始：重置单成片进度
-            task._clipDur = 0;
-            task.progress.clip = 0;
-            task.progress.clipTarget = 0;
-          }
-          // 单成片实时进度：目标时长（分母）+ ffmpeg out_time（分子）
+          // 单成片实时进度：目标时长（分母）+ ffmpeg time（分子）。
+          // 必须放在进度行拦截前，否则 ffmpeg 进度行被折叠后 clip/clipTarget 不再更新（进度条失效）
           const durM = s.match(/成片预计时长:\s*([\d.]+)\s*秒/);
           if (durM) {
             const d = parseFloat(durM[1]);
@@ -1555,10 +1834,46 @@ class Api {
           }
           const usM = s.match(/out_time_us=(\d+)/);
           if (usM) task.progress.clip = parseInt(usM[1], 10) / 1e6;
+          // ffmpeg 进度行（frame=/fps=/q=/size=/time=/bitrate=/dup=/drop=/speed=/elapsed=）：
+          // 不进日志栈，折叠为单行实时进度（结构化字段，前端按规则直译成中文）；
+          // 记录该成片当前最新帧进度，成片完成时固化进日志
+          if (/^\s*(frame\s*=|fps\s*=|q\s*=|size\s*=|time\s*=|bitrate\s*=|dup\s*=|drop\s*=|speed\s*=|elapsed\s*=)/.test(s)) {
+            const kv = {};
+            for (const mm of s.matchAll(/(frame|fps|q|size|time|bitrate|dup|drop|speed|elapsed)\s*=\s*([^\s]+)/g)) kv[mm[1]] = mm[2];
+            task.progress.liveLine = kv;
+            task._lastFrameLine = kv;
+            this._emitTasks();
+            return;
+          }
+          task.log.push(s);
+          // 进度解析：匹配 "共 N 个" 与 "生成第 X / Y 个成片" / "复刻第 X / Y 个成片"
+          const totalMatch = s.match(/共\s*(\d+)\s*个/);
+          if (totalMatch) {
+            const n = parseInt(totalMatch[1], 10);
+            if (n > 0) task.progress.total = n;
+          }
+          const curMatch = s.match(/(?:生成|复刻)第\s*(\d+)\s*\/\s*(\d+)\s*个成片/);
+          if (curMatch) {
+            const c = parseInt(curMatch[1], 10), t = parseInt(curMatch[2], 10);
+            if (t > 0) task.progress.total = t;
+            task.progress.current = c;
+            // 新成片开始：重置单成片进度与帧进度记录
+            task._clipDur = 0;
+            task.progress.clip = 0;
+            task.progress.clipTarget = 0;
+            task._lastFrameLine = null;
+          }
           if (/成片完成/.test(s) && task._clipDur > 0) task.progress.clip = task._clipDur;
+          // 成片完成：把该成片最后一行帧进度固化进日志（每个成片保留最终进度）
+          if (/成片完成/.test(s) && task._lastFrameLine) {
+            const finalLine = zhLiveLine(task._lastFrameLine);
+            if (finalLine) task.log.push(finalLine);
+            task._lastFrameLine = null;
+            task.progress.liveLine = null; // 清除实时行，避免与固化行重复显示
+          }
           if (/等待获取互斥锁/.test(s)) task.lockState = 'waiting';
           else if (/已获取互斥锁/.test(s)) task.lockState = 'locked';
-          else if (/互斥锁已释放|任务全部完成|脚本完成/.test(s)) task.lockState = 'released';
+          else if (/互斥锁已释放|任务全部完成|脚本完成/.test(s)) { task.lockState = 'released'; task.progress.liveLine = null; }
           this._emitTasks();
         };
         const attach = (stream, ref) => stream.on('data', (chunk) => {
@@ -1629,6 +1944,121 @@ class Api {
     if (cfg.replica && typeof cfg.replica === 'object') this.config.replica = Object.assign({}, this.config.replica, cfg.replica);
   }
 
+  // 水印归属校验：以本项目「多数配置使用的主流水印」为基准做一致性判定——
+  // 主流水印固化到 watermark_cache 物理缓存，平时直接比对缓存；仅换工作目录时重置重判。
+  // 只返回布尔值（不暴露真实路径/文件名），相对路径按项目目录解析。
+  checkWatermarkProject(project, watermarkPath) {
+    const wm = String(watermarkPath || '').trim();
+    try {
+      if (!wm) return { inProject: true };
+      const pdir = path.resolve(path.join(this.root, project));
+      const wmAbs = path.isAbsolute(wm) ? path.resolve(wm) : path.resolve(pdir, wm);
+      const wmKey = wmAbs.toLowerCase();
+      this._loadWatermarkCache();
+      const cacheKey = this.root + '\u0000' + project;
+      if (!Object.prototype.hasOwnProperty.call(this._wmCache, cacheKey)) {
+        // 本项目主流水印未固化：现场统计一次并落盘
+        this._wmCache[cacheKey] = this._computeMajorityWatermark(pdir);
+        this._saveWatermarkCache();
+      }
+      const majorityKey = this._wmCache[cacheKey] || '';
+      // 无主流(项目无任何水印)放行；有主流则当前水印必须与其一致
+      return { inProject: majorityKey === '' || wmKey === majorityKey };
+    } catch (e) { return { inProject: true }; }
+  }
+
+  // 查找主流水印与指定水印一致的项目（归属判定升级：供保存/启动时选择目标项目）
+  // 复用 watermark_cache 缓存，缺失项目才现场统计并落盘；返回项目名数组（不含复刻）
+  findWatermarkProject(project, watermarkPath) {
+    try {
+      const wm = String(watermarkPath || '').trim();
+      if (!wm || !this.root) return { hits: [] };
+      const pdir = path.resolve(path.join(this.root, project));
+      const wmAbs = path.isAbsolute(wm) ? path.resolve(wm) : path.resolve(pdir, wm);
+      const wmKey = wmAbs.toLowerCase();
+      this._loadWatermarkCache();
+      const seen = new Map(); // 项目目录 -> 项目名（去重）
+      for (const t of this._collectAllTxt()) {
+        const pdir = path.resolve(t.pdir);
+        if (!seen.has(pdir)) seen.set(pdir, path.basename(t.pdir));
+      }
+      let dirty = false;
+      const hits = [];
+      for (const [pdir, project] of seen) {
+        if (project === REPLICA_PROJECT) continue; // 复刻虚拟项目无配置水印
+        const cacheKey = this.root + '\u0000' + project;
+        if (!Object.prototype.hasOwnProperty.call(this._wmCache, cacheKey)) {
+          this._wmCache[cacheKey] = this._computeMajorityWatermark(pdir);
+          dirty = true;
+        }
+        const mk = this._wmCache[cacheKey] || '';
+        if (mk !== '' && mk === wmKey) hits.push(project);
+      }
+      if (dirty) this._saveWatermarkCache();
+      return { hits };
+    } catch (e) { return { hits: [] }; }
+  }
+
+  // 统计本项目主流水印：所有配置使用频次最高的水印（小写规范化路径返回）
+  _computeMajorityWatermark(pdir) {
+    const counts = new Map();
+    for (const t of this._collectAllTxt()) {
+      if (path.resolve(t.pdir) !== pdir) continue;
+      let cfg;
+      try { cfg = this.readConfig(t.full); } catch (e) { continue; }
+      const w = String(cfg && cfg.watermark || '').trim();
+      if (!w) continue;
+      const k = (path.isAbsolute(w) ? path.resolve(w) : path.resolve(pdir, w)).toLowerCase();
+      counts.set(k, (counts.get(k) || 0) + 1);
+    }
+    let majorityKey = '', majorityN = 0;
+    for (const [k, n] of counts) { if (n > majorityN) { majorityN = n; majorityKey = k; } }
+    return majorityKey;
+  }
+
+  // 刷新配置时预填充水印缓存：扫描当前工作目录下所有项目，缺失归属的项目补算主流，已有条目保持不动
+  _warmWatermarkCache() {
+    if (!this.watermarkCachePath || !this.root) return;
+    try {
+      this._loadWatermarkCache();
+      const seen = new Map(); // 项目目录 -> 项目名（去重）
+      for (const t of this._collectAllTxt()) {
+        const pdir = path.resolve(t.pdir);
+        if (!seen.has(pdir)) seen.set(pdir, path.basename(t.pdir));
+      }
+      let dirty = false;
+      for (const [pdir, project] of seen) {
+        const cacheKey = this.root + '\u0000' + project;
+        if (Object.prototype.hasOwnProperty.call(this._wmCache, cacheKey)) continue; // 已有条目不动
+        this._wmCache[cacheKey] = this._computeMajorityWatermark(pdir);
+        dirty = true;
+      }
+      if (dirty) this._saveWatermarkCache();
+    } catch (e) {}
+  }
+
+  _loadWatermarkCache() {
+    if (!this._wmCache) this._wmCache = {};
+    if (this._wmCacheLoadedRoot === this.root || !this.watermarkCachePath) return;
+    this._wmCacheLoadedRoot = this.root;
+    this._wmCache = {};
+    const prefix = this.root + '\u0000';
+    try {
+      const data = JSON.parse(fs.readFileSync(this.watermarkCachePath, 'utf-8'));
+      if (data && typeof data.watermarks === 'object' && data.watermarks) {
+        // 只加载当前工作目录下的条目：换 root 后旧条目不再参与，保存时自然被覆盖清理
+        for (const k in data.watermarks) {
+          if (Object.prototype.hasOwnProperty.call(data.watermarks, k) && k.startsWith(prefix)) this._wmCache[k] = data.watermarks[k];
+        }
+      }
+    } catch (e) {}
+  }
+
+  _saveWatermarkCache() {
+    if (!this.watermarkCachePath) return;
+    try { fs.writeFileSync(this.watermarkCachePath, JSON.stringify({ watermarks: this._wmCache || {} }), 'utf-8'); } catch (e) {}
+  }
+
   runBatch(filePath, count, group) {
     const script = path.join(this.scriptsDir, 'video_batch.ps1');
     if (!fs.existsSync(script)) return { ok: false, error: '未找到脚本：' + script };
@@ -1648,8 +2078,15 @@ class Api {
     if (/^\d+$/.test(countStr) && parseInt(countStr, 10) > 0) env.BATCH_COUNT = countStr;
     const groupStr = String(group).trim();
     env.BATCH_GROUP = /^\d+$/.test(groupStr) && parseInt(groupStr, 10) > 0 ? groupStr : '0';
+    // 任务提交时刻：排队跨天运行时，成片命名/日志/输出目录按提交日期而非运行日期
+    env.BATCH_SUBMIT_TS = String(Date.now());
     env.REPLICA_NO_WAIT = '1';
     const task = this._enqueueTask(this._createTask('batch', this._taskTitle(filePath), script, env, filePath));
+    // 排队即预填预计成片数/分组数（配置底部输入），运行后由输出解析覆写 total
+    const preTotal = parseInt(String(count), 10) || 0;
+    const preGroup = parseInt(String(group), 10) || 0;
+    if (preTotal > 0) task.progress.total = preTotal;
+    if (preGroup > 0) task.progress.groupCount = preGroup;
     return { ok: true, taskId: task.id };
   }
 
@@ -1668,6 +2105,8 @@ class Api {
       REPLICA_SPEED_LIMIT: String(r.speed_limit),
       REPLICA_DEDUP_RATIO: String(r.dedup_ratio),
     };
+    // 任务提交时刻：排队跨天运行时，复刻命名/日志/输出目录按提交日期而非运行日期
+    env.REPLICA_SUBMIT_TS = String(Date.now());
     // 仅复刻日志中的单个指定成片（右侧「复刻」按钮/批量选择传入成片名）
     if (entryVideo) env.REPLICA_ONLY_NAME = String(entryVideo).trim();
     const task = this._enqueueTask(this._createTask('replica', this._taskTitle(logPath) + (String(mode) === '2' ? '（去重）' : ''), script, env, logPath));

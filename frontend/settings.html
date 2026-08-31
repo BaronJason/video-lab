@@ -31,6 +31,8 @@
     <button class="settings-nav__item is-active" data-view="general">通用设置</button>
     <button class="settings-nav__item" data-view="batch">批量拼接</button>
     <button class="settings-nav__item" data-view="replica">视频复刻</button>
+    <button class="settings-nav__item" data-view="changelog">更新日志</button>
+    <button class="settings-nav__item" data-view="about">关于</button>
   </aside>
 
   <div class="settings-body">
@@ -57,6 +59,17 @@
         <div class="dir-row">
           <input class="form-input" id="cfgWatermark" type="text" placeholder="">
           <button class="btn btn-ghost" data-dir="cfgWatermark">选择目录</button>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-group__label">开机自启动</label>
+        <div class="opt-row">
+          <label class="opt-check">
+            <input type="checkbox" id="autoStart">
+            <span class="opt-check__box"></span>
+            <span>开机后台自启动（静默到托盘）</span>
+          </label>
         </div>
       </div>
 
@@ -117,7 +130,7 @@
       </div>
 
       <div class="form-group">
-        <label class="form-group__label">提取前缀<small>从 TXT 文件名提取的前缀，可留空</small></label>
+        <label class="form-group__label">提取前缀<small>从 TXT 名提取的前缀；拼接片段文件路径（含文件夹）含此串时同样带上，可留空</small></label>
         <input class="form-input" id="batchTxtPrefix" type="text" placeholder="">
       </div>
 
@@ -167,6 +180,16 @@
         <label class="form-group__label">去重阈值<small>模式2尾部替换需达到的不一致时长占比</small></label>
         <input class="form-input" id="replicaDedupRatio" type="number" min="0" max="1" step="0.05" placeholder="">
       </div>
+    </section>
+
+    <!-- ═══ 更新日志 ═══ -->
+    <section class="settings-view" id="view-changelog">
+      <div class="changelog-box" id="changelogBox"><div class="changelog-hint" id="changelogHint"></div></div>
+    </section>
+
+    <!-- ═══ 关于 ═══ -->
+    <section class="settings-view" id="view-about">
+      <div class="changelog-box" id="aboutBox"><div class="changelog-hint" id="aboutHint"></div></div>
     </section>
 
     <footer class="settings-footer">

@@ -1,4 +1,28 @@
+/* 等宽字体 JetBrainsMono Nerd Font Mono（SIL OFL 1.1，可商用分发）：
+   内嵌 Regular，用于路径/日志/数值等 mono 场景，不依赖客户端安装 */
+@font-face {
+  font-family: 'JetBrainsMono Nerd Font Mono';
+  font-style: normal;
+  font-weight: 100 900;
+  src: url('assets/fonts/JetBrainsMonoNerdFontMono-Regular.ttf') format('truetype');
+}
+
 :root{--bg-input-default:#FFFFFF;}
+
+/* 品牌字体 Cinzel（SIL OFL 1.1，可商用分发，见 skins/assets/fonts/OFL-Cinzel.txt）：
+   品牌名片与主窗口标题栏共用，确保全局一致 */
+@font-face {
+  font-family: 'Cinzel';
+  font-style: normal;
+  font-weight: 400;
+  src: url('skins/assets/fonts/Cinzel-Regular.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Cinzel';
+  font-style: normal;
+  font-weight: 700;
+  src: url('skins/assets/fonts/Cinzel-Bold.ttf') format('truetype');
+}
 
 /**
  * TraeWork design library tokens
@@ -1384,13 +1408,19 @@ body {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  font-family: var(--font-family-default);
+  font-family: var(--font-family-default); /* 默认字体；仅主窗口（data-main-titlebar）启用品牌字体 */
   font-size: 14px;
   font-weight: 500;
   line-height: 34px;
   color: var(--text-secondary);
   white-space: nowrap;
   pointer-events: none;
+}
+/* 主窗口标题栏品牌字体：与品牌名片同款 Cinzel 粗体（其他窗口保持默认字体） */
+[data-main-titlebar] .win-titlebar__title {
+  font-family: 'Cinzel', 'Georgia', serif;
+  font-weight: 700;
+  letter-spacing: 0.5px;
 }
 .win-titlebar__controls {
   margin-left: auto;
@@ -1534,27 +1564,26 @@ body {
   overflow: hidden;
 }
 
-/* 侧栏宽度调节条 */
+/* 左侧列表栏宽度调节：透明铆钉栏仅作为按钮的定位锚定——
+   栏本身 0 宽、不可见、不参与任何交互与功能（pointer-events:none、无背景）；
+   按钮横跨侧栏与工作区分界线垂直居中放置，按钮下方不占任何底色，
+   右侧自然透出 workspace 的宫殿背景；拖拽调宽交互只由按钮本体承载 */
 .workspace-resizer {
-  width: 5px;
-  flex-shrink: 0;
-  cursor: col-resize;
-  background: var(--border-neutral-l1);
-  transition: background 0.1s ease;
-}
-/* 尺寸拖拽栏已移除；折叠按钮独立位于 workspace-body 层，
-   垂直居中覆盖在右侧面板左缘的细金分隔线上（宽度 16px）；折叠时贴界面右缘 */
-.workspace-body {
+  flex: 0 0 0;
+  width: 0;
   position: relative;
+  pointer-events: none;
 }
-.preview-collapse {
+/* 左侧列表栏三竖线按钮：可见调节把柄，横跨分界线居中，交互/拖拽仅在按钮本体 */
+.sidebar-resize-btn {
   position: absolute;
   top: 50%;
-  right: 0;
-  transform: translateY(-50%);
+  left: 50%;
+  transform: translate(-50%, -50%);
   width: 16px;
   height: 64px;
   padding: 0;
+  z-index: 80; /* 置顶于侧栏装饰层之上，防止深海皮肤下被 sidebar 阶梯背景盖住 */
   border: 1px solid var(--border-neutral-l2);
   border-radius: 6px;
   background: var(--bg-base-secondary);
@@ -1562,39 +1591,64 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
+  cursor: col-resize;
+  pointer-events: auto;
   box-shadow: 0 2px 8px color-mix(in srgb, var(--text-default) 14%, transparent);
-  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease, opacity 0.15s ease;
-  z-index: 5;
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
 }
-/* 热区：按钮本体 + 四周各外扩 12px（方便点按），内部内容不受影响 */
-.preview-collapse::before {
-  content: '';
-  position: absolute;
-  inset: -12px;
-  border-radius: 14px;
-}
-.preview-collapse:hover {
+.sidebar-resize-btn:hover {
   background: var(--bg-base-tertiary);
   color: var(--text-default);
   border-color: var(--border-neutral-l3);
 }
-.preview-collapse .preview-collapse__icon {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 14px;
-  height: 14px;
-  transform: translate(-50%, -50%);
+
+/* 左侧栏滚动条：隐藏（不占位、不显示），滚动功能保留 */
+#sidebarTree {
+  scrollbar-width: none;
+}
+#sidebarTree::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* 右侧预览栏宽度调节尺寸栏：
+   位于中间配置列表与右侧预览栏之间的固定 5px 布局位（flex 子项，天然在分界线上），
+   贯穿预览栏全高；常态不显示，仅 hover 条本体时浮现（hover 区=条本体）可拖拽调宽；
+   折叠态彻底隐藏（展开入口仅右上角圆形按钮） */
+.workspace-body {
+  position: relative;
+}
+.preview-resizer-anchor {
+  position: relative;
+  flex: 0 0 5px;
+  width: 5px;
+  z-index: 5;
+  opacity: 0;
   transition: opacity 0.15s ease;
 }
-/* 折叠态（面板隐藏，body[data-preview-collapsed]）：显示朝右箭头（点击展开）
-   ；展开态：显示朝左箭头。两个图标同位叠放、交叉淡出淡入，
-   与面板滑动动画同帧驱动，无 JS 计时错位 */
-.preview-collapse .ico-left { opacity: 0; }
-.preview-collapse .ico-right { opacity: 1; }
-body:not([data-preview-collapsed]) .preview-collapse .ico-left { opacity: 1; }
-body:not([data-preview-collapsed]) .preview-collapse .ico-right { opacity: 0; }
+.preview-resizer-anchor:hover {
+  opacity: 1;
+}
+body[data-preview-collapsed] .preview-resizer-anchor {
+  opacity: 0;
+  pointer-events: none;
+}
+.preview-resizer {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  cursor: col-resize;
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: 6px;
+  background: var(--bg-base-secondary);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--text-default) 14%, transparent);
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+.preview-resizer:hover {
+  background: var(--bg-base-tertiary);
+  border-color: var(--border-neutral-l3);
+}
 /* 右侧面板左缘：细亮金线分隔符（皮肤可覆盖为金色调） */
 .right-panel {
   border-left: 1px solid var(--border-neutral-l2);
@@ -1602,7 +1656,7 @@ body:not([data-preview-collapsed]) .preview-collapse .ico-right { opacity: 0; }
 }
 
 /* 折叠态：右侧预览面板水平收起 + 淡出（width/opacity 过渡，替代 display:none
-   以保留展开/收缩动画），仅留分隔线上的窄竖条按钮提示展开 */
+   以保留展开/收缩动画），折叠/展开由右上角圆形按钮控制，中缝尺寸栏随折叠隐藏 */
 body[data-preview-collapsed] .right-panel {
   width: 0 !important;
   min-width: 0;
@@ -1657,23 +1711,6 @@ body[data-preview-collapsed] .center-global-search .ds-input {
    使「外部编辑」按钮不被右上角圆形按钮遮挡 */
 .right-panel__header-right {
   padding-right: 34px;
-}
-
-/* 展开态（面板可见）：窄竖条按钮常态透明，hover 右侧面板或按钮本体
-   （含 ::before 外扩 12px 热区）时显示；
-   折叠态（面板隐藏）：同样常态透明，仅 hover 按钮热区时浮现提示可展开 */
-body:not([data-preview-collapsed]) .preview-collapse,
-body[data-preview-collapsed] .preview-collapse {
-  opacity: 0;
-}
-body:not([data-preview-collapsed]) .right-panel:hover + .preview-collapse,
-body:not([data-preview-collapsed]) .preview-collapse:hover,
-body[data-preview-collapsed] .preview-collapse:hover {
-  opacity: 1;
-}
-.workspace-resizer:hover,
-.workspace-resizer--active {
-  background: var(--brand-hue);
 }
 
 /* ── Workspace: center + right panels + bottom config bar ── */
@@ -1993,6 +2030,10 @@ body[data-preview-collapsed] .preview-collapse:hover {
   from { opacity: 0; transform: translateX(-4px); }
   to { opacity: 1; transform: none; }
 }
+/* 配置间切换静默：徽章不重放进场动画（与 Maid 皮肤 --static 同思路，各皮肤通用） */
+.tree-project__badge--static {
+  animation: none;
+}
 /* 收回/切换项目时：徽章向左滑出（与进入反向） */
 .tree-project__badge--leave {
   animation: az-badge-out 0.2s ease both;
@@ -2117,7 +2158,7 @@ body[data-preview-collapsed] .preview-collapse:hover {
   border-radius: var(--radius-full);
   background: var(--bg-overlay-l2);
   color: var(--text-tertiary);
-  font-family: var(--font-family-mono);
+  font-family: var(--font-family-default);
   font-size: 11px;
   font-weight: var(--font-weight-medium);
   line-height: 1;
@@ -2389,6 +2430,10 @@ body[data-preview-collapsed] .preview-collapse:hover {
   min-width: 160px;
   border-left: 1px solid var(--border-neutral-l1);
 }
+/* 水印归属判定不通过：仅水印上半区浅红底（唯一定位提示，与 is-modified 红框互不干扰，不影响下方配置名框） */
+.config-editor__wm-section.is-watermark-error {
+  background: var(--status-error-surface-l1);
+}
 .config-resizer {
   flex-shrink: 0;
   height: 5px;
@@ -2423,7 +2468,7 @@ body[data-preview-collapsed] .preview-collapse:hover {
   flex-shrink: 0;
 }
 .config-editor__col-count {
-  font-family: var(--font-family-mono);
+  font-family: var(--font-family-default);
   font-size: 10px;
   color: var(--text-tertiary);
   font-weight: var(--font-weight-default);
@@ -2529,7 +2574,7 @@ body[data-preview-collapsed] .preview-collapse:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--font-family-mono);
+  font-family: var(--font-family-default);
   font-size: var(--body-md-font-size);
   color: var(--text-secondary);
 }
@@ -2542,7 +2587,7 @@ body[data-preview-collapsed] .preview-collapse:hover {
   border: 1px solid var(--border-neutral-l1);
   border-radius: var(--radius-4);
   background: var(--bg-base-secondary);
-  font-family: var(--font-family-mono);
+  font-family: var(--font-family-default);
   font-size: var(--body-md-font-size);
   color: var(--text-default);
   outline: none;
@@ -2576,21 +2621,34 @@ body[data-preview-collapsed] .preview-collapse:hover {
   background: var(--bg-base-tertiary);
   color: var(--text-default);
 }
-/* Pre-check status column */
+/* Pre-check status column：外层列固定宽占位（布局不动），内层徽章贴合文字长度 */
 .config-path-row__precheck {
-  width: 120px;
+  width: 135px;
   flex-shrink: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--body-xs-font-size);
   text-align: left;
   padding-left: var(--spacer-4);
 }
-.precheck--ok { color: var(--status-success-default); }
-.precheck--warn { color: var(--status-warning-default); }
-.precheck--pending { color: var(--text-tertiary); }
-.precheck--group { color: var(--status-primary-default); }
+.config-path-row__badge {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  border-radius: 8px;
+  padding: 0 6px;
+  max-width: 100%;
+  font-size: var(--body-xs-font-size);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-onaccent); /* 徽章文字：跟随各皮肤强调底文字变量，不写死 */
+}
+/* 徽章底色 = 各状态原本的文字颜色 */
+.precheck--ok { background: var(--status-success-default); }
+.precheck--warn { background: var(--status-warning-default); }
+.precheck--pending { background: var(--text-tertiary); }
+.precheck--group { background: var(--status-primary-default); }
 
 /* Re-check button in path list header */
 .btn-recheck {
@@ -2667,7 +2725,7 @@ body[data-preview-collapsed] .preview-collapse:hover {
   letter-spacing: 0.5px;
 }
 .config-path-subheader__check {
-  width: 120px;
+  width: 135px; /* 与行内预检测列固定对齐 */
   flex-shrink: 0;
   font-size: 10px;
   font-weight: var(--font-weight-medium);
@@ -2687,12 +2745,23 @@ body[data-preview-collapsed] .preview-collapse:hover {
 }
 
 /* Watermark PNG */
-.config-editor__watermark-content {
+.config-editor__wm-section {
   flex: 1;
-  padding: var(--spacer-12);
-  overflow: auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+}
+.config-editor__wm-section + .config-editor__wm-section {
+  border-top: 1px solid var(--border-neutral-l1);
+}
+.config-editor__watermark-content {
+  flex: 1;
+  min-height: 0;
+  padding: var(--spacer-12);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .config-watermark__preview {
   display: flex;
@@ -2711,21 +2780,75 @@ body[data-preview-collapsed] .preview-collapse:hover {
   text-align: center;
   word-break: break-all;
 }
-.config-watermark__path {
-  font-family: var(--font-family-mono);
-  font-size: var(--body-xs-font-size);
-  color: var(--text-tertiary);
-  text-align: center;
-  word-break: break-all;
-}
-.config-watermark__empty {
+/* 水印行：文件名在可用空间内居中，按钮组固定在行最右侧 */
+.config-watermark__row {
   display: flex;
   align-items: center;
-  justify-content: center;
-  height: 80px;
-  color: var(--text-tertiary);
-  font-size: var(--body-md-font-size);
+  gap: var(--spacer-4);
+  width: 100%;
+  min-width: 0;
 }
+.config-watermark__path {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 5px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-family-default);
+  font-size: 14px;
+  color: var(--brand-600); /* 配置选中常规态配色 */
+  font-weight: var(--font-weight-medium);
+  text-align: center;
+  background: var(--brand-100);
+  border: 1px solid var(--brand-300);
+  border-radius: var(--radius-6);
+  cursor: pointer; /* 点击文件名更换水印 */
+  transition: all 0.1s ease;
+}
+.config-watermark__path:hover { background: var(--brand-200); }
+.config-watermark__path--empty { color: var(--text-tertiary); }
+/* 图标按钮：参考路径栏按钮（仅 icon） */
+.config-watermark__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: var(--radius-4);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.1s ease;
+}
+.config-watermark__btn:hover {
+  background: var(--bg-base-tertiary);
+  color: var(--text-default);
+}
+.config-watermark__btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.config-watermark__btn:disabled:hover {
+  background: transparent;
+  color: var(--text-tertiary);
+}
+/* 框体下半：配置名（标题行 + 内容栏，与其他框体一致） */
+.config-editor__wm-field {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  padding: var(--spacer-12);
+}
+.config-editor__wm-field .config-bottombar__input--name {
+  width: 100%;
+  box-sizing: border-box;
+}
+/* 水印文件名悬浮预览由独立置顶小窗承担（frontend/wm_preview.html），无 DOM 内预览样式 */
 
 /* Exclude fields */
 .config-editor__exclude-list {
@@ -2748,7 +2871,7 @@ body[data-preview-collapsed] .preview-collapse:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--font-family-mono);
+  font-family: var(--font-family-default);
   font-size: var(--body-md-font-size);
   color: var(--text-secondary);
 }
@@ -2863,6 +2986,9 @@ body[data-preview-collapsed] .preview-collapse:hover {
   font-style: italic;
   color: var(--text-disabled);
 }
+/* 路径行软删除态：整行淡化 + 输入框灰字（与排除字段软删除同为"待硬删"语义） */
+.config-path-row.is-path-deleted { opacity: 0.55; }
+.config-path-row.is-path-deleted .config-path-row__input { color: var(--text-disabled); }
 /* 列框体红框用 outline：绘制在最高层级，不被内部灰底标题（排除字段/水印 PNG）覆盖 */
 .config-editor__col--exclude.is-modified,
 .config-editor__col--watermark.is-modified {
@@ -2882,6 +3008,13 @@ body[data-preview-collapsed] .preview-collapse:hover {
   text-align: center;
   outline: none;
   transition: border-color 0.15s ease;
+  appearance: textfield; /* 去掉 number 上下箭头 */
+  -moz-appearance: textfield;
+}
+.config-bottombar__input::-webkit-outer-spin-button,
+.config-bottombar__input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 .config-bottombar__input:focus {
   border-color: var(--bg-brand);
@@ -2906,6 +3039,14 @@ body[data-preview-collapsed] .preview-collapse:hover {
   white-space: nowrap;
   z-index: 20;
 }
+/* 内联红字（配置名左侧水印错误提示）：取消绝对定位，就地显示；加粗与其他红字提示统一 */
+.config-bottombar__error--inline {
+  position: static;
+  display: inline-flex;
+  align-items: center;
+  margin: 0 var(--spacer-6) 0 0;
+  font-weight: var(--font-weight-strong);
+}
 .config-editor__bottombar-right {
   display: flex;
   align-items: center;
@@ -2925,6 +3066,10 @@ body[data-preview-collapsed] .preview-collapse:hover {
   white-space: nowrap;
   transition: all 0.1s ease;
 }
+/* 配置栏按钮 hover：统一向上轻抬（与状态色变亮叠加） */
+.config-btn:hover {
+  transform: translateY(-1px);
+}
 .config-btn--save {
   background: var(--status-error-default);
   color: var(--text-onaccent);
@@ -2939,7 +3084,7 @@ body[data-preview-collapsed] .preview-collapse:hover {
   color: var(--text-onbrand);
 }
 .config-btn--save-today:hover {
-  background: var(--brand-600);
+  background: var(--brand-400);
 }
 .config-btn--run {
   background: var(--status-success-default);
@@ -2958,7 +3103,7 @@ body[data-preview-collapsed] .preview-collapse:hover {
 .config-bottombar__warn,
 .config-bottombar__modified {
   color: var(--status-error-default);
-  font-size: var(--body-xs-font-size);
+  font-size: 11px; /* 与 config-bottombar__error 红字字号统一 */
   font-weight: var(--font-weight-strong);
   white-space: nowrap;
 }
@@ -3351,6 +3496,32 @@ body[data-preview-collapsed] .preview-collapse:hover {
 .right-panel__code-line.log-target.code-line--log-video {
   background: var(--brand-200);
 }
+/* 日志简化模式：每个成片块为圆角容器；常态金边框+透明底，高亮时金边加亮+浅蓝填充；
+   overflow hidden 强制裁切容器外过长的路径文字 */
+.right-panel__content.log-simple .log-block {
+  border-radius: 8px;
+  border: 1px solid rgba(242, 217, 143, 0.4);
+  background: transparent;
+  margin: 0 0 12px;
+  padding: 6px 10px;
+  overflow: hidden;
+}
+.right-panel__content.log-simple .log-block--active {
+  border-color: rgba(242, 217, 143, 0.78);
+  background: rgba(105, 158, 216, 0.22);
+}
+/* 简化模式块内空行（水印与片段之间）：以浅金细虚线呈现，而非空白 */
+.right-panel__content.log-simple .code-line--empty {
+  position: relative;
+}
+.right-panel__content.log-simple .code-line--empty::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-top: 1px dashed rgba(242, 217, 143, 0.45);
+}
 
 /* Empty placeholder */
 .center-empty {
@@ -3662,28 +3833,6 @@ body[data-preview-collapsed] .preview-collapse:hover {
   color: var(--status-error-default);
 }
 
-.config-watermark__change {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--spacer-6);
-  height: 28px;
-  padding: 0 var(--spacer-12);
-  border: 1px solid var(--border-neutral-l2);
-  border-radius: var(--radius-6);
-  background: var(--bg-base-default);
-  color: var(--text-secondary);
-  font-size: var(--body-md-font-size);
-  cursor: pointer;
-  margin-top: auto;
-  transition: all 0.1s ease;
-}
-.config-watermark__change:hover {
-  border-color: var(--brand-500);
-  color: var(--brand-600);
-  background: var(--brand-100);
-}
-
 .log-entry__replica {
   display: inline-flex;
   align-items: center;
@@ -3772,6 +3921,7 @@ body[data-preview-collapsed] .preview-collapse:hover {
   background: rgba(0, 0, 0, 0.4);
 }
 .modal-card {
+  position: relative;
   width: 380px;
   max-width: calc(100vw - 48px);
   background: var(--bg-base-default);
@@ -3780,6 +3930,26 @@ body[data-preview-collapsed] .preview-collapse:hover {
   box-shadow: 0 24px 64px color-mix(in srgb, var(--text-default) 14%, transparent), 0 4px 16px color-mix(in srgb, var(--text-default) 8%, transparent);
   overflow: hidden;
 }
+/* 弹窗右上角圆形关闭按钮 */
+.modal-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 2;
+}
+.modal-close:hover { background: var(--bg-overlay-l2); color: var(--text-default); }
 .modal__title {
   padding: var(--spacer-16) var(--spacer-20) 0;
   font-size: var(--heading-sm-font-size);
@@ -3834,6 +4004,132 @@ body[data-preview-collapsed] .preview-collapse:hover {
   background: var(--status-error-hover);
   border-color: var(--status-error-hover);
 }
+/* 保存归属选择弹窗：每行左侧提示"保存到 XX 项目：<项目名>"，右侧统一「保存」按钮（右对齐、样式一致） */
+.modal-card--dest { width: 480px; }
+.modal__dest-list {
+  padding: var(--spacer-12) var(--spacer-20) var(--spacer-16);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-8);
+}
+.modal__dest-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacer-16);
+}
+.modal__dest-hint {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--body-base-font-size);
+  line-height: 1.4;
+  word-break: break-all;
+}
+/* 保存归属选择弹窗的「保存」按钮：与主窗口「保存为当日配置」按钮样式一致 */
+.modal__dest-save {
+  flex-shrink: 0;
+  white-space: nowrap;
+  height: 28px;
+  padding: 0 var(--spacer-12);
+  border: none;
+  border-radius: var(--radius-6);
+  background: var(--brand-500);
+  color: var(--text-onbrand);
+  font-size: var(--body-md-font-size);
+  font-weight: var(--font-weight-medium);
+  transition: all 0.1s ease;
+}
+.modal__dest-save:hover {
+  background: var(--brand-400);
+}
+/* 任务清除弹窗加宽：按钮单行排列，避免文字自动换行；关闭退出用右上角圆X */
+.modal-card--wide { width: 520px; }
+.modal-card--wide .modal-btn { white-space: nowrap; }
+
+/* ── 更新日志弹窗 ── */
+.changelog-card {
+  width: 640px;
+  max-width: calc(100vw - 48px);
+  max-height: 74vh;
+  display: flex;
+  flex-direction: column;
+}
+.changelog-card__title {
+  padding: var(--spacer-16) var(--spacer-20) 0;
+  font-size: var(--heading-sm-font-size);
+  line-height: var(--heading-sm-line-height);
+  font-weight: var(--heading-sm-font-weight);
+  color: var(--text-default);
+}
+.changelog-card__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--spacer-12) var(--spacer-20);
+}
+.changelog-card__body h1 {
+  margin: 2px 0 10px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-default);
+}
+.changelog-card__body h2 {
+  margin: 16px 0 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-neutral-l1);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-default);
+}
+.changelog-card__body h3 {
+  margin: 12px 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-brand, var(--brand-600));
+}
+.changelog-card__body h4 {
+  margin: 10px 0 2px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-default);
+}
+.changelog-card__body ul {
+  margin: 4px 0 10px;
+  padding-left: 18px;
+}
+.changelog-card__body li {
+  margin: 3px 0;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+.changelog-card__body p { margin: 4px 0; color: var(--text-secondary); line-height: 1.55; }
+.changelog-card__body pre {
+  margin: 6px 0;
+  padding: 8px 10px;
+  background: var(--bg-base-secondary);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-4);
+  font-family: var(--font-family-mono), Consolas, monospace;
+  font-size: 12px;
+  overflow-x: auto;
+  color: var(--text-default);
+}
+.changelog-card__actions {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--spacer-12) var(--spacer-20) var(--spacer-16);
+}
+/* 表格 / 行内代码 / 链接 / 引用 */
+.changelog-card__body table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 13px; }
+.changelog-card__body th, .changelog-card__body td { border: 1px solid var(--border-neutral-l2); padding: 6px 10px; text-align: left; color: var(--text-secondary); }
+.changelog-card__body th { background: var(--bg-overlay-l2); color: var(--text-default); font-weight: 600; }
+.changelog-card__body code { background: var(--bg-base-secondary); border: 1px solid var(--border-neutral-l1); border-radius: 4px; padding: 1px 5px; font-family: var(--font-family-mono), Consolas, monospace; font-size: 12px; color: var(--text-default); }
+.changelog-card__body a { color: var(--text-brand, var(--brand-500)); text-decoration: none; }
+.changelog-card__body a:hover { text-decoration: underline; }
+.changelog-card__body blockquote { margin: 8px 0; padding: 6px 12px; border-left: 3px solid var(--brand-500); background: var(--bg-overlay-l1); border-radius: 0 6px 6px 0; }
+.changelog-card__body blockquote p { margin: 2px 0; }
+.changelog-card__body hr { border: none; border-top: 1px solid var(--border-neutral-l1); margin: 14px 0; }
 
 /* ── 日志片段右键菜单 ── */
 .ctx-menu {
@@ -4031,6 +4327,73 @@ body[data-preview-collapsed] .preview-collapse:hover {
   border-radius: var(--radius-full);
   background: var(--bg-brand);
   transition: width 0.2s ease;
+}
+
+/* ═══ 状态栏后台预检测进度（排版配色参考 update-mini）═══ */
+.probe-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-8);
+  height: 100%;
+  flex-shrink: 0;
+}
+.probe-mini__label {
+  font-family: var(--font-family-default);
+  font-size: var(--body-xs-font-size);
+  font-weight: var(--body-xs-font-weight);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.probe-mini__track {
+  width: 72px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--bg-overlay-l2);
+  overflow: hidden;
+}
+.probe-mini__fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--bg-brand);
+  transition: width 0.2s ease;
+}
+.probe-mini__cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.probe-mini__cancel:hover {
+  color: var(--status-error-default);
+  background: var(--bg-overlay-l2);
+}
+/* 遮罩「缩到后台」按钮（仅预检测全量探测时显示） */
+.busy-min-btn {
+  margin-top: var(--spacer-6);
+  padding: 4px 12px;
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--body-xs-font-size);
+  cursor: pointer;
+}
+.busy-min-btn:hover {
+  color: var(--text-default);
+  border-color: var(--border-neutral-l3);
+  background: var(--bg-overlay-l2);
 }
 
 /* ═══ 未配置工作路径时的引导态：透明覆盖左侧项目列表区（背景透出 sidebar 原色），

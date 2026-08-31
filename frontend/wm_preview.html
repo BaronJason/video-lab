@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-skin="white_blue">
+<head>
+<meta charset="UTF-8">
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="skins/white_blue.css" data-skin-css>
+<style>
+  html, body { margin: 0; background: transparent !important; overflow: hidden; }
+  .frame {
+    box-sizing: border-box;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+  }
+  img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+</style>
+</head>
+<body>
+  <div class="frame"><img id="p" alt=""></div>
+</body>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var skin = params.get('skin') || 'white_blue';
+  document.documentElement.setAttribute('data-skin', skin);
+  var skinCss = document.querySelector('link[data-skin-css]');
+  if (skinCss) skinCss.href = 'skins/' + skin + '.css';
+  var u = params.get('p');
+  if (u) document.getElementById('p').src = u;
+</script>
+</html>

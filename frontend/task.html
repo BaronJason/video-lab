@@ -1,6 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-skin="white_blue">
-<head>
+<html lang="zh-CN" data-skin="white_blue"><head>
   <meta charset="UTF-8">
   <title>Video Lab - 任务</title>
   <link rel="stylesheet" href="styles.css">
@@ -28,7 +27,7 @@
       flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
       height: 34px; border: 1px solid var(--border-neutral-l2); border-radius: 6px;
       background: transparent; color: var(--text-secondary); cursor: pointer;
-      font-family: var(--font-family-default); font-size: var(--body-sm-font-size);
+      font-family: var(--font-family-default); font-size: 16px;
       transition: background .15s ease, color .15s ease, border-color .15s ease;
     }
     .task-tab:hover { background: var(--bg-overlay-l1); color: var(--text-default-hover); }
@@ -194,11 +193,13 @@
       padding: 0 10px 8px; margin-top: -2px;
     }
     .task-card__progress-text {
-      display: flex; justify-content: space-between; align-items: center; gap: 8px;
+      display: flex; justify-content: flex-start; align-items: center; gap: 8px;
       font-size: var(--body-sm-font-size); color: var(--text-default);
       font-variant-numeric: tabular-nums; line-height: 1.4;
     }
-    .task-card__progress-pct { flex-shrink: 0; color: var(--text-secondary); }
+    .task-card__progress-pct { flex-shrink: 0; min-width: 36px; text-align: right; color: var(--text-secondary); margin-left: auto; }
+    .task-card__progress-label { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .task-card__progress-elapsed { flex-shrink: 0; min-width: 92px; text-align: left; color: var(--text-tertiary); padding-left: 17px; padding-right: 12px; /* 固定起始空位右移；与右端百分比保持间隔 */ }
     .task-card__progress-track { height: 6px; border-radius: 3px; background: var(--bg-overlay-l2); overflow: hidden; }
     .task-card__progress-fill { height: 100%; width: 0; border-radius: 3px; background: var(--status-primary-default); transition: width .3s ease; }
     .task-card__log {
@@ -213,19 +214,19 @@
     <span class="win-titlebar__title">Video Lab - 任务</span>
     <div class="win-titlebar__controls">
       <button class="win-titlebar__btn win-titlebar__btn--close" data-wctl="close" title="关闭">
-        <svg viewBox="0 0 12 12"><path d="M3 3l6 6M9 3L3 9" stroke="currentColor" stroke-width="1" stroke-linecap="round"/></svg>
+        <svg viewBox="0 0 12 12"><path d="M3 3l6 6M9 3L3 9" stroke="currentColor" stroke-width="1" stroke-linecap="round"></path></svg>
       </button>
     </div>
   </div>
   <div class="task-tabs" id="taskTabs">
     <button class="task-tab task-tab--active" data-tab="running" id="tabRunning">
-      <i data-icon="play" data-size="15"></i><span>正在运行</span><span class="task-tab__count" id="cntRunning">0</span>
+      <i data-icon="play" data-size="16"></i><span style="font-size: 15px">正在运行</span><span class="task-tab__count" id="cntRunning">0</span>
     </button>
     <button class="task-tab" data-tab="done" id="tabDone">
-      <i data-icon="check" data-size="15"></i><span>已完成</span><span class="task-tab__count" id="cntDone">0</span>
+      <i data-icon="check" data-size="16"></i><span style="font-size: 15px">已完成</span><span class="task-tab__count" id="cntDone">0</span>
     </button>
-    <button class="task-tab" data-tab="stopped" id="tabStopped">
-      <i data-icon="stop" data-size="15"></i><span>已停止</span><span class="task-tab__count" id="cntStopped">0</span>
+    <button class="task-tab" data-tab="stopped" id="tabStopped" style="font-size: 16px;">
+      <i data-icon="stop" data-size="16"></i><span style="font-size: 15px;">已停止</span><span class="task-tab__count" id="cntStopped">0</span>
     </button>
   </div>
   <div class="task-main">
@@ -239,5 +240,6 @@
   <script src="icons.js"></script>
   <script src="titlebar.js"></script>
   <script src="task.js"></script>
-</body>
-</html>
+
+
+</body></html>

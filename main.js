@@ -30,6 +30,9 @@ const IS_PORTABLE = (() => {
   }
 })();
 
+// 开机自启动形态：由登录项以 --autostart 启动时静默到托盘并在后台预热工作目录，不打扰用户
+const IS_AUTOSTART = process.argv.includes('--autostart');
+
 function projectDir() {
   if (!app.isPackaged) return __dirname;
   // 便携版：取 electron-builder portable 注入的 exe 所在目录，不依赖文件夹名（目录可在任意层级）
@@ -98,11 +101,13 @@ function moveCaches() {
   logCachePath = path.join(cacheDir, app.isPackaged ? 'log_cache.json' : 'video_lab_log_cache.json');
   clipCachePath = path.join(cacheDir, app.isPackaged ? 'clip_cache.json' : 'video_lab_clip_cache.json');
   taskStatePath = path.join(cacheDir, app.isPackaged ? 'task_cache.json' : 'video_lab_task_cache.json');
+  watermarkCachePath = path.join(cacheDir, app.isPackaged ? 'watermark_cache.json' : 'video_lab_watermark_cache.json');
   api.cachePath = scanCachePath;
   api.videoCachePath = videoCachePath;
   api.logCachePath = logCachePath;
   api.clipIndexCachePath = clipCachePath;
   api.taskStatePath = taskStatePath;
+  api.watermarkCachePath = watermarkCachePath;
   // 清空内存缓存与扫描标记，避免旧路径数据残留重新落盘
   api._videoCache = null;
   api._logCache = null;
@@ -111,6 +116,8 @@ function moveCaches() {
   api._scanCache = new Map();
   api._versionsCache = new Map();
   api._projectsCache = null;
+  api._wmCache = null;
+  api._wmCacheLoadedRoot = null;
   try { api._invalidateCaches(); } catch (e) {}
   pruneEmptyDirs();
 }
@@ -189,6 +196,7 @@ let logCachePath = path.join(cacheDir, app.isPackaged ? 'log_cache.json' : 'vide
 // 成片名搜索缓存（仅存成片条目精简字段，目录 mtime 变化自动失效重建）
 let clipCachePath = path.join(cacheDir, app.isPackaged ? 'clip_cache.json' : 'video_lab_clip_cache.json');
 let taskStatePath = path.join(cacheDir, app.isPackaged ? 'task_cache.json' : 'video_lab_task_cache.json');
+let watermarkCachePath = path.join(cacheDir, app.isPackaged ? 'watermark_cache.json' : 'video_lab_watermark_cache.json');
 // 迁移旧任务快照命名（task_snapshot.json → task_cache.json）
 (function migrateTaskCache() {
   const old = path.join(cacheDir, app.isPackaged ? 'task_snapshot.json' : 'video_lab_task_snapshot.json');
@@ -201,7 +209,14 @@ let taskStatePath = path.join(cacheDir, app.isPackaged ? 'task_cache.json' : 'vi
   if (oldScan === scanCachePath || !fs.existsSync(oldScan) || fs.existsSync(scanCachePath)) return;
   try { fs.copyFileSync(oldScan, scanCachePath); fs.unlinkSync(oldScan); } catch (e) {}
 })();
-const api = new Api(root, config, scanCachePath, videoCachePath, logCachePath, path.join(projectDir(), 'resources', 'Scripts'), clipCachePath, taskStatePath);
+const api = new Api(root, config, scanCachePath, videoCachePath, logCachePath, path.join(projectDir(), 'resources', 'Scripts'), clipCachePath, taskStatePath, watermarkCachePath);
+// 扫描/重建环节进度：推送主窗口渲染层实时状态（walk/收集日志/重建成片索引/水印统计 一一对应）
+api.onScanProgress = (p) => {
+  try {
+    const w = (mainWin && !mainWin.isDestroyed()) ? mainWin : (BrowserWindow.getAllWindows()[0] || null);
+    if (w && !w.isDestroyed()) w.webContents.send('scan_progress', p);
+  } catch (e) {}
+};
 
 // 主窗口与任务窗口：主窗口仅在原生模态对话框/载入遮罩时被禁用；任务列表窗口不随父窗口禁用
 let mainWin = null;
@@ -463,14 +478,35 @@ async function checkForUpdate(opts) {
     const assets = Array.isArray(data.assets) ? data.assets : [];
     // 优先匹配正式便携包资产（Video-Lab-<版本>-x64-Portable.zip）；
     // Gitee / GitHub 会自动附带源码归档（如 v1.4.6.zip），须排除以免误下载源码包
-    const asset =
-      assets.find((a) => /Video-Lab-.*-x64-Portable\.zip$/i.test(String(a.name || ''))) ||
-      assets.find((a) => /\.zip$/i.test(String(a.name || '')) && !/^v?\d+\.\d+\.\d+\.zip$/i.test(String(a.name || ''))) ||
-      null;
-    // release 资产的 digest 为 sha256:<hex>，作为下载完整性校验依据
+    // Gitee 分卷场景：便携 zip 超 100MB 上传不了，按 xxx.zip.001/.002 分卷上传，
+    // 无单包时收集同组全部分卷（序号连续、≥2 卷）供下载后拼回完整 zip
+    const portableRe = /^Video-Lab-.*-x64-Portable\.zip$/i;
+    const partRe = /^(Video-Lab-.*-x64-Portable\.zip)\.(\d{3,})$/i;
+    let asset = assets.find((a) => portableRe.test(String(a.name || ''))) || null;
+    let parts = [];
+    if (!asset) {
+      const group = new Map();
+      for (const a of assets) {
+        const m = partRe.exec(String(a.name || ''));
+        if (!m) continue;
+        const key = m[1].toLowerCase();
+        if (!group.has(key)) group.set(key, []);
+        group.get(key).push({ name: a.name, url: a.browser_download_url, size: a.size || 0, index: parseInt(m[2], 10) });
+      }
+      for (const list of group.values()) {
+        list.sort((x, y) => x.index - y.index);
+        if (list.length >= 2 && list.every((p, i) => p.index === list[0].index + i)) { parts = list; break; }
+      }
+    }
+    // release 资产的 digest 为 sha256:<hex>，作为下载完整性校验依据（分卷组一般无 digest）
     const sha256 = (asset && asset.digest && String(asset.digest).replace(/^sha256:/i, '')) || '';
     const hasUpdate = cmpVersion(tag, APP_VERSION) > 0;
-    const info = { ok: true, current: APP_VERSION, latest: tag || '', hasUpdate, url: asset ? asset.browser_download_url : '', size: asset ? asset.size : 0, sha256, error: '' };
+    const info = {
+      ok: true, current: APP_VERSION, latest: tag || '', hasUpdate,
+      url: asset ? asset.browser_download_url : (parts.length ? parts[0].url : ''),
+      size: asset ? asset.size : parts.reduce((s, p) => s + (p.size || 0), 0),
+      parts, sha256, error: ''
+    };
     lastUpdateInfo = info;
     writeUpdateLog('检查成功：current=' + APP_VERSION + ' latest=v' + tag + ' hasUpdate=' + hasUpdate + ' (' + (Date.now() - t0) + 'ms)');
     if (hasUpdate) {
@@ -510,6 +546,8 @@ async function downloadUpdate(info, onProgress, onStatus) {
   const dir = projectDir();
   try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
   const zipPath = path.join(dir, 'Video-Lab-' + String(info.latest || '').replace(/^v/i, '') + '-x64-Portable.zip');
+  // Gitee 分卷：逐卷下载到 zipPath.partXXX 后拼回完整 zip
+  if (info.parts && info.parts.length > 0) return downloadUpdateParts(info, zipPath, onProgress, onStatus);
   const t0 = Date.now();
   let lastErr = '';
   for (let attempt = 1; attempt <= 4; attempt++) {
@@ -551,6 +589,67 @@ async function downloadUpdate(info, onProgress, onStatus) {
     }
   }
   writeUpdateLog('下载失败：' + lastErr);
+  return { ok: false, error: lastErr };
+}
+// Gitee 分卷下载：info.parts 为同一便携 zip 的 .001/.002… 分卷（已按序号排序），
+// 逐卷经断点续传下载到 zipPath.partXXX，全部完成后按序拼回 zipPath 并校验总大小
+async function downloadUpdateParts(info, zipPath, onProgress, onStatus) {
+  const parts = info.parts;
+  const total = info.size || parts.reduce((s, p) => s + (p.size || 0), 0);
+  const partDst = (p) => zipPath + '.part' + String(p.index).padStart(3, '0');
+  const t0 = Date.now();
+  let lastErr = '';
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    if (onStatus) onStatus(attempt === 1 ? '正在下载更新分卷（' + parts.length + ' 卷）…' : '分卷下载中断，正在重试（' + attempt + '/4）…');
+    try {
+      // 逐卷下载（netDownload 自带断点续传，中断保留局部继续）
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+        const dst = partDst(part);
+        let dl = null, accelErr = '';
+        for (const cand of accelUrls(part.url)) {
+          try {
+            dl = await netDownload(cand, dst, function () {
+              try {
+                const done = parts.slice(0, i).reduce((s, p) => s + (p.size || 0), 0) + fs.statSync(dst).size;
+                if (total && onProgress) onProgress(Math.min(100, Math.round((done / total) * 100)));
+              } catch (e) {}
+            }, part.size || 0);
+            accelErr = '';
+            break;
+          } catch (ep) {
+            accelErr = (ep && ep.message) || String(ep);
+            writeUpdateLog('分卷下载源不可用：' + cand + ' → ' + accelErr);
+          }
+        }
+        if (!dl) throw new Error(accelErr || ('分卷下载失败：' + part.name));
+      }
+      // 按序拼接成完整 zip
+      const ws = fs.createWriteStream(zipPath, { flags: 'w' });
+      for (const part of parts) {
+        const buf = fs.readFileSync(partDst(part));
+        await new Promise((resolve, reject) => ws.write(buf, (err) => (err ? reject(err) : resolve())));
+      }
+      await new Promise((resolve) => ws.end(resolve));
+      // 清理分卷临时文件
+      for (const part of parts) { try { fs.unlinkSync(partDst(part)); } catch (e) {} }
+      const size = (() => { try { return fs.statSync(zipPath).size; } catch (e) { return 0; } })();
+      if (total && size !== total) throw new Error('分卷合并后大小不匹配：' + size + '/' + total);
+      if (info.sha256) {
+        if (onStatus) onStatus('正在校验更新包完整性…');
+        const actual = await sha256File(zipPath);
+        if (actual !== String(info.sha256).toLowerCase()) throw new Error('哈希校验失败：期望 ' + String(info.sha256).slice(0, 12) + '… 实际 ' + actual.slice(0, 12) + '…');
+      }
+      writeUpdateLog('分卷下载合并完成：' + size + ' 字节，校验通过（尝试 ' + attempt + '/4，' + (Date.now() - t0) + 'ms）');
+      return { ok: true, zipPath };
+    } catch (e) {
+      lastErr = (e && e.message) || String(e);
+      writeUpdateLog('分卷下载失败（尝试 ' + attempt + '/4）：' + lastErr);
+      if (/哈希校验失败/.test(lastErr)) { try { fs.unlinkSync(zipPath); } catch (u) {} }
+      if (attempt < 4) { if (onStatus) onStatus('分卷下载失败（' + lastErr + '），正在重试…'); await new Promise((r) => setTimeout(r, 1500)); }
+    }
+  }
+  writeUpdateLog('分卷下载失败：' + lastErr);
   return { ok: false, error: lastErr };
 }
 // 内嵌更新器脚本：等待旧进程退出 → 解压 → 覆盖运行目录（排除用户数据）→ 重启
@@ -779,11 +878,15 @@ function registerIpc() {
   ipcMain.handle('save_config_today', (e, project, name, configName, folders, excludes, watermark) => api.saveConfigToday(project, name, configName, folders, excludes, watermark));
   ipcMain.handle('precheck', (e, paths, excludes) => api.precheck(paths, excludes));
   ipcMain.handle('reset_precheck', (e) => { const sender = e.sender; return api.resetPrecheck((s) => { try { sender.send('reset_progress', s); } catch (err) {} }); });
+  // 仅刷新预缓存：不删缓存，只对缺失/变化的视频增量更新（与重置同通道回报进度）
+  ipcMain.handle('refresh_precache', (e) => { const sender = e.sender; return api.refreshPrecache((s) => { try { sender.send('reset_progress', s); } catch (err) {} }); });
   ipcMain.handle('list_logs', (e, project, name, versionPath) => api.listLogs(project, name, versionPath));
   ipcMain.handle('search_logs', (e, query) => api.searchLogs(query));
   ipcMain.handle('get_log_content', (e, fromPath, configName) => api.logContent(fromPath, configName));
   ipcMain.handle('list_log_files', (e, fromPath, configName) => api.listLogFiles(fromPath, configName));
   ipcMain.handle('check_exists', (e, paths) => api.checkExists(paths));
+  ipcMain.handle('check_watermark_project', (e, project, wm) => api.checkWatermarkProject(project, wm));
+  ipcMain.handle('find_watermark_project', (e, project, wm) => api.findWatermarkProject(project, wm));
   ipcMain.handle('run_batch', (e, p, count, group) => api.runBatch(p, count, group));
   ipcMain.handle('run_replica', (e, logPath, mode, entryVideo) => api.runReplica(logPath, mode, entryVideo));
   ipcMain.handle('list_tasks', () => api.snapshotTasks());
@@ -793,6 +896,90 @@ function registerIpc() {
   ipcMain.handle('pause_task', (e, id) => api.pauseTask(id));
   ipcMain.handle('resume_task', (e, id) => api.resumeTask(id));
   ipcMain.handle('clear_finished_tasks', (e, statuses) => api.clearFinishedTasks(statuses));
+  ipcMain.handle('clear_done_tasks', (e, opts) => api.clearDoneTasks(opts || {}));
+  ipcMain.handle('get_changelog', () => api.getChangelog());
+  ipcMain.handle('get_readme', () => api.getReadme());
+  // 启动弹更新日志：仅当配置里记录的上次展示版本与当前版本不同（含初次启动 / 版本更新后）才返回内容，并即刻记录为已展示
+  ipcMain.handle('get_changelog_popup', () => {
+    try {
+      const cfg = loadConfig();
+      if (String(cfg.last_changelog_version || '') === APP_VERSION) return { ok: true, show: false };
+      const r = api.getChangelog();
+      if (!r || !r.ok) return { ok: false, error: (r && r.error) || '读取更新日志失败' };
+      cfg.last_changelog_version = APP_VERSION;
+      saveConfig(cfg);
+      try { Object.assign(config, cfg); } catch (e) {}
+      return { ok: true, show: true, content: r.content };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  });
+  // 水印悬浮预览：独立置顶小窗，可越出主窗口显示；窗口按水印图实际比例自适应（最大 320px），位置按显示器工作区计算（10px 间距、右上贴齐）
+  let wmPreviewWin = null;
+  // 定位统一取真实光标屏幕坐标（DIP），绕开前端 clientX/Y 的缩放换算，避免偏到屏幕左上
+  function wmPreviewPosition() {
+    if (!wmPreviewWin || wmPreviewWin.isDestroyed()) return;
+    const { screen } = require('electron');
+    const cp = screen.getCursorScreenPoint();
+    const wa = screen.getDisplayNearestPoint(cp).workArea;
+    // 移动过程只动位置，尺寸一律用显式缓存值，避免 getSize/setContentSize 联动导致忽大忽小
+    const W = (wmPreviewWin._wmSize && wmPreviewWin._wmSize[0]) || 300;
+    const H = (wmPreviewWin._wmSize && wmPreviewWin._wmSize[1]) || 300;
+    const x = cp.x, y = cp.y;
+    let px = Math.floor(x + 10), py = Math.floor(y - H - 10);
+    if (px + W > wa.x + wa.width) px = Math.floor(x - W - 10);
+    if (py < wa.y) py = Math.floor(y + 10);
+    if (px < wa.x) px = wa.x;
+    if (py + H > wa.y + wa.height) py = wa.y + wa.height - H;
+    wmPreviewWin.setPosition(Math.max(wa.x, Math.min(px, wa.x + wa.width - W)), Math.max(wa.y, Math.min(py, wa.y + wa.height - H)), false);
+  }
+  ipcMain.handle('watermark_preview_show', (e, rawPath) => {
+    if (typeof rawPath !== 'string' || !rawPath.trim()) return { ok: false };
+    const abs = path.resolve(rawPath);
+    const image = nativeImage.createFromPath(abs);
+    const size = image.isEmpty() ? { width: 320, height: 320 } : image.getSize();
+    const maxSide = 320;
+    const scale = Math.min(1, maxSide / Math.max(size.width || 1, size.height || 1));
+    const w = Math.max(48, Math.round(size.width * scale)), h = Math.max(48, Math.round(size.height * scale));
+    const W = w, H = h; // 窗口 = 图片实际比例尺寸，无边框无留白
+    // 尺寸防护：任何非预期 resize（如系统/Move 触发）都立即拉回设定尺寸，防止移动中越来越大
+    function wmResizeGuard() {
+      if (!wmPreviewWin || wmPreviewWin.isDestroyed() || !wmPreviewWin._wmSize) return;
+      const cur = wmPreviewWin.getContentSize();
+      if (cur[0] !== wmPreviewWin._wmSize[0] || cur[1] !== wmPreviewWin._wmSize[1]) {
+        wmPreviewWin.setContentSize(wmPreviewWin._wmSize[0], wmPreviewWin._wmSize[1], false);
+      }
+    }
+    if (!wmPreviewWin || wmPreviewWin.isDestroyed()) {
+      wmPreviewWin = new BrowserWindow({
+        width: W, height: H, frame: false, transparent: true, resizable: false,
+        backgroundColor: '#00000000', // 全透明底，避免圆角外侧出现实色角
+        show: false, skipTaskbar: true, alwaysOnTop: true, hasShadow: false, focusable: false,
+        webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: false }
+      });
+      wmPreviewWin.setAlwaysOnTop(true, 'floating');
+      wmPreviewWin.setIgnoreMouseEvents(true, { forward: true }); // 鼠标穿透，避免遮挡主窗口 hover
+      wmPreviewWin.on('closed', () => { wmPreviewWin = null; });
+    }
+    wmPreviewWin.removeListener('resize', wmResizeGuard);
+    wmPreviewWin.on('resize', wmResizeGuard);
+    // 仅尺寸变化时调整窗口大小，避免每次 show 触发布局抖动
+    wmPreviewWin._wmSize = [W, H];
+    const cur = wmPreviewWin.getSize();
+    if (cur[0] !== W || cur[1] !== H) wmPreviewWin.setContentSize(W, H, false);
+    const fileUrl = 'file://' + encodeURI(abs.replace(/\\/g, '/'));
+    // 同一张图不重复加载，避免闪烁；skin 变化时（含边框样式）强制刷新
+    const urlWithSkin = 'file:///' + path.join(__dirname, 'frontend', 'wm_preview.html').replace(/\\/g, '/') + '?p=' + encodeURIComponent(fileUrl) + '&skin=' + encodeURIComponent((loadConfig().skin || 'white_blue'));
+    if (wmPreviewWin._lastUrl !== urlWithSkin) {
+      wmPreviewWin._lastUrl = urlWithSkin;
+      wmPreviewWin.loadURL(urlWithSkin);
+    }
+    wmPreviewWin.showInactive();
+    wmPreviewPosition();
+    return { ok: true };
+  });
+  ipcMain.handle('watermark_preview_move', () => { wmPreviewPosition(); return { ok: true }; });
+  ipcMain.handle('watermark_preview_hide', () => { if (wmPreviewWin && !wmPreviewWin.isDestroyed()) wmPreviewWin.hide(); return { ok: true }; });
   ipcMain.handle('clear_task', (e, id) => api.clearTask(id));
   ipcMain.handle('resume_all_tasks', () => api.resumeAllTasks());
   ipcMain.handle('pause_all_tasks', () => api.pauseAllTasks());
@@ -816,6 +1003,7 @@ function registerIpc() {
       config_path: configFilePath(),
       config_path_program: path.dirname(programConfigPath()),   // 显示目录（含配置与 Cache）
       config_path_appdata: path.dirname(appdataConfigPath()),
+      autostart: c.autostart === true,
     };
   });
   // 设置页：保存完整配置，写入 config.json 并同步内存/后端/主窗口皮肤；切换保存位置时迁移并删除旧文件
@@ -829,6 +1017,7 @@ function registerIpc() {
       }
       if (s.config_storage === 'program' || s.config_storage === 'appdata') cfg.config_storage = s.config_storage;
       if (typeof s.auto_check_update === 'boolean') cfg.auto_check_update = s.auto_check_update;
+      if (typeof s.autostart === 'boolean') cfg.autostart = s.autostart;
       if (s.update_source === 'github' || s.update_source === 'gitee') cfg.update_source = s.update_source;
       if (s.batch && typeof s.batch === 'object') cfg.batch = Object.assign({}, DEFAULT_CONFIG.batch, s.batch);
       if (s.replica && typeof s.replica === 'object') cfg.replica = Object.assign({}, DEFAULT_CONFIG.replica, s.replica);
@@ -840,6 +1029,8 @@ function registerIpc() {
       if (mv.ok && mv.moved) { configMoved = true; moveCaches(); } // Cache 一并迁移（配置和数据）
     }
     saveConfig(cfg);
+    // 应用开机自启动（openAtLogin + --autostart 静默托盘启动）；开发版不注册，避免污染开发环境
+    try { if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: cfg.autostart === true, args: ['--autostart'] }); } catch (e) {}
     Object.assign(config, cfg);
     api.updateSettings(cfg);
     for (const w of BrowserWindow.getAllWindows()) w.webContents.send('settings_saved', cfg);
@@ -855,6 +1046,18 @@ function registerIpc() {
   });
   // 主窗口状态栏：当前应用版本号（左下角常驻显示）
   ipcMain.handle('get_app_version', () => APP_VERSION);
+  // 开机自启动开关（独立读写，设置页「通用设置」可用；openAtLogin + --autostart 静默托盘启动）
+  ipcMain.handle('get_autostart', () => ({ enabled: config.autostart === true }));
+  ipcMain.handle('set_autostart', (e, en) => {
+    const v = !!en;
+    config.autostart = v;
+    saveConfig(config);
+    try { if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: v, args: ['--autostart'] }); } catch (e) {}
+    for (const w of BrowserWindow.getAllWindows()) w.webContents.send('settings_saved', loadConfig());
+    return { ok: true, enabled: v };
+  });
+  // 手动取消进行中的后台预检测（后端 token 自增即中断旧探测）
+  ipcMain.handle('cancel_precheck', () => api.cancelPrecheck());
   // 主窗口提示条：两步式第一步（仅下载，需 UPDATE_ENABLED）
   ipcMain.handle('start_update', () => startUpdate());
   // 主窗口提示条：两步式第二步（安装并重启，需 UPDATE_ENABLED，setup 版使用）
@@ -985,6 +1188,12 @@ app.whenReady().then(async () => {
   await ensureConfig();
   createTray();
   createWindow();
+  // 开机自启（--autostart）：静默到托盘常驻；延迟避开开机 IO 高峰后后台预热工作目录（扫描+索引+日志），不打扰用户；
+  // 用户随后打开软件时由单实例锁唤起现有实例（秒开）
+  if (IS_AUTOSTART && mainWin && !mainWin.isDestroyed()) {
+    mainWin.hide();
+    setTimeout(() => { try { api.listProjects(true); } catch (e) {} }, 30000);
+  }
   // 启动自动检查更新（仅检查；UPDATE_ENABLED=false 时便携版静默停用）
   if (UPDATE_ENABLED && mainWin && !mainWin.isDestroyed()) {
     mainWin.webContents.once('did-finish-load', () => {

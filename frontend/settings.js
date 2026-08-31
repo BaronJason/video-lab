@@ -19,6 +19,69 @@
   var origValues = {};
   var originalSkin = null;
 
+  // 轻量 Markdown 渲染（标题 / 有序无序列表 / 表格 / 引用 / 行内链接与粗体 / 代码块 / 空行）
+  function renderMd(text) {
+    var esc = function (s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+    // 行内：剥离 img 标签 → 转义 → 反引号代码 / **粗体** / [text](url) / <url>
+    function inline(s) {
+      s = String(s == null ? '' : s).replace(/<img[^>]*>/gi, '');
+      s = s.replace(/!\[[^\]]*\]\([^)]*\)/g, ''); // 剥离 markdown 图片语法（badge 图等）
+      s = esc(s);
+      s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+      s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      // [text](url)：仅文字非空才渲染链接；剥图残留的空 [](url) 直接移除不显示
+      s = s.replace(/\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g, function (m, txt, u) {
+        if (!txt) return '';
+        return '<a href="' + u + '">' + txt + '</a>';
+      });
+      // 尖括号裸链：< > 已转义为实体，需按实体匹配
+      s = s.replace(/&lt;((?:https?:\/\/)[^>&\s]+)&gt;/g, '<a href="$1">$1</a>');
+      return s;
+    }
+    var lines = String(text || '').split(/\r?\n/);
+    var html = '', inList = false, inCode = false, inBlock = false;
+    var flushList = function () { if (inList) { html += '</ul>'; inList = false; } };
+    var flushBlock = function () { if (inBlock) { html += '</blockquote>'; inBlock = false; } };
+    for (var i = 0; i < lines.length; i++) {
+      var t = lines[i];
+      if (/^\s*```/.test(t)) { flushList(); flushBlock(); html += inCode ? '</pre>' : '<pre>'; inCode = !inCode; continue; }
+      if (inCode) { html += esc(t) + '\n'; continue; }
+      // 表格：收集连续 | 行
+      if (/^\s*\|/.test(t)) {
+        var rows = [];
+        while (i < lines.length && /^\s*\|/.test(lines[i])) { rows.push(lines[i]); i++; }
+        i--;
+        flushList(); flushBlock();
+        var header = rows[0].replace(/^\s*\|\s*/, '').replace(/\s*\|\s*$/, '').split(/\s*\|\s*/);
+        var bodyStart = 1;
+        if (rows[1] && /^\s*\|?\s*:?-{2,}/.test(rows[1])) bodyStart = 2;
+        html += '<table><thead><tr><th>' + header.map(inline).join('</th><th>') + '</th></tr></thead><tbody>';
+        for (var r = bodyStart; r < rows.length; r++) {
+          var cells = rows[r].replace(/^\s*\|\s*/, '').replace(/\s*\|\s*$/, '').split(/\s*\|\s*/);
+          html += '<tr><td>' + cells.map(inline).join('</td><td>') + '</td></tr>';
+        }
+        html += '</tbody></table>';
+        continue;
+      }
+      // 引用
+      var q = /^>\s?(.*)$/.exec(t);
+      if (q) { flushList(); if (!inBlock) { html += '<blockquote>'; inBlock = true; } html += '<p>' + inline(q[1] || '') + '</p>'; continue; }
+      if (inBlock) { flushBlock(); }
+      var h = /^(#{1,6})\s+(.*)$/.exec(t);
+      if (h) { flushList(); var lv = Math.min(h[1].length, 4); html += '<h' + lv + '>' + inline(h[2]) + '</h' + lv + '>'; continue; }
+      var ul = /^\s*[-*]\s+(.*)$/.exec(t);
+      if (ul) { if (!inList) { html += '<ul>'; inList = true; } html += '<li>' + inline(ul[1]) + '</li>'; continue; }
+      flushList();
+      if (/^\s*<(\/)?(div|br)[^>]*>\s*$/i.test(t)) { continue; }
+      if (/^-{3,}\s*$/.test(t)) { flushList(); flushBlock(); html += '<hr>'; continue; }
+      if (!t.trim()) { continue; } // 空行不输出，避免多余空隙
+      var para = inline(t);
+      if (para) html += '<p>' + para + '</p>';
+    }
+    flushList(); flushBlock();
+    return html;
+  }
+
   // 为每个输入框左侧插入红色 *（未保存时显示）
   function wrapAllInputs() {
     document.querySelectorAll('.form-input').forEach(function (input) {
@@ -130,6 +193,8 @@
       $('cfgWatermark').value = s.watermark_dir || '';
       var chk = $('autoCheckUpdate');
       if (chk) chk.checked = s.auto_check_update !== false;
+      var as = $('autoStart');
+      if (as) as.checked = s.autostart === true;
       document.querySelectorAll('input[name="updateSource"]').forEach(function (r) { r.checked = r.value === s.update_source; });
       var storage = s.config_storage === 'appdata' ? 'appdata' : 'program';
       document.querySelectorAll('input[name="configStorage"]').forEach(function (r) { r.checked = r.value === storage; });
@@ -164,6 +229,50 @@
   if (btnSave) btnSave.disabled = false; // 保存按钮任何时候可用
 
   function bindNav() {
+    var changelogLoaded = false;
+    var changelogLoading = false;
+    function loadChangelog() {
+      if (changelogLoaded || changelogLoading) return;
+      changelogLoading = true;
+      var hint = $('changelogHint');
+      if (hint) hint.textContent = '正在加载…';
+      api.get_changelog().then(function (r) {
+        changelogLoading = false;
+        if (!r || !r.ok) {
+          if (hint) hint.textContent = '更新日志加载失败：' + ((r && r.error) || '未知错误');
+          return;
+        }
+        changelogLoaded = true;
+        var box = $('changelogBox');
+        if (box) { box.innerHTML = ''; var frag = document.createElement('div'); frag.innerHTML = renderMd(r.content || ''); box.appendChild(frag); }
+        if (hint) hint.parentNode && hint.parentNode.removeChild(hint);
+      }).catch(function (e) {
+        changelogLoading = false;
+        if (hint) hint.textContent = '更新日志加载失败：' + e.message;
+      });
+    }
+    var aboutLoaded = false;
+    var aboutLoading = false;
+    function loadAbout() {
+      if (aboutLoaded || aboutLoading) return;
+      aboutLoading = true;
+      var hint = $('aboutHint');
+      if (hint) hint.textContent = '正在加载…';
+      api.get_readme().then(function (r) {
+        aboutLoading = false;
+        if (!r || !r.ok) {
+          if (hint) hint.textContent = '内容加载失败：' + ((r && r.error) || '未知错误');
+          return;
+        }
+        aboutLoaded = true;
+        var box = $('aboutBox');
+        if (box) { box.innerHTML = ''; var frag = document.createElement('div'); frag.innerHTML = renderMd(r.content || ''); box.appendChild(frag); }
+        if (hint) hint.parentNode && hint.parentNode.removeChild(hint);
+      }).catch(function (e) {
+        aboutLoading = false;
+        if (hint) hint.textContent = '内容加载失败：' + e.message;
+      });
+    }
     document.querySelectorAll('.settings-nav__item').forEach(function (btn) {
       btn.addEventListener('click', function () {
         document.querySelectorAll('.settings-nav__item').forEach(function (x) { x.classList.remove('is-active'); });
@@ -171,6 +280,8 @@
         btn.classList.add('is-active');
         var view = $('view-' + btn.dataset.view);
         if (view) view.classList.add('is-active');
+        if (btn.dataset.view === 'changelog') loadChangelog();
+        else if (btn.dataset.view === 'about') loadAbout();
       });
     });
     document.querySelectorAll('[data-dir]').forEach(function (btn) {
@@ -211,6 +322,7 @@
         root: $('cfgRoot').value.trim(),
         watermark_dir: $('cfgWatermark').value.trim(),
         auto_check_update: !!$('autoCheckUpdate').checked,
+        autostart: !!$('autoStart').checked,
         update_source: srcEl ? srcEl.value : 'gitee',
         config_storage: storageEl ? storageEl.value : 'program',
         batch: state.batch,
@@ -305,6 +417,13 @@
       api.open_external('https://github.com/BaronJason/video-lab').catch(function () {});
     });
     loadSettings();
+    // 文档内 http 链接统一用系统默认浏览器打开（README/更新日志里的外部链接）
+    document.addEventListener('click', function (e) {
+      var a = e.target && e.target.closest ? e.target.closest('a[href^="http"]') : null;
+      if (!a) return;
+      e.preventDefault();
+      if (api && api.open_external) api.open_external(a.getAttribute('href')).catch(function () {});
+    });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();

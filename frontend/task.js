@@ -97,6 +97,38 @@
   }
 
   var rendered = {}; // taskId -> { el, header, logEl, body, logCount, expanded }
+
+  // 任务日志展示过滤：仅影响展示，后端日志数据保持完整。
+  // 1) 内部机制/冗余行（互斥锁、索引加载与自动修正、TXT已同步、预检测计数、
+  //    生成/分组数确认、创建输出目录标题）用户无需关注，直接隐去；
+  // 2) 复刻模式2每次重试尝试的片段替换详情，被"替换后总时长…重试替换"覆盖的前一轮丢弃，
+  //    仅保留最终采用的那一轮（重试次数行保留）
+  function filterTaskLogLines(lines) {
+    var out = [];
+    var block = null;
+    function flush() { if (block) { out.push.apply(out, block); block = null; } }
+    var ignore = [
+      /^(🔒 已获取互斥锁|🔓 互斥锁已释放|📇 已加载索引|🔎 索引自动修正|✅ TXT文件已同步更新|预检测视频文件|设置生成数量|设置分组数|等待获取互斥锁|创建输出目录|✅ 输出目录)/,
+      /^已通过 BATCH_(COUNT|GROUP) 指定/,
+      /^✅ 已通过 REPLICA_TXT 指定TXT文件/,
+      /：\s*\d+\s*个视频/
+    ];
+    for (var i = 0; i < lines.length; i++) {
+      var ln = lines[i];
+      if (ignore.some(function (re) { return re.test(ln); })) continue;
+      if (/^🔀 模式2：尾部新增替换/.test(ln)) { flush(); block = []; block.push(ln); continue; }
+      if (block && /^\s*第\s*\d+\s*段:/.test(ln)) { block.push(ln); continue; }
+      if (block && /替换后总时长.*重试替换（/.test(ln)) {
+        block = null; // 前一轮替换详情将被重试覆盖，丢弃
+        out.push(ln);
+        continue;
+      }
+      flush();
+      out.push(ln);
+    }
+    flush();
+    return out;
+  }
   var state = { tab: 'running', _errCount: 0, _viewedErr: 0 };
   // 已完成列表按日期分组的展开状态：dayKey -> true(展开)/false(折叠)；未记录时首组展开、其余折叠
   var doneGroupsExpanded = {};
@@ -174,6 +206,7 @@
       '<span class="task-card__lock"></span>' +
       '<button class="task-card__pause">' + icon('pause', 12) + '暂停</button>' +
       '<button class="task-card__stop">' + icon('stop', 12) + '停止</button>' +
+      '<button class="task-card__rerun" title="使用开始任务时的配置重新制作，删除上次失败的成片与日志">' + icon('rotate-ccw', 12) + '重新开始</button>' +
       '<button class="task-card__del" title="从列表中移除该任务">' + icon('x', 12) + '</button>';
     card.appendChild(header);
     header.querySelector('.task-card__handle').innerHTML = icon('grip-vertical', 14);
@@ -197,8 +230,12 @@
     bindLogFollow(record);
     header.addEventListener('click', function (e) {
       if (e.target.closest('.task-card__stop')) return;
+      if (e.target.closest('.task-card__rerun')) return;
       if (e.target.closest('.task-card__pause')) return;
       if (e.target.closest('.task-card__handle')) return;
+      // 排队中任务尚未开始，日志无有用信息，点击不展开
+      var curT = card.__task || t;
+      if (curT.status === 'queued') return;
       record.expanded = !record.expanded;
       body.style.display = record.expanded ? '' : 'none';
       if (record.expanded) { record.following = true; record._progScroll = true; scrollLogBottom(log); requestAnimationFrame(function () { record._progScroll = true; scrollLogBottom(log); }); }
@@ -209,16 +246,26 @@
       e.stopPropagation();
       confirmStop(card.__task || t);
     });
+    header.querySelector('.task-card__rerun').addEventListener('click', function (e) {
+      e.stopPropagation();
+      confirmRerun(card.__task || t);
+    });
     header.querySelector('.task-card__pause').addEventListener('click', function (e) {
       e.stopPropagation();
       var cur = card.__task || t;
       if (cur.status === 'paused') confirmResume(cur);
       else confirmPause(cur);
     });
-    // 已结束任务单行删除（已完成/已停止列表中的「×」），hover 显现、直接删除不再二次确认
+    // 已结束任务单行删除：已完成/已停止任务弹出与清除按钮同款的清除方式弹窗
     header.querySelector('.task-card__del').addEventListener('click', function (e) {
       e.stopPropagation();
       var cur = card.__task || t;
+      if (cur.status === 'stopped' || cur.status === 'error' || cur.status === 'interrupted') {
+        openClearDialog(null, { ids: [cur.id], statuses: ['stopped', 'error', 'interrupted'] });
+        return;
+      }
+      // 已完成任务：与清除按钮同款弹窗（+成片 / 全部清除可选）
+      if (cur.status === 'done') { openClearDialog(null, { ids: [cur.id], statuses: ['done'] }); return; }
       call('clear_task', cur.id).then(function (r) {
         if (!r || !r.ok) alertDialog('删除失败：' + ((r && r.error) || '未知错误'));
       }).catch(function (err) { alertDialog('删除失败：' + err.message); });
@@ -296,7 +343,9 @@
     rec.header.querySelector('.task-card__status-text').textContent = STATUS_TEXT[t.status] || t.status;
     rec.header.querySelector('.task-card__title').textContent = t.title || '';
     rec.header.querySelector('.task-card__title').title = t.script || '';
-    rec.header.querySelector('.task-card__tag').textContent = TYPE_TEXT[t.type] || t.type || '';
+    var tagEl = rec.header.querySelector('.task-card__tag');
+    tagEl.textContent = TYPE_TEXT[t.type] || t.type || '';
+    tagEl.className = 'task-card__tag' + ((t.type === 'batch' || t.type === 'replica') ? ' task-card__tag--' + t.type : '');
     var lockText = LOCK_TEXT[t.lockState] || '';
     var lockEl = rec.header.querySelector('.task-card__lock');
     lockEl.textContent = lockText;
@@ -377,6 +426,10 @@
     var delBtn = rec.header.querySelector('.task-card__del');
     var isEnded = t.status === 'done' || t.status === 'stopped' || t.status === 'error' || t.status === 'interrupted';
     delBtn.style.display = (isEnded && state.tab !== 'running') ? '' : 'none';
+    // 重新开始按钮：仅失败/中断/停止任务（已停止 tab）显示，点击按原配置重制
+    var rerunBtn = rec.header.querySelector('.task-card__rerun');
+    var canRerun = t.status === 'error' || t.status === 'interrupted' || t.status === 'stopped';
+    rerunBtn.style.display = (canRerun && state.tab !== 'running') ? '' : 'none';
     // 进度条：数字行（当前/总）+ 下方进度条，仅解析到总进度后显示；
     // 排队任务也显示预计成片数（后端创建时预填 total）；分组数>0 时追加「分 N 组」
     var prog = t.progress || {};
@@ -410,7 +463,7 @@
     // 改为窗口内容整体重绘 + 滚动保持：跟随状态滚到底，查看历史时保持相对阅读位置。
     // 末尾追加实时进度行（liveLine）：ffmpeg 折叠单行，中文标签按序直译
     var lines = t.log || [];
-    var joined = lines.join('\n');
+    var joined = filterTaskLogLines(lines).join('\n');
     // 已结束任务：实时进度行已由"成片完成"固化进日志，不再叠加显示，避免与固化行内容重复
     var ended = t.status === 'done' || t.status === 'stopped' || t.status === 'error' || t.status === 'interrupted';
     var live = ended ? '' : liveLineText((t.progress || {}).liveLine);
@@ -440,6 +493,43 @@
   }
 
   // 任务右键菜单：置顶（仅排队）/ 暂停（排队）/ 继续（暂停）/ 打开成片文件夹
+  // 已完成批量任务重分组：修复分组数错误 / 忘记分组；规则与批量脚本一致（均匀分 N 组，后缀 A/B/C…，已有分组可替换）
+  function openRegroupDialog(t) {
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    var card = document.createElement('div');
+    card.className = 'modal-card modal-card--wide';
+    card.innerHTML =
+      '<button type="button" class="modal-close" title="关闭">✕</button>' +
+      '<div class="modal__title">重分组</div>' +
+      '<div class="modal__message">为任务「' + escapeHtml(t.title || '') + '」的成片重新分组（已有分组字母会被替换）。请输入分组数：</div>' +
+      '<div class="modal__input-row"><input type="number" class="modal-input" id="rgInput" min="1" max="99" value="1"></div>' +
+      '<div class="modal__actions"><button type="button" class="modal-btn" data-v="cancel">取消</button><button type="button" class="modal-btn modal-btn--primary" data-v="go">开始分组</button></div>';
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    var close = function () { overlay.remove(); };
+    var submit = function () {
+      var inp = document.getElementById('rgInput');
+      var v = parseInt(inp ? inp.value : '', 10);
+      if (!(v > 0)) { alertDialog('请输入大于 0 的分组数'); return; }
+      close();
+      call('regroup_task', t.id, v).then(function (r) {
+        if (!r || !r.ok) { alertDialog('重分组失败：' + ((r && r.error) || '未知错误')); return; }
+        var msg = '重分组完成：' + (r.regrouped || 0) + ' / ' + (r.total || 0) + ' 个成片已重新分组，拼接日志已同步修改';
+        if (r.errors && r.errors.length) msg += '\n\n部分未处理：\n' + r.errors.slice(0, 5).join('\n');
+        alertDialog(msg);
+      }).catch(function (e) { alertDialog('重分组失败：' + e.message); });
+    };
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+    card.querySelector('.modal-close').addEventListener('click', close);
+    card.querySelector('[data-v="cancel"]').addEventListener('click', close);
+    card.querySelector('[data-v="go"]').addEventListener('click', submit);
+    var inp = document.getElementById('rgInput');
+    if (inp) {
+      inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); });
+      inp.focus(); inp.select();
+    }
+  }
   function showTaskMenu(x, y, t) {
     var items = [];
     function openFolder() {
@@ -447,11 +537,16 @@
         if (r && !r.ok) alertDialog('打开失败：' + (r.error || '成片文件夹不存在'));
       }).catch(function () {});
     }
-    // 已结束任务（完成/停止/失败/中断）只读，仅提供打开成片文件夹
+    // 已结束任务（完成/停止/失败/中断）只读：已完成批量任务可重分组，其余仅提供打开成片文件夹
     if (t.status === 'done' || t.status === 'stopped' || t.status === 'error' || t.status === 'interrupted') {
+      var mItems = [];
+      if (t.status === 'done' && t.type === 'batch') {
+        mItems.push({ label: '重分组', action: function () { openRegroupDialog(t); } });
+      }
       var it = { label: '打开成片文件夹', action: openFolder };
       if (!t.outDir) { it.disabled = true; it.title = '该任务没有成片文件夹信息'; }
-      showMenu(x, y, [it]);
+      mItems.push(it);
+      showMenu(x, y, mItems);
       return;
     }
     if (t.status === 'queued') {
@@ -492,9 +587,19 @@
   }
 
   function confirmResume(t) {
-    call('resume_task', t.id).then(function (r) {
-      if (!r || !r.ok) alertDialog('恢复失败：' + ((r && r.error) || '未知错误'));
-    }).catch(function (e) { alertDialog('恢复失败：' + e.message); });
+  call('resume_task', t.id).then(function (r) {
+    if (!r || !r.ok) alertDialog('恢复失败：' + ((r && r.error) || '未知错误'));
+  }).catch(function (e) { alertDialog('恢复失败：' + e.message); });
+}
+
+  function confirmRerun(t) {
+    var msg = '确定要重新开始这个任务吗？\n\n本次重开将使用与最初一致的配置（包括日期、输出目录等），并删除上次执行失败产生的成片和日志文件。';
+    confirmDialog(msg).then(function (ok) {
+      if (!ok) return;
+      call('rerun_task', t.id).then(function (r) {
+        if (!r || !r.ok) alertDialog('重新开始失败：' + ((r && r.error) || '未知错误'));
+      }).catch(function (err) { alertDialog('重新开始失败：' + err.message); });
+    });
   }
 
   function renderTasks(tasks) {
@@ -507,8 +612,16 @@
     var cur;
     if (state.tab === 'done') {
       cur = tasks.filter(function (t) { return t.status === 'done'; });
-      // 已完成列表按完成日期降序分组：同组按结束时间降序排列
-      cur.sort(function (a, b) { return (b.endedAt || 0) - (a.endedAt || 0); });
+      // 已完成列表：分组头按完成日期降序；组内跨日凌晨(0-4时)完成的任务（业务日收官产出）置顶，
+      // 其余按结束时刻降序——两层排序保证组序与组内顺序都稳定
+      var isDawn = function (t) { var e = Number(t.endedAt) || 0; return e > 0 && new Date(e).getHours() < 4; };
+      cur.sort(function (a, b) {
+        var da = dayKey(a.endedAt), db = dayKey(b.endedAt);
+        if (da !== db) return da < db ? 1 : -1; // 日期降序
+        var ad = isDawn(a) ? 0 : 1, bd = isDawn(b) ? 0 : 1;
+        if (ad !== bd) return ad - bd;          // 同日组内凌晨任务置顶
+        return (b.endedAt || 0) - (a.endedAt || 0);
+      });
     }
     else if (state.tab === 'stopped') cur = tasks.filter(function (t) { return t.status === 'stopped' || t.status === 'error' || t.status === 'interrupted'; });
     else cur = tasks.filter(function (t) { return t.status === 'running' || t.status === 'queued' || t.status === 'paused'; });
@@ -536,7 +649,7 @@
       });
       return;
     }
-    // 已完成列表：按日期降序分组渲染（日期已降序，同日连续）
+    // 已完成列表：按日期降序分组渲染（分组头严格按日期降序，不受组内置顶顺序影响）
     var dayOrder = [];
     var dayCount = {};
     cur.forEach(function (t) {
@@ -546,6 +659,8 @@
       var n = (t.progress && t.progress.total > 0) ? t.progress.total : 1;
       dayCount[d] += n;
     });
+    // 分组头按日期字符串降序（yy.mm.dd 零填充可直接比较）：凌晨置顶不影响组序
+    dayOrder.sort().reverse();
     var firstDay = dayOrder.length ? dayOrder[0] : null;
     // 清理已过期的日期分组头（该日已无任务）；仍在的头保留 DOM 原位，
     // 避免每轮整体删除重建导致头被追加到该组卡片之后、顺序错乱（首行分组头跳动）
@@ -654,12 +769,23 @@
   function onFabClearClick() { openClearDialog(null); }
 
   // 清除弹窗：仅清除列表 / 清除列表和成片(仅mp4) / 全部清除；文件删除均由后端移入回收站
-  function openClearDialog(day) {
+  function openClearDialog(day, opts) {
     var isDone = state.tab === 'done';
     var scopeName = isDone ? '已完成' : '已停止';
     var title = day ? '清除当日任务' : '清除全部' + scopeName + '任务';
-    var msg = (day ? '将清除 ' + day + ' 这一天的' : '将清除全部' + scopeName) + '任务，请选择清除方式：';
-    var statuses = isDone ? ['done'] : ['stopped', 'error', 'interrupted'];
+    var msg = (day ? '将清除 ' + day + ' 这一天的' : '将清除全部' + scopeName) + '任务，请选择清除方式：\n\n' +
+      '· 仅清除列表：移除任务记录，成片文件保留\n' +
+      '· 清除列表和成片：另删除成片视频（mp4，移入回收站）\n' +
+      '· 全部清除：连同成片文件夹一并移入回收站';
+    var statuses = (opts && opts.statuses) || (isDone ? ['done'] : ['stopped', 'error', 'interrupted']);
+    var ids = (opts && opts.ids) || null;
+    if (ids) {
+      title = '清除任务';
+      msg = '将清除选中的任务记录与成片，请选择清除方式：\n\n' +
+        '· 仅清除列表：移除任务记录，成片文件保留\n' +
+        '· 清除列表和成片：另删除成片视频（mp4，移入回收站）\n' +
+        '· 全部清除：连同成片文件夹一并移入回收站';
+    }
     showDialog({
       title: title,
       message: msg,
@@ -681,14 +807,14 @@
           ]
         }).then(function (ok) {
           if (!ok || ok === 'cancel') return;
-          doClearDone(day, 'all', statuses);
+          doClearDone(day, 'all', statuses, ids);
         });
-      } else doClearDone(day, v, statuses);
+      } else doClearDone(day, v, statuses, ids);
     });
   }
 
-  function doClearDone(day, scope, statuses) {
-    call('clear_done_tasks', { day: day || null, scope: scope, statuses: statuses }).then(function (r) {
+  function doClearDone(day, scope, statuses, ids) {
+    call('clear_done_tasks', { day: day || null, scope: scope, statuses: statuses, ids: ids || null }).then(function (r) {
       if (!r || !r.ok) { alertDialog('清除失败：' + ((r && r.error) || '未知错误')); return; }
       if (r.errors && r.errors.length) alertDialog('部分项目清除失败：\n' + r.errors.slice(0, 5).join('\n'));
       var api = getApi();

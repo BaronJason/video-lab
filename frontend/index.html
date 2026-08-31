@@ -7,7 +7,6 @@
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="skins/white_blue.css">
   <link rel="stylesheet" href="skins/Black_Orange.css">
-  <link rel="stylesheet" href="skins/Gray_Orange.css">
   <link rel="stylesheet" href="skins/Maid_Atelier.css">
 </head>
 <body>
@@ -38,7 +37,8 @@
         <div class="busy-progress__bar"><div class="busy-progress__fill" id="busyProgressFill" style="width:0%"></div></div>
         <div class="busy-progress__text" id="busyProgressText"></div>
       </div>
-      <button type="button" class="busy-min-btn" id="busyMinBtn" style="display:none">缩到后台（状态栏显示进度）</button>
+      <button type="button" class="busy-cancel-btn" id="busyCancelBtn" style="display:none">取消预检测</button>
+      <button type="button" class="busy-min-btn" id="busyMinBtn" style="display:none">后台检测</button>
     </div>
   </div>
   <!-- 设置窗口打开时的模糊遮罩（类似预检测） -->

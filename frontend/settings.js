@@ -8,7 +8,6 @@
   var THEMES = [
     { id: 'white_blue', label: '白蓝', bg: '#F5F5F5', theme: '#4B3FE3' },
     { id: 'Black_Orange', label: '黑橙', bg: '#111113', theme: '#FF6600' },
-    { id: 'Gray_Orange', label: '灰橙', bg: '#424247', theme: '#FF9500' },
     { id: 'Maid_Atelier', label: '深海女仆', bg: '#0e1d49', theme: '#c5a468' }
   ];
   var state = {
@@ -190,11 +189,12 @@
       if (!s) return;
       setSkin(s.skin);
       $('cfgRoot').value = s.root || '';
-      $('cfgWatermark').value = s.watermark_dir || '';
       var chk = $('autoCheckUpdate');
       if (chk) chk.checked = s.auto_check_update !== false;
       var as = $('autoStart');
       if (as) as.checked = s.autostart === true;
+      var cbv = s.close_behavior === 'exit' ? 'exit' : 'tray';
+      document.querySelectorAll('input[name="closeBehavior"]').forEach(function (r) { r.checked = r.value === cbv; });
       document.querySelectorAll('input[name="updateSource"]').forEach(function (r) { r.checked = r.value === s.update_source; });
       var storage = s.config_storage === 'appdata' ? 'appdata' : 'program';
       document.querySelectorAll('input[name="configStorage"]').forEach(function (r) { r.checked = r.value === storage; });
@@ -317,12 +317,13 @@
       var skin = document.documentElement.getAttribute('data-skin') || THEMES[0].id;
       var storageEl = document.querySelector('input[name="configStorage"]:checked');
       var srcEl = document.querySelector('input[name="updateSource"]:checked');
+      var cbEl = document.querySelector('input[name="closeBehavior"]:checked');
       api.save_settings({
         skin: skin,
         root: $('cfgRoot').value.trim(),
-        watermark_dir: $('cfgWatermark').value.trim(),
         auto_check_update: !!$('autoCheckUpdate').checked,
         autostart: !!$('autoStart').checked,
+        close_behavior: cbEl ? cbEl.value : 'tray',
         update_source: srcEl ? srcEl.value : 'gitee',
         config_storage: storageEl ? storageEl.value : 'program',
         batch: state.batch,
@@ -415,6 +416,18 @@
     var gh = document.getElementById('btnGitHub');
     if (gh && api && api.open_external) gh.addEventListener('click', function () {
       api.open_external('https://github.com/BaronJason/video-lab').catch(function () {});
+    });
+    // 「配置和数据保存位置」行：打开当前生效的配置存储目录
+    var openCfg = document.getElementById('btnOpenCfgDir');
+    if (openCfg && api && api.open_path) openCfg.addEventListener('click', function () {
+      var sel = document.querySelector('input[name="configStorage"]:checked');
+      var isAppdata = sel && sel.value === 'appdata';
+      var pp = document.getElementById('cfgPathProgram'), pa = document.getElementById('cfgPathAppdata');
+      var dir = isAppdata ? (pa ? pa.textContent : '') : (pp ? pp.textContent : '');
+      if (!dir) { setStatus('尚未确定保存目录', false); return; }
+      api.open_path(dir).then(function (r) {
+        if (!(r && r.ok)) setStatus('打开失败：' + ((r && r.error) || '路径不存在'), false);
+      }).catch(function () { setStatus('打开失败', false); });
     });
     loadSettings();
     // 文档内 http 链接统一用系统默认浏览器打开（README/更新日志里的外部链接）

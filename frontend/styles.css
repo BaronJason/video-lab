@@ -1443,7 +1443,7 @@ body {
   transition: background 0.12s ease, color 0.12s ease;
 }
 .win-titlebar__btn:hover { background: var(--bg-overlay-l1); color: var(--text-default-hover); }
-.win-titlebar__btn--close:hover { background: #e81123; color: #ffffff; }
+.win-titlebar__btn--close:hover { background: var(--status-error-default); color: var(--text-onaccent); }
 .win-titlebar svg { width: 13px; height: 13px; display: block; }
 
 /* 自制标题栏为 fixed 顶层，各窗口容器顶部让位 34px */
@@ -3645,6 +3645,7 @@ body[data-preview-collapsed] .center-global-search .ds-input {
   backdrop-filter: blur(1px);
 }
 .busy-box {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -3976,7 +3977,7 @@ body[data-preview-collapsed] .center-global-search .ds-input {
   padding: 0 var(--spacer-16);
   border: 1px solid var(--border-neutral-l1);
   border-radius: var(--radius-8);
-  background: var(--bg-base-default);
+  background: var(--bg-base-secondary);   /* 与卡片底色(surface)区分，取消类按钮统一有可辨识底色 */
   color: var(--text-default);
   font-size: var(--body-base-font-size);
   cursor: pointer;
@@ -4004,6 +4005,43 @@ body[data-preview-collapsed] .center-global-search .ds-input {
   background: var(--status-error-hover);
   border-color: var(--status-error-hover);
 }
+/* 主流水印设置弹窗：窄宽两行布局——说明文字左对齐、复选框/水印按钮组右对齐 */
+.modal-card--wm { width: 360px; }
+.modal__wm-body {
+  display: flex; flex-direction: column; gap: 16px;
+  padding: 12px 24px 4px;
+}
+.wm-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; min-width: 0;
+}
+.wm-row__label {
+  flex: 0 0 auto;
+  font-size: var(--body-base-font-size);
+  color: var(--text-default);
+  white-space: nowrap;
+}
+.wm-row__ops {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; align-items: center; justify-content: flex-end; gap: 6px;
+}
+.wm-check {
+  display: inline-flex; align-items: center; cursor: pointer; flex-shrink: 0;
+}
+.wm-check input { display: none; }
+.wm-check__box {
+  width: 18px; height: 18px; flex-shrink: 0; position: relative;
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: 4px;
+  background: var(--bg-base-secondary);
+}
+.wm-check input:checked + .wm-check__box { background: var(--brand-500); border-color: var(--brand-500); }
+.wm-check input:checked + .wm-check__box::after {
+  content: ''; position: absolute; left: 6px; top: 3px; width: 4px; height: 9px;
+  border: solid var(--text-onbrand); border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+/* 主流水印按钮行：固定宽度，文件名省略号截断，右侧打开文件/打开文件夹右对齐 */
+.config-watermark__row--inline { width: 200px; }
 /* 保存归属选择弹窗：每行左侧提示"保存到 XX 项目：<项目名>"，右侧统一「保存」按钮（右对齐、样式一致） */
 .modal-card--dest { width: 480px; }
 .modal__dest-list {
@@ -4043,9 +4081,56 @@ body[data-preview-collapsed] .center-global-search .ds-input {
 .modal__dest-save:hover {
   background: var(--brand-400);
 }
+/* 关闭主窗口行为引导弹窗：左下角「不再询问」复选框 */
+.modal-card--close { width: 440px; }
+.modal__close-foot {
+  padding: var(--spacer-16) var(--spacer-20);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacer-8);
+}
+.modal-card--close .modal__actions { padding: 0; }
+.modal__close-remind {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-6);
+  color: var(--text-secondary);
+  font-size: var(--body-sm-font-size);
+  cursor: pointer;
+  user-select: none;
+}
+.modal__close-remind input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--brand-500);
+  cursor: pointer;
+}
 /* 任务清除弹窗加宽：按钮单行排列，避免文字自动换行；关闭退出用右上角圆X */
 .modal-card--wide { width: 520px; }
-.modal-card--wide .modal-btn { white-space: nowrap; }
+.modal-card--wide .modal-btn { white-space: nowrap; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+/* 弹窗内输入框（重分组等） */
+.modal__input-row { padding: var(--spacer-12) var(--spacer-20) 0; }
+.modal-input {
+  width: 100%; box-sizing: border-box;
+  height: 34px; padding: 0 var(--spacer-12);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+  background: var(--bg-base-secondary);
+  color: var(--text-default);
+  font-size: var(--body-base-font-size);
+  font-family: var(--font-family-default);
+  outline: none;
+}
+.modal-input:focus { border-color: var(--brand-500); }
+.modal-input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
+/* 配置未保存确认弹窗：按钮仿配置栏同名按钮（覆盖=红、当日=品牌色、不保存=中性带图标） */
+.modal-btn--cfg-save { background: var(--status-error-default); border-color: var(--status-error-default); color: var(--text-onaccent); }
+.modal-btn--cfg-save:hover { background: var(--status-error-hover); border-color: var(--status-error-hover); }
+.modal-btn--cfg-save-today { background: var(--brand-500); border-color: var(--brand-500); color: var(--text-onbrand); }
+.modal-btn--cfg-save-today:hover { background: var(--brand-400); border-color: var(--brand-400); }
+.modal-btn--cfg-discard { background: var(--bg-overlay-l1); border-color: var(--border-neutral-l1); color: var(--text-default); }
+.modal-btn--cfg-discard:hover { background: var(--bg-overlay-l2); border-color: var(--border-neutral-l2); }
 
 /* ── 更新日志弹窗 ── */
 .changelog-card {
@@ -4381,19 +4466,37 @@ body[data-preview-collapsed] .center-global-search .ds-input {
 }
 /* 遮罩「缩到后台」按钮（仅预检测全量探测时显示） */
 .busy-min-btn {
-  margin-top: var(--spacer-6);
-  padding: 4px 12px;
-  border: 1px solid var(--border-neutral-l2);
+  position: absolute;
+  right: var(--spacer-12);
+  bottom: var(--spacer-10);
+  padding: 5px 16px;
+  border: 1px solid var(--brand-500);
   border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: var(--body-xs-font-size);
+  background: var(--brand-500);
+  color: var(--text-onbrand);
+  font-size: var(--body-sm-font-size);
   cursor: pointer;
 }
 .busy-min-btn:hover {
-  color: var(--text-default);
-  border-color: var(--border-neutral-l3);
-  background: var(--bg-overlay-l2);
+  background: var(--brand-400);
+  border-color: var(--brand-400);
+}
+/* 预检测遮罩左侧：红色「取消预检测」按钮（点击后二次确认） */
+.busy-cancel-btn {
+  position: absolute;
+  left: var(--spacer-12);
+  bottom: var(--spacer-10);
+  padding: 5px 16px;
+  border: 1px solid var(--status-error-default);
+  border-radius: var(--radius-sm);
+  background: var(--status-error-default);
+  color: var(--text-onaccent);
+  font-size: var(--body-sm-font-size);
+  cursor: pointer;
+}
+.busy-cancel-btn:hover {
+  background: var(--status-error-hover);
+  border-color: var(--status-error-hover);
 }
 
 /* ═══ 未配置工作路径时的引导态：透明覆盖左侧项目列表区（背景透出 sidebar 原色），

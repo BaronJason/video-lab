@@ -42,13 +42,14 @@
       var overlay = document.createElement('div');
       overlay.className = 'modal-overlay';
       var card = document.createElement('div');
-      card.className = 'modal-card';
+      card.className = 'modal-card' + (opts.cssClass ? ' ' + opts.cssClass : '');
       var html = '<button type="button" class="modal-close" title="关闭">✕</button><div class="modal__title">' + escapeHtml(opts.title) + '</div>';
       if (opts.message) html += '<div class="modal__message">' + escapeHtml(opts.message) + '</div>';
       html += '<div class="modal__actions">';
       (opts.buttons || []).forEach(function (b) {
-        var cls = 'modal-btn' + (b.danger ? ' modal-btn--danger' : '') + (b.primary ? ' modal-btn--primary' : '');
-        html += '<button type="button" class="' + cls + '">' + escapeHtml(b.label) + '</button>';
+        var cls = 'modal-btn' + (b.danger ? ' modal-btn--danger' : '') + (b.primary ? ' modal-btn--primary' : '') + (b.cls ? ' ' + b.cls : '');
+        var ics = b.icon ? icon(b.icon, 14) : '';
+        html += '<button type="button" class="' + cls + '">' + ics + escapeHtml(b.label) + '</button>';
       });
       html += '</div>';
       card.innerHTML = html;
@@ -87,6 +88,78 @@
       var btns = card.querySelectorAll('.modal__dest-row .modal-btn');
       (opts.rows || []).forEach(function (r, i) { btns[i].addEventListener('click', function () { done(r.value); }); });
     });
+  }
+  // 主流水印设置弹窗：启用判定复选框 + 主流水印行（样式照搬水印 PNG 行）+ 保存/保存并更改/取消
+  function openProjectWatermarkDialog(project) {
+    call('get_project_watermark', project).then(function (r) {
+      if (!r || !r.ok) { alertDialog('读取主流水印失败：' + ((r && r.error) || '未知错误')); return; }
+      var curWm = String(r.main || '').trim();
+      var overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      var card = document.createElement('div');
+      card.className = 'modal-card modal-card--wm';
+      card.innerHTML =
+        '<button type="button" class="modal-close" title="关闭">✕</button>' +
+        '<div class="modal__title">主流水印设置</div>' +
+        '<div class="modal__wm-body">' +
+        '<div class="wm-row"><span class="wm-row__label">启用主流水印判定</span><div class="wm-row__ops"><label class="wm-check"><input type="checkbox" id="wmToggle"' + (r.enabled ? ' checked' : '') + '><span class="wm-check__box"></span></label></div></div>' +
+        '<div class="wm-row"><span class="wm-row__label">主流水印设置</span><div class="wm-row__ops"><div class="config-watermark__row config-watermark__row--inline" id="wmMainRow"></div></div></div>' +
+        '</div>' +
+        '<div class="modal__actions">' +
+        '<button type="button" class="modal-btn" data-wm-act="cancel">取消</button>' +
+        '<button type="button" class="modal-btn modal-btn--primary" data-wm-act="save">仅保存</button>' +
+        '<button type="button" class="modal-btn modal-btn--primary" data-wm-act="saveAll">保存并替换</button>' +
+        '</div>';
+      overlay.appendChild(card);
+      document.body.appendChild(overlay);
+      var row = card.querySelector('#wmMainRow');
+      function bindWmRow(root) {
+        var pathEl = root.querySelector('.config-watermark__path');
+        if (pathEl) pathEl.addEventListener('click', function () {
+          call('pick_watermark', curWm).then(function (p) { if (p) { curWm = p; renderRow(); } });
+        });
+        var bOpen = root.querySelector('[data-wm="open"]');
+        if (bOpen) bOpen.addEventListener('click', function () { if (curWm) call('open_path', curWm); });
+        var bFold = root.querySelector('[data-wm="folder"]');
+        if (bFold) bFold.addEventListener('click', function () { if (curWm) call('open_parent', curWm); });
+      }
+      function renderRow() { row.innerHTML = wmRowHtml(curWm); bindWmRow(row); }
+      renderRow();
+      var closed = false;
+      function closeDialog() { overlay.remove(); closed = true; }
+      function afterSave() { closeDialog(); if (state.activeProject === project) assertWatermark(); }
+      overlay.addEventListener('click', function (e) { if (e.target === overlay) closeDialog(); });
+      card.querySelector('.modal-close').addEventListener('click', closeDialog);
+      card.querySelector('[data-wm-act="cancel"]').addEventListener('click', closeDialog);
+      card.querySelector('[data-wm-act="save"]').addEventListener('click', function () {
+        var en = card.querySelector('#wmToggle').checked;
+        call('set_project_watermark', project, curWm, en, false).then(function (res) {
+          if (res && res.ok) { setStatus('已保存项目主流水印设置'); afterSave(); }
+          else alertDialog('保存失败：' + ((res && res.error) || '未知错误'));
+        }).catch(function (err) { alertDialog('保存失败：' + err.message); });
+      });
+      card.querySelector('[data-wm-act="saveAll"]').addEventListener('click', function () {
+        var en = card.querySelector('#wmToggle').checked;
+        showDialog({
+          title: '确认批量更改水印',
+          message: '将把本项目全部 TXT（含日志）中的水印行更换为：\n' + curWm + '\n\n确定继续吗？',
+          buttons: [ { label: '取消', value: false }, { label: '确认更改', value: true, danger: true, primary: true } ]
+        }).then(function (ok) {
+          if (!ok) return;
+          // 预检测式遮罩：滤镜模糊 + 可缩小至状态栏
+          showBusyProgress('正在更改本项目全部 TXT 的水印行…');
+          var cb = $('busyCancelBtn'); if (cb) cb.style.display = 'none'; // 此过程无需取消
+          call('set_project_watermark', project, curWm, en, true).then(function (res) {
+            hideBusy(); hideProbeMini();
+            if (res && res.ok) {
+              setStatus('已保存主流水印，并将 ' + (res.replaced || 0) + ' 个 TXT 的水印行更改为新水印');
+              refreshData();
+              afterSave();
+            } else alertDialog('保存失败：' + ((res && res.error) || '未知错误'));
+          }).catch(function (err) { hideBusy(); hideProbeMini(); alertDialog('保存失败：' + err.message); });
+        });
+      });
+    }).catch(function (err) { alertDialog('读取主流水印失败：' + err.message); });
   }
   function showMenu(x, y, items) {
     var old = document.getElementById('ctxMenu');
@@ -1120,7 +1193,9 @@
     }).catch(function () { if (token === _wmCheckToken) setWatermarkError(false); });
   }
   function changeWatermark() {
-      call('pick_watermark').then(function (p) {
+      // 选择框默认定位到上一个水印所在位置，便于就近选新水印
+      var prev = state.configData && state.configData.watermark ? String(state.configData.watermark) : '';
+      call('pick_watermark', prev).then(function (p) {
         if (!p) return;
         state.configData.watermark = p;
         // 更换后立刻用新水印重新判定：项目内移除警告，仍出界则保留
@@ -1163,36 +1238,48 @@
       });
     });
   }
-  function saveConfig() {
-    if (!state.configData) return;
+  function saveConfig(noConfirm) {
+    if (!state.configData) return Promise.resolve(false);
     var ed = getEditorState();
     var path = state.configData.path;
-    resolveDestProject().then(function (dest) {
+    return resolveDestProject().then(function (dest) {
       if (dest !== state.activeProject) {
         // 另存到其他项目：原文件保留
-        saveAsToProject(dest, ed).then(function (r) {
-          if (r.ok) { setStatus('已另存到项目「' + dest + '」：' + r.path); refreshData(); }
-          else setStatus('保存失败：' + ((r && r.error) || '未知错误'));
-        }).catch(function (e) { setStatus('保存失败：' + e.message); });
-        return;
+        return saveAsToProject(dest, ed).then(function (r) {
+          if (r.ok) { setStatus('已另存到项目「' + dest + '」：' + r.path); refreshData(); return true; }
+          setStatus('保存失败：' + ((r && r.error) || '未知错误')); return false;
+        }).catch(function (e) { setStatus('保存失败：' + e.message); return false; });
       }
-      showDialog({ title: '确认覆盖', message: '将覆盖原文件：\n' + path + '\n是否继续？', buttons: [ { label: '取消', value: false }, { label: '确认覆盖', value: true, danger: true, primary: true } ] }).then(function (ok) {
-        if (!ok) { setStatus('已取消保存'); return; }
-        call('save_config', path, ed.folders, ed.excludes, ed.watermark).then(function (r) {
-          if (r && r.ok) { setStatus('已保存：' + path); refreshData(); document.querySelectorAll('.config-exclude-row[data-deleted="1"]').forEach(function (rr) { rr.remove(); }); document.querySelectorAll('.config-path-row[data-deleted="1"]').forEach(function (rr) { rr.remove(); }); state._configOrigSnapshot = configSnapshot(); refreshConfigModified(); } else setStatus('保存失败：' + ((r && r.error) || '未知错误'));
-        }).catch(function (e) { setStatus('保存失败：' + e.message); });
+      var go = function () {
+        return call('save_config', path, ed.folders, ed.excludes, ed.watermark).then(function (r) {
+          if (r && r.ok) {
+            setStatus('已保存：' + path); refreshData();
+            document.querySelectorAll('.config-exclude-row[data-deleted="1"]').forEach(function (rr) { rr.remove(); });
+            document.querySelectorAll('.config-path-row[data-deleted="1"]').forEach(function (rr) { rr.remove(); });
+            state._configOrigSnapshot = configSnapshot(); refreshConfigModified();
+            return true;
+          }
+          setStatus('保存失败：' + ((r && r.error) || '未知错误')); return false;
+        }).catch(function (e) { setStatus('保存失败：' + e.message); return false; });
+      };
+      // noConfirm（切换/关闭前确认弹窗场景）：已确认过，跳过「确认覆盖」二次弹窗
+      if (noConfirm) return go();
+      return showDialog({ title: '确认覆盖', message: '将覆盖原文件：\n' + path + '\n是否继续？', buttons: [ { label: '取消', value: false }, { label: '确认覆盖', value: true, danger: true, primary: true } ] }).then(function (ok) {
+        if (!ok) { setStatus('已取消保存'); return false; }
+        return go();
       });
-    });
+    }).catch(function (e) { setStatus('保存失败：' + e.message); return false; });
   }
   function saveConfigToday() {
-    if (!state.activeProject || !state.activeTxt) return;
+    if (!state.activeProject || !state.activeTxt) return Promise.resolve(false);
     var ed = getEditorState();
     var configName = $('inputConfigName').value.trim() || state.activeTxt;
-    resolveDestProject().then(function (dest) {
-      call('save_config_today', dest, state.activeTxt, configName, ed.folders, ed.excludes, ed.watermark).then(function (r) {
-        if (r && r.ok) { setStatus('已保存为当日配置：' + r.path); jumpToVersionPath(r.path, dest); } else setStatus('保存失败：' + ((r && r.error) || '未知错误'));
-      }).catch(function (e) { setStatus('保存失败：' + e.message); });
-    });
+    return resolveDestProject().then(function (dest) {
+      return call('save_config_today', dest, state.activeTxt, configName, ed.folders, ed.excludes, ed.watermark).then(function (r) {
+        if (r && r.ok) { setStatus('已保存为当日配置：' + r.path); jumpToVersionPath(r.path, dest); return true; }
+        setStatus('保存失败：' + ((r && r.error) || '未知错误')); return false;
+      }).catch(function (e) { setStatus('保存失败：' + e.message); return false; });
+    }).catch(function (e) { setStatus('保存失败：' + e.message); return false; });
   }
   function normalizePath(p) { return String(p || '').replace(/[\\/]+/g, '\\').toLowerCase(); }
   function jumpToVersionPath(targetPath, proj) {
@@ -1346,7 +1433,7 @@
       }
       var entryItem = e.target.closest('.log-entry');
       if (entryItem) {
-        // 成片级右键：打开成片 / 打开文件夹；成片文件不存在时置灰禁用并悬浮提示
+        // 成片级右键：打开成片 / 打开文件夹；优先定位复刻输出目录（右侧复刻产物），无复刻目录退回原日志目录
         e.preventDefault();
         var videoNm = entryItem.getAttribute('data-video') || '';
         var lpItem = entryItem.getAttribute('data-log-path');
@@ -1356,18 +1443,24 @@
         if (!/\.mp4$/i.test(fname)) fname += '.mp4';
         var dirItem = String(lpItem).replace(/[\\/]+/g, '\\').replace(/\\[^\\]*$/, '');
         var clipFile = dirItem + '\\' + fname;
-        var smenu = function (missingFile) {
+        var smenu = function (missingFile, rep) {
+          var openFile = (rep && rep.replicaFile) || clipFile;
+          var openDir = (rep && rep.replicaDir) || dirItem;
           var items2 = [
-            { label: '打开成片', disableIfMissing: true, action: function () { call('open_path', clipFile); } },
-            { label: '打开文件夹', disableIfMissing: true, action: function () { call('open_parent', clipFile); } }
+            { label: '打开成片', disableIfMissing: true, action: function () { call('open_path', openFile); } },
+            { label: '打开文件夹', disableIfMissing: true, action: function () { call('open_path', openDir); } }
           ];
           if (missingFile) items2.forEach(function (it) { if (it.disableIfMissing) it.disabled = true; it.title = '成片文件不存在'; });
           showMenu(e.clientX, e.clientY, items2);
         };
-        call('check_exists', [clipFile]).then(function (map) {
-          map = map || {};
-          smenu(map[clipFile] === false);
-        }).catch(function () { smenu(false); });
+        call('find_replica_output', lpItem, videoNm).then(function (rep) {
+          rep = rep || {};
+          var openFile = rep.replicaFile || clipFile;
+          call('check_exists', [openFile]).then(function (map) {
+            map = map || {};
+            smenu(map[openFile] === false, rep);
+          }).catch(function () { smenu(false, rep); });
+        }).catch(function () { smenu(false, null); });
       }
     };
     container.onclick = function (e) {
@@ -1423,6 +1516,81 @@
       if (typeof d.__esc === 'function') document.removeEventListener('keydown', d.__esc);
       d.remove();
     }
+  }
+  // ── 项目列表配置搜索下拉框（与日志搜索同款交互：弹出匹配项，点击直达配置） ──
+  function closeProjDropdown() {
+    var d = $('projDropdown');
+    if (d) {
+      if (typeof d.__outside === 'function') document.removeEventListener('mousedown', d.__outside);
+      if (typeof d.__esc === 'function') document.removeEventListener('keydown', d.__esc);
+      d.remove();
+    }
+  }
+  function renderProjDropdown(items, q) {
+    closeProjDropdown();
+    var input = $('searchInput');
+    if (!input) return;
+    var rect = input.getBoundingClientRect();
+    var d = document.createElement('div');
+    d.id = 'projDropdown'; d.className = 'search-dropdown';
+    if (!items || items.length === 0) {
+      d.innerHTML = '<div class="search-dropdown__empty">未找到包含「' + escapeHtml(q) + '」的配置</div>';
+    } else {
+      var html = '';
+      items.slice(0, 200).forEach(function (r) {
+        html += '<div class="search-dropdown__item" data-project="' + escapeHtml(r.project) + '" data-name="' + escapeHtml(r.name) + '">';
+        html += '<div class="search-dropdown__title">' + escapeHtml(r.name) + '</div>';
+        html += '<div class="search-dropdown__meta">' + escapeHtml(r.project) + (r.latest ? ' / ' + escapeHtml(r.latest) : '') + '</div>';
+        html += '</div>';
+      });
+      d.innerHTML = html;
+    }
+    document.body.appendChild(d);
+    d.style.left = rect.left + 'px';
+    d.style.top = (rect.bottom + 4) + 'px';
+    d.style.width = Math.max(260, Math.min(rect.width, 420)) + 'px';
+    d.querySelectorAll('.search-dropdown__item').forEach(function (it) {
+      it.addEventListener('click', function () {
+        var proj = it.getAttribute('data-project');
+        var name = it.getAttribute('data-name');
+        closeProjDropdown();
+        // 清空搜索并展开/选中目标配置
+        state.searchQuery = '';
+        var inp = $('searchInput'); if (inp) inp.value = '';
+        selectTxt(proj, name);
+      });
+    });
+    setTimeout(function () {
+      var outside = function (e) { if (!d.contains(e.target)) closeProjDropdown(); };
+      var esc = function (e) { if (e.key === 'Escape') closeProjDropdown(); };
+      d.__outside = outside; d.__esc = esc;
+      document.addEventListener('mousedown', outside);
+      document.addEventListener('keydown', esc);
+    }, 0);
+  }
+  function onProjectSearchInput() {
+    var input = $('searchInput');
+    var q = input ? input.value.trim() : '';
+    if (!q) {
+      closeProjDropdown();
+      state.searchQuery = ''; buildSidebar();
+      return;
+    }
+    state.searchQuery = q;
+    buildSidebar();
+    // 本地遍历项目树收集匹配配置（复刻虚拟项目除外），点击下拉项直达配置
+    var items = [];
+    var k = q.toLowerCase();
+    sortedProjects().forEach(function (proj) {
+      if (proj.name === REPLICA_PROJECT) return;
+      (proj.txts || []).forEach(function (txt) {
+        var hits = String(txt.name || '').toLowerCase().indexOf(k) >= 0;
+        if (!hits) return;
+        if (items.length >= 200) return;
+        items.push({ project: proj.name, name: txt.name, latest: txt.latest || '' });
+      });
+    });
+    renderProjDropdown(items, q);
   }
   function renderLogDropdown(items, q) {
     closeLogDropdown();
@@ -1706,16 +1874,25 @@
         if (num) num.classList.add('log-target'); // 原始模式：仅高亮行号列
       }
     }
-    var lineHeight = 18;
-    var targetTop = 8 + (n - 1) * lineHeight;
-    content.scrollTop = Math.max(0, targetTop - Math.floor(content.clientHeight * 0.2));
+    // 高亮块提至首行：按 DOM 实际位置滚动到预览顶部（行高估算会因简化模式成片块的
+    // 内边距/间距随前置块数量累计漂移，导致高亮块逐渐下移）
+    var lineEl = content.querySelector('.right-panel__code-line[data-row="' + n + '"]');
+    if (lineEl) {
+      var rEl = lineEl.getBoundingClientRect();
+      var rC = content.getBoundingClientRect();
+      content.scrollTop = Math.max(0, rEl.top - rC.top + content.scrollTop - 8);
+    } else {
+      var lineHeight = 18;
+      var targetTop = 8 + (n - 1) * lineHeight;
+      content.scrollTop = Math.max(0, targetTop - 8);
+    }
   }
   function setStatus(msg) { var el = $('statusLeft'); if (!el) return; el.classList.remove('status-bar__success'); el.textContent = msg; }
   function setStatusDone(msg) { var el = $('statusLeft'); if (!el) return; el.classList.add('status-bar__success'); el.textContent = msg; }
 
   // 载入遮罩：工作路径扫描时提示用户
-  function showBusy(text) { var o = $('busyOverlay'); if (!o) return; var p = $('busyProgress'); if (p) p.style.display = 'none'; var mb = $('busyMinBtn'); if (mb) mb.style.display = 'none'; $('busyText').textContent = text || '正在检测…'; o.style.display = 'flex'; }
-  function hideBusy() { var o = $('busyOverlay'); if (o) o.style.display = 'none'; var mb = $('busyMinBtn'); if (mb) mb.style.display = 'none'; }
+  function showBusy(text) { var o = $('busyOverlay'); if (!o) return; var p = $('busyProgress'); if (p) p.style.display = 'none'; var mb = $('busyMinBtn'); if (mb) mb.style.display = 'none'; var cb = $('busyCancelBtn'); if (cb) cb.style.display = 'none'; $('busyText').textContent = text || '正在检测…'; o.style.display = 'flex'; }
+  function hideBusy() { var o = $('busyOverlay'); if (o) o.style.display = 'none'; var mb = $('busyMinBtn'); if (mb) mb.style.display = 'none'; var cb = $('busyCancelBtn'); if (cb) cb.style.display = 'none'; }
   // 设置窗口开/关时的主窗口模糊遮罩
   function showSettingsDim() { var o = $('settingsDim'); if (o) { hideBusy(); o.style.display = 'block'; } }
   function hideSettingsDim() { var o = $('settingsDim'); if (o) o.style.display = 'none'; }
@@ -1728,6 +1905,7 @@
     if (fill) fill.style.width = '0%';
     if (pt) pt.textContent = '正在收集视频…';
     var mb = $('busyMinBtn'); if (mb) mb.style.display = '';
+    var cb = $('busyCancelBtn'); if (cb) cb.style.display = '';
     o.style.display = 'flex';
   }
   // 预检测后台化：遮罩「缩到后台」后，进度转入状态栏右侧 probe-mini（排版配色参考更新条）
@@ -1760,6 +1938,19 @@
     hideBusy();
     showProbeMini();
     setStatus('预检测已转入后台，请在右下角查看进度');
+  }
+  // 取消预检测：二次确认后终止当前探测（已检测结果保留，物理缓存按原子替换策略处理）
+  function cancelProbeFlow() {
+    if (!state._probeActive) { setStatus('当前没有进行中的预检测'); return; }
+    showDialog({
+      title: '取消预检测',
+      message: '确定要取消当前预检测吗？已检测到的结果会保留，未完成的部分不会写入缓存。',
+      buttons: [ { label: '继续检测', value: false, primary: true }, { label: '取消预检测', value: true, danger: true } ]
+    }).then(function (ok) {
+      if (!ok) return;
+      setStatus('正在取消预检测…');
+      call('cancel_precheck');
+    });
   }
   function onResetProgress(s) {
     if (!s) return;
@@ -1797,7 +1988,7 @@
     showDialog({
       title: '重置预检测',
       message: '将重置预检测物理缓存，并对所有配置指向的路径重新预检测（重复文件自动跳过）。视频数量较多时可能耗时较长，是否继续？',
-      buttons: [ { label: '取消', value: null, primary: true }, { label: '确认重置', value: 1, danger: true } ]
+      buttons: [ { label: '取消', value: null }, { label: '确认重置', value: 1, danger: true } ]
     }).then(function (v) {
       if (!v) { setStatus('已取消重置预检测'); return; }
       showBusyProgress('正在重置预检测缓存并全量检测，请耐心等待…');
@@ -1845,6 +2036,8 @@
   // 刷新配置列表：先扫描历史遗留的重复外部 * 配置（与成片正本内容一致的副本），
   // 确认后物理删除再刷新列表；无重复则直接刷新
   function refreshConfigsFlow() {
+    // 刷新会重拉列表并重载当前配置：未保存修改先弹窗确认
+    checkConfigModifiedBeforeLeave(function () {
     showBusy('正在扫描重复配置…');
     call('clean_duplicate_star', false).then(function (r) {
       hideBusy();
@@ -1857,7 +2050,7 @@
       showDialog({
         title: '发现重复配置',
         message: '发现 ' + pending.length + ' 个与成片文件夹正本内容完全一致的外部 * 配置（历史遗留副本）。删除它们不影响正本与其他日期分支，是否删除？',
-        buttons: [ { label: '取消', value: null, primary: true }, { label: '删除并刷新', value: 1, danger: true } ]
+        buttons: [ { label: '取消', value: null }, { label: '删除并刷新', value: 1, danger: true } ]
       }).then(function (v) {
         if (!v) { setStatus('已取消清理，仅刷新列表'); refreshData(true, '正在重新扫描工作路径…', function () { setStatusDone('重新检测完成'); }, true); return; }
         showBusy('正在清理重复配置…');
@@ -1868,14 +2061,14 @@
         }).catch(function (e) { hideBusy(); setStatus('清理失败：' + e.message); refreshData(true); });
       });
     }).catch(function (e) { hideBusy(); setStatus('扫描失败：' + e.message); refreshData(true); });
+    });
   }
 
   // ── 皮肤切换 ──
-  // 皮肤列表按下拉名拼音升序：白蓝 < 黑橙 < 灰橙
+  // 皮肤列表按下拉名拼音升序：白蓝 < 黑橙
   var SKINS = [
     { id: 'white_blue', label: '白蓝', bg: '#F5F5F5', theme: '#4B3FE3' },
     { id: 'Black_Orange', label: '黑橙', bg: '#111113', theme: '#FF6600' },
-    { id: 'Gray_Orange', label: '灰橙', bg: '#333336', theme: '#FF6600' },
     { id: 'Maid_Atelier', label: '深海女仆', bg: '#0e1d49', theme: '#c5a468' }
   ];
   function applySkin(id, persist) {
@@ -1928,60 +2121,65 @@
         var foundProj = state.projects.find(function (p) { return p.name === state.activeProject; });
         var foundTxt = foundProj && foundProj.txts.find(function (t) { return t.name === state.activeTxt; });
         if (!foundTxt) { state.activeProject = null; state.activeTxt = null; state.versions = []; state.activeVersion = null; state.configData = null; buildDateBranches(); buildCenterBottom(); buildRightPanel(); setStatus('就绪'); }
-        else selectTxt(state.activeProject, state.activeTxt, true);
+        else selectTxt(state.activeProject, state.activeTxt, true, true);
       }
       if (busyText) hideBusy();
       if (dismissScan) { try { dismissScan(); } catch (e) {} dismissScan = null; }
       if (done) done();
     }).catch(function (e) { setStatus('数据加载失败：' + e.message); if (busyText) hideBusy(); if (dismissScan) { try { dismissScan(); } catch (e) {} dismissScan = null; } });
   }
-  function selectTxt(project, name, keepVersion) {
-    state.activeLogDate = null;
-    // 本次是否为"已选中后再次切换"（决定重建配置页时是否静止，参考徽章 --static）
-    var switchingTxt = !!state.activeTxt;
-    // 复刻虚拟项目：仅含日志无配置，点击直接进入日志视图
-    if (project === REPLICA_PROJECT) {
+  function selectTxt(project, name, keepVersion, silent) {
+    function doSelect() {
+      state.activeLogDate = null;
+      // 本次是否为"已选中后再次切换"（决定重建配置页时是否静止，参考徽章 --static）
+      var switchingTxt = !!state.activeTxt;
+      // 复刻虚拟项目：仅含日志无配置，点击直接进入日志视图
+      if (project === REPLICA_PROJECT) {
+        state.activeProject = project; state.activeTxt = name;
+        state.versions = [{ label: '全部日志', path: REPLICA_MARK + name, is_latest: true }];
+        state.activeVersion = state.versions[0];
+        state.activeLogDate = null; state.activeLogPath = null; state.logFiles = [];
+        state.configData = null; state.logContent = null;
+        state.mode = 'log';
+        var ml = $('modeLog'), mf = $('modeFilelist');
+        if (ml) ml.classList.add('mode-toggle--active');
+        if (mf) mf.classList.remove('mode-toggle--active');
+        state.expandedProject = project;
+        buildSidebar(false, true);
+        // 点击配置＝用户交互：重建动画中则动画结束再判定，无动画直接判定
+        var azB2 = $('azIndexBar');
+        if (azB2 && azB2.classList.contains('az-bar--enter')) _azPending = true;
+        else syncAzHighlight();
+        buildDateBranches(); buildCenterBottom(); buildRightPanel();
+        setStatus('日志模式：' + name);
+        return;
+      }
+      var prevLabel = keepVersion && state.activeVersion ? state.activeVersion.label : null;
+      // 点击左侧配置名：即使当前在日志模式也切回配置模式，并跳转该配置最新日期分支
+      state.selectMode = false; state.selectedLogPaths = {};
+      state.mode = 'filelist';
+      var mlT = $('modeLog'), mfT = $('modeFilelist');
+      if (mfT) mfT.classList.add('mode-toggle--active');
+      if (mlT) mlT.classList.remove('mode-toggle--active');
       state.activeProject = project; state.activeTxt = name;
-      state.versions = [{ label: '全部日志', path: REPLICA_MARK + name, is_latest: true }];
-      state.activeVersion = state.versions[0];
-      state.activeLogDate = null; state.activeLogPath = null; state.logFiles = [];
-      state.configData = null; state.logContent = null;
-      state.mode = 'log';
-      var ml = $('modeLog'), mf = $('modeFilelist');
-      if (ml) ml.classList.add('mode-toggle--active');
-      if (mf) mf.classList.remove('mode-toggle--active');
-      state.expandedProject = project;
-      buildSidebar(false, true);
-      // 点击配置＝用户交互：重建动画中则动画结束再判定，无动画直接判定
-      var azB2 = $('azIndexBar');
-      if (azB2 && azB2.classList.contains('az-bar--enter')) _azPending = true;
-      else syncAzHighlight();
-      buildDateBranches(); buildCenterBottom(); buildRightPanel();
-      setStatus('日志模式：' + name);
-      return;
+      call('list_versions', project, name).then(function (versions) {
+        state.versions = versions || []; state.activeVersion = null;
+        if (state.versions.length > 0) { var target = prevLabel ? state.versions.find(function (v) { return v.label === prevLabel; }) : null; state.activeVersion = target || state.versions[0]; }
+        if (pruneEmptyTxt(project, name, state.versions)) return;
+        syncTxtCount(project, name, state.versions);
+        buildSidebar(false, true);
+        // 点击配置＝用户交互：重建动画中则动画结束再判定，无动画直接判定
+        var azB3 = $('azIndexBar');
+        if (azB3 && azB3.classList.contains('az-bar--enter')) _azPending = true;
+        else syncAzHighlight();
+        buildDateBranches(switchingTxt);
+        if (state.activeVersion) loadConfig(state.activeVersion.path, switchingTxt);
+        else { state.configData = null; buildCenterBottom(); buildRightPanel(); setStatus('该配置无可用版本'); }
+      }).catch(function (e) { setStatus('加载版本失败：' + e.message); });
     }
-    var prevLabel = keepVersion && state.activeVersion ? state.activeVersion.label : null;
-    // 点击左侧配置名：即使当前在日志模式也切回配置模式，并跳转该配置最新日期分支
-    state.selectMode = false; state.selectedLogPaths = {};
-    state.mode = 'filelist';
-    var mlT = $('modeLog'), mfT = $('modeFilelist');
-    if (mfT) mfT.classList.add('mode-toggle--active');
-    if (mlT) mlT.classList.remove('mode-toggle--active');
-    state.activeProject = project; state.activeTxt = name;
-    call('list_versions', project, name).then(function (versions) {
-      state.versions = versions || []; state.activeVersion = null;
-      if (state.versions.length > 0) { var target = prevLabel ? state.versions.find(function (v) { return v.label === prevLabel; }) : null; state.activeVersion = target || state.versions[0]; }
-      if (pruneEmptyTxt(project, name, state.versions)) return;
-      syncTxtCount(project, name, state.versions);
-      buildSidebar(false, true);
-      // 点击配置＝用户交互：重建动画中则动画结束再判定，无动画直接判定
-      var azB3 = $('azIndexBar');
-      if (azB3 && azB3.classList.contains('az-bar--enter')) _azPending = true;
-      else syncAzHighlight();
-      buildDateBranches(switchingTxt);
-      if (state.activeVersion) loadConfig(state.activeVersion.path, switchingTxt);
-      else { state.configData = null; buildCenterBottom(); buildRightPanel(); setStatus('该配置无可用版本'); }
-    }).catch(function (e) { setStatus('加载版本失败：' + e.message); });
+    // 用户主动切换配置：配置未保存时先弹窗确认（覆盖当前配置 / 保存为当日配置 / 取消）
+    if (silent) { doSelect(); return; }
+    checkConfigModifiedBeforeLeave(doSelect);
   }
   // 用最新版本列表同步侧栏该配置徽章：计数 + 最新日期（日期分支实时刷新时徽章跟随）
   function syncTxtCount(project, name, versions) {
@@ -2008,7 +2206,94 @@
     }
     return true;
   }
-  function selectVersion(label) { var v = state.versions.find(function (x) { return x.label === label; }); if (!v) return; var switching = !!state.activeVersion; state.activeVersion = v; buildDateBranches(switching); loadConfig(v.path, true); }
+  // ── 配置未保存离开（切换配置、切换项目、复位视图）检查：脏配置弹窗提示 ──
+  // 回调在确认动作后执行；右上角 ✕ / 遮罩关闭视为取消（中止原动作、返回编辑页面）；
+  // 三个按钮行为与配置栏同名按钮一致，「不保存」直接丢弃修改继续原动作。
+  function checkConfigModifiedBeforeLeave(afterConfirm, onCancel) {
+    // 日志模式为只读浏览：退出日志（折叠项目/品牌名片/复位视图）不弹未保存拦截，
+    // 配置编辑状态仍保留在内存，切回配置模式后未保存标记照常显示、可继续保存
+    if (state.mode === 'log') { afterConfirm(); return; }
+    if (!state.configModified || !state.configData) { afterConfirm(); return; }
+    showDialog({
+      title: '配置已修改未保存',
+      message: '当前配置已发生修改，丢失修改将无法恢复。',
+      buttons: [
+        { label: '覆盖当前配置', value: 'overwrite', cls: 'modal-btn--cfg-save' },
+        { label: '保存为当日配置', value: 'today', cls: 'modal-btn--cfg-save-today' },
+        { label: '不保存', value: 'discard', cls: 'modal-btn--cfg-discard' }
+      ],
+      // 宽弹窗保证按钮文字不换行
+      cssClass: 'modal-card--wide'
+    }).then(function (choice) {
+      // ✕ / 遮罩关闭 = 取消：中止原动作，返回编辑页面
+      if (choice == null) { if (onCancel) onCancel(); return; }
+      // 不保存：丢弃修改，继续原动作
+      if (choice === 'discard') { afterConfirm(); return; }
+      // 复用配置栏同名按钮逻辑：覆盖当前配置（已确认，跳过覆盖确认二次弹窗）/ 保存为当日配置
+      var go = choice === 'overwrite' ? function () { return saveConfig(true); } : (choice === 'today' ? saveConfigToday : null);
+      if (!go) { afterConfirm(); return; }
+      go().then(function (ok) {
+        if (ok) afterConfirm();
+        else if (onCancel) onCancel();
+      });
+    });
+  }
+  // 主进程关闭/退出前询问"配置是否有未保存修改"：无修改立即放行；有修改弹三按钮，处理后再回传
+  function handleDiscardConfigRequest() {
+    var respond = function (action) { var ap = getApi(); if (ap && ap.respond_discard_config) ap.respond_discard_config(action); };
+    if (!state.configModified || !state.configData) { respond('ok'); return; }
+    checkConfigModifiedBeforeLeave(function () { respond('ok'); }, function () { respond('cancel'); });
+  }
+  // ── 配置自愈统一入口：静默重取当前选中配置，保持日期分支/徽章/侧栏与磁盘一致 ──
+  // 触发源：① 主进程广播 versions_changed（软件内保存/清理配置，后端已清缓存，重取即最新）
+  //         ② 定时轮询（外部删除/任务迁移等改盘动作，靠 listVersions 目录指纹自动失效重扫）
+  // 归一比较无变化时不重渲染，避免打断编辑与日志跟随；有变化才同步视图。
+  function refreshActiveVersions() {
+    if (!getApi()) return;
+    if (!state.activeProject || !state.activeTxt || state.activeProject === REPLICA_PROJECT) return; // 复刻为虚拟项目，不走配置自愈
+    call('list_projects', false).then(function (projects) {
+      state.projects = projects || [];
+      var foundProj = state.projects.find(function (p) { return p.name === state.activeProject; });
+      var foundTxt = foundProj && foundProj.txts.find(function (t) { return t.name === state.activeTxt; });
+      if (!foundTxt) { // 当前配置已被整体删除/迁移：即时复位视图，无需等手动刷新
+        state.activeProject = null; state.activeTxt = null;
+        resetCenterToLaunch();
+        return;
+      }
+      var keepLabel = state.activeVersion ? state.activeVersion.label : null;
+      call('list_versions', state.activeProject, state.activeTxt).then(function (versions) {
+        var vs = versions || [];
+        var cur = state.versions || [];
+        var same = vs.length === cur.length && vs.every(function (v, i) {
+          var c = cur[i];
+          return c && v.label === c.label && v.path === c.path && !!v.hasLog === !!c.hasLog;
+        });
+        if (same) return;
+        state.versions = vs; state.activeVersion = null;
+        if (vs.length > 0) {
+          var target = keepLabel ? vs.find(function (v) { return v.label === keepLabel; }) : null;
+          state.activeVersion = target || vs[0];
+        }
+        if (pruneEmptyTxt(state.activeProject, state.activeTxt, vs)) return;
+        syncTxtCount(state.activeProject, state.activeTxt, vs);
+        buildSidebar(false, true);
+        buildDateBranches();
+        if (state.activeVersion) {
+          // 当前选中版本路径变化（迁移/另存/已被删则回退最新）才重载配置；路径未变保持编辑状态不打断
+          if (!state.configData || state.configData.path !== state.activeVersion.path) loadConfig(state.activeVersion.path, true);
+        } else { state.configData = null; buildCenterBottom(); buildRightPanel(); setStatus('该配置无可用版本'); }
+      }).catch(function () {});
+    }).catch(function () {});
+  }
+  function selectVersion(label) {
+    var v = state.versions.find(function (x) { return x.label === label; });
+    if (!v) return;
+    var switching = !!state.activeVersion;
+    // 切换日期分支会重载配置：未保存修改先弹窗确认
+    checkConfigModifiedBeforeLeave(function () {
+      state.activeVersion = v; buildDateBranches(switching); loadConfig(v.path, true);
+    });
+  }
   function loadConfig(path, silent) {
     state.logContent = null;
     call('read_config', path).then(function (data) {
@@ -2041,9 +2326,20 @@
     // 预检测后台化：遮罩「缩到后台」与状态栏取消按钮
     var busyMin = $('busyMinBtn'), probeCancel = $('probeMiniCancel');
     if (busyMin) busyMin.addEventListener('click', enterProbeBackground);
+    var busyCancel = $('busyCancelBtn');
+    if (busyCancel) busyCancel.addEventListener('click', cancelProbeFlow);
     if (probeCancel) probeCancel.addEventListener('click', function () { setStatus('正在取消后台预检测…'); call('cancel_precheck'); });
-    document.addEventListener('vl:reset-center', function () { collapsePreviewPanel(); resetCenterToLaunch(); });
+    document.addEventListener('vl:reset-center', function () { collapsePreviewPanel(); checkConfigModifiedBeforeLeave(resetCenterToLaunch); });
     $('sidebarTree').addEventListener('scroll', syncAzHighlight);
+    // 右键项目名：主流水印设置（复刻虚拟项目无配置水印，不提供）
+    $('sidebarTree').addEventListener('contextmenu', function (e) {
+      var ph = e.target.closest('.tree-project__name');
+      if (!ph) return;
+      var pname = ph.getAttribute('data-project');
+      if (!pname || pname === REPLICA_PROJECT) return;
+      e.preventDefault();
+      showMenu(e.clientX, e.clientY, [{ label: '主流水印设置', action: function () { openProjectWatermarkDialog(pname); } }]);
+    });
     $('sidebarTree').addEventListener('click', function (e) {
       var projectHeader = e.target.closest('.tree-project__name');
       if (projectHeader) {
@@ -2062,23 +2358,25 @@
           }
           if (azBar) azBar.classList.remove('is-show');
           state.expandedProject = null;
-          // 收回项目名时若已选中配置：中间配置栏复位到刚启动样式
-          if (state.activeTxt) resetCenterToLaunch();
           var itemWrap = $('sidebarTree').querySelector('.tree-project__items');
           if (itemWrap) itemWrap.classList.add('tree-project__items--leaving');
-          window.setTimeout(function () {
-            buildSidebar();
-            var headers = $('sidebarTree').querySelectorAll('.tree-project__name');
-            var start = -1;
-            for (var h = 0; h < headers.length; h++) {
-              if (headers[h].getAttribute('data-project') === pname) { start = h; break; }
-            }
-            // 仅原展开项目下方的项目渐显（向上衔接收起位移），其余项目保持原样
-            for (var g = start + 1; g < headers.length; g++) {
-              headers[g].classList.add('az-project-enter');
-              headers[g].style.animationDelay = String(Math.min((g - start - 1) * 40, 180)) + 'ms';
-            }
-          }, 200);
+          // 收回项目名时若已选中配置：中间配置栏复位到刚启动样式（未保存修改先弹窗确认）
+          checkConfigModifiedBeforeLeave(function () {
+            if (state.activeTxt) resetCenterToLaunch();
+            window.setTimeout(function () {
+              buildSidebar();
+              var headers = $('sidebarTree').querySelectorAll('.tree-project__name');
+              var start = -1;
+              for (var h = 0; h < headers.length; h++) {
+                if (headers[h].getAttribute('data-project') === pname) { start = h; break; }
+              }
+              // 仅原展开项目下方的项目渐显（向上衔接收起位移），其余项目保持原样
+              for (var g = start + 1; g < headers.length; g++) {
+                headers[g].classList.add('az-project-enter');
+                headers[g].style.animationDelay = String(Math.min((g - start - 1) * 40, 180)) + 'ms';
+              }
+            }, 200);
+          });
           return;
         }
         // 展开/切换：若有原展开项目，先播原项目收回（去底色）+ 配置区渐隐，随即重建展开新项目
@@ -2158,7 +2456,7 @@
       state.selectMode = false; state.selectedLogPaths = {}; state.mode = 'filelist'; $('modeFilelist').classList.add('mode-toggle--active'); $('modeLog').classList.remove('mode-toggle--active'); buildDateBranches(); buildCenterBottom(); buildRightPanel();
     });
     $('modeLog').addEventListener('click', function () { state.mode = 'log'; state._fromConfig = true; $('modeLog').classList.add('mode-toggle--active'); $('modeFilelist').classList.remove('mode-toggle--active'); buildDateBranches(); buildCenterBottom(); buildRightPanel(); });
-    $('searchInput').addEventListener('input', function () { state.searchQuery = this.value.trim(); buildSidebar(); });
+    $('searchInput').addEventListener('input', onProjectSearchInput);
     $('logSearchInput').addEventListener('input', function () { state.logSearchQuery = this.value.trim(); if (state.mode === 'log') buildCenterBottom(); onLogSearchInput(); });
     // ── 左下角菜单按钮：刷新配置列表 / 选择路径 / 重置预检测缓存 / 设置 ──
     var menuBtn = $('sidebarMenuBtn');
@@ -2309,6 +2607,42 @@
     });
   }
   function flashNeedSelect() { setStatus('请先选择一个 TXT 和日期分支'); }
+  // 关闭主窗口行为引导：弹窗选择 退出软件 / 最小化至系统托盘，左下角「不再提醒」复选框持久化
+  var _closeAskShown = false;
+  function showCloseBehaviorDialog(api0) {
+    if (_closeAskShown) return;
+    _closeAskShown = true;
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    var card = document.createElement('div');
+    card.className = 'modal-card modal-card--close';
+    card.innerHTML = '<button type="button" class="modal-close" title="关闭">✕</button>' +
+      '<div class="modal__title">关闭主窗口</div>' +
+      '<div class="modal__message">请选择关闭主窗口后的行为：</div>' +
+      '<div class="modal__close-foot">' +
+      '<label class="modal__close-remind"><input type="checkbox" id="closeRemindChk"><span>不再询问</span></label>' +
+      '<div class="modal__actions">' +
+      '<button type="button" class="modal-btn" id="cbCloseTray">最小化至系统托盘</button>' +
+      '<button type="button" class="modal-btn modal-btn--danger" id="cbCloseExit">退出软件</button>' +
+      '</div>' +
+      '</div>';
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    var done = function (value) {
+      var chk = document.getElementById('closeRemindChk');
+      var remind = !!(chk && chk.checked);
+      overlay.remove();
+      _closeAskShown = false;
+      if (api0 && api0.choose_close_behavior) api0.choose_close_behavior(value, remind).catch(function () {});
+    };
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) done('tray'); });
+    card.querySelector('.modal-close').addEventListener('click', function () { done('tray'); });
+    card.querySelector('#cbCloseTray').addEventListener('click', function () { done('tray'); });
+    card.querySelector('#cbCloseExit').addEventListener('click', function () { done('exit'); });
+  }
+  function bindCloseBehavior() {
+    if (getApi().on_close_behavior_request) getApi().on_close_behavior_request(function () { showCloseBehaviorDialog(getApi()); });
+  }
   function updateTasksCount(tasks) {
     // 主窗口按钮数字：统计运行中 + 排队（暂停任务无序号、不计入）
     var n = 0;
@@ -2567,7 +2901,13 @@
     if (!getApi()) { $('statusLeft').textContent = '后端不可用（未检测到桥接 API）'; return; }
     checkEnv(); buildDateBranches(); buildCenterBottom(); buildRightPanel(); refreshData(false, '正在检测工作路径文件，请稍候…');
     initBootGuide();
+    bindCloseBehavior();
     if (getApi().on_task_update) getApi().on_task_update(updateTasksCount);
+    // 配置自愈：软件内写配置（保存/清理）广播 → 即时静默刷新；外部删改/任务迁移 → 低频轮询兜底
+    if (getApi().on_versions_changed) getApi().on_versions_changed(function () { refreshActiveVersions(); });
+    setInterval(function () { refreshActiveVersions(); }, 4000);
+    // 关闭/退出主窗口前：配置有未保存修改时弹三按钮确认（覆盖当前配置/保存为当日配置/取消）
+    if (getApi().on_confirm_discard_config) getApi().on_confirm_discard_config(handleDiscardConfigRequest);
     // 有运行中任务退出时：主进程请求二次确认（与界面同款弹窗），确认后才真正退出
     if (getApi().on_confirm_quit_request) getApi().on_confirm_quit_request(function () {
       showDialog({

@@ -6,7 +6,6 @@
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="skins/white_blue.css">
   <link rel="stylesheet" href="skins/Black_Orange.css">
-  <link rel="stylesheet" href="skins/Gray_Orange.css">
   <link rel="stylesheet" href="skins/Maid_Atelier.css">
   <link rel="stylesheet" href="settings.css">
 </head>
@@ -55,14 +54,6 @@
       </div>
 
       <div class="form-group">
-        <label class="form-group__label">水印目录<small>水印 PNG 所在默认目录</small></label>
-        <div class="dir-row">
-          <input class="form-input" id="cfgWatermark" type="text" placeholder="">
-          <button class="btn btn-ghost" data-dir="cfgWatermark">选择目录</button>
-        </div>
-      </div>
-
-      <div class="form-group">
         <label class="form-group__label">开机自启动</label>
         <div class="opt-row">
           <label class="opt-check">
@@ -74,7 +65,28 @@
       </div>
 
       <div class="form-group">
-        <label class="form-group__label">配置和数据保存位置<small>保存后立即生效，配置与 Cache 缓存将一并迁移</small></label>
+        <label class="form-group__label">关闭主窗口</label>
+        <div class="opt-row">
+          <label class="opt-radio">
+            <input type="radio" name="closeBehavior" value="exit">
+            <span class="opt-radio__dot"></span>
+            <span class="opt-radio__label">退出软件</span>
+          </label>
+        </div>
+        <div class="opt-row">
+          <label class="opt-radio">
+            <input type="radio" name="closeBehavior" value="tray">
+            <span class="opt-radio__dot"></span>
+            <span class="opt-radio__label">最小化至系统托盘</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <div class="form-group__head">
+          <label class="form-group__label">配置和数据保存位置<small>保存后立即生效，配置与 Cache 缓存将一并迁移</small></label>
+          <button type="button" class="cfg-open-btn" id="btnOpenCfgDir">打开文件夹</button>
+        </div>
         <div class="opt-row">
           <label class="opt-radio">
             <input type="radio" name="configStorage" value="program">
@@ -130,7 +142,7 @@
       </div>
 
       <div class="form-group">
-        <label class="form-group__label">提取前缀<small>从 TXT 名提取的前缀；拼接片段文件路径（含文件夹）含此串时同样带上，可留空</small></label>
+        <label class="form-group__label">提取前缀<small>从 TXT 配置名或素材路径（含文件名）提取的前缀，可留空</small></label>
         <input class="form-input" id="batchTxtPrefix" type="text" placeholder="">
       </div>
 

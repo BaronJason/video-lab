@@ -24,7 +24,6 @@ const REPLICA_MARK = 'REPLICA:'; // 复刻项目虚拟版本的 path 前缀，�
 // 默认配置
 const DEFAULT_CONFIG = {
   scripts_dir: '',
-  watermark_dir: '',
   skin: 'white_blue',
   auto_check_update: true,    // 启动时自动检查更新
   update_source: 'gitee',     // 更新源：gitee=码云 release / github=GitHub release，默认码云
@@ -62,6 +61,24 @@ function readText(filePath, fallback = 'utf-8') {
 function contentHash(filePath) {
   try { return crypto.createHash('md5').update(fs.readFileSync(filePath)).digest('hex'); }
   catch (e) { return null; }
+}
+
+// 原子写：先写 <p>.tmp 再 rename 覆盖；写入/替换失败时清理临时文件，原文件保持有效可复用。
+// 用于任务状态/配置/索引等"坏一次就丢功能"的关键落盘，避免崩溃写坏半截文件。
+function atomicWrite(p, content) {
+  try {
+    fs.writeFileSync(p + '.tmp', content, 'utf-8');
+    fs.renameSync(p + '.tmp', p);
+    return true;
+  } catch (e) {
+    try { if (p && fs.existsSync(p + '.tmp')) fs.unlinkSync(p + '.tmp'); } catch (e2) {}
+    return false;
+  }
+}
+
+// 清理残留的未完成临时缓存（上次中断遗留），原文件不受影响；加载关键缓存前调用
+function cleanupTmp(p) {
+  try { const tmp = p + '.tmp'; if (tmp && fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (e) {}
 }
 
 function stripQuotes(s) {
@@ -229,11 +246,13 @@ class Api {
     this._logCacheRoot = '';
     // 水印主流水印固化缓存：按 root 隔离加载，换工作目录时重置（_wmCacheLoadedRoot !== root 视为未加载）
     this._wmCache = null;
+    this._wmEnabled = null; // 项目是否启用主流水印判定（root+'\u0000'+项目 -> true/false）
     this._wmCacheLoadedRoot = null;
     // 任务管理：实时捕获 ps1 输出并推送，支持多任务与停止排队任务
     this.tasks = new Map();
     this.taskSeq = 0;
     this.onTasksChanged = null; // 由 main 进程注入，用于向渲染进程推送任务快照
+    this.onVersionsChanged = null; // 由 main 进程注入：配置文件写操作后广播，供前端即时自愈
     // 排队调度：同一时刻仅运行一个任务，其余按创建顺序排队（软件安排制作顺序，替代脚本抢互斥锁）
     this._taskQueue = [];
     this._runningTaskId = null;
@@ -247,12 +266,6 @@ class Api {
     if (this.scriptsDirFixed) return this.scriptsDirFixed;
     let d = this.config.scripts_dir;
     if (!d || !fs.existsSync(d)) d = DEFAULT_CONFIG.scripts_dir;
-    return d;
-  }
-
-  get watermarkDir() {
-    let d = this.config.watermark_dir;
-    if (!d || !fs.existsSync(d)) d = DEFAULT_CONFIG.watermark_dir;
     return d;
   }
 
@@ -292,6 +305,12 @@ class Api {
     this._versionsFp.clear();
     this._logCache = null;
     this._logCacheRoot = '';
+  }
+
+  // 配置文件写操作统一收口：清缓存 + 广播，前端据此即时自愈版本/日期分支/侧栏徽章
+  _markConfigModified() {
+    this._invalidateCaches();
+    if (typeof this.onVersionsChanged === 'function') { try { this.onVersionsChanged(); } catch (e) {} }
   }
 
   // ── 扫描指纹缓存：文件 (mtime,size) 未变则复用已算的 hash，变了才重读 ──
@@ -641,7 +660,7 @@ class Api {
         }
       }
     }
-    if (commit && deleted.length) this._invalidateCaches();
+    if (commit && deleted.length) this._markConfigModified();
     return { ok: true, pending, deleted };
   }
 
@@ -684,7 +703,7 @@ class Api {
     filePath = path.resolve(filePath);
     const text = this._rewriteText(folders, excludes, watermark);
     fs.writeFileSync(filePath, text, 'utf-8');
-    this._invalidateCaches();
+    this._markConfigModified();
     return { ok: true, path: filePath };
   }
 
@@ -699,7 +718,7 @@ class Api {
     if (!finalName.toLowerCase().endsWith('.txt')) finalName += '.txt';
     const filePath = path.join(targetDir, finalName);
     fs.writeFileSync(filePath, this._rewriteText(folders, excludes, watermark), 'utf-8');
-    this._invalidateCaches();
+    this._markConfigModified();
     return { ok: true, path: filePath };
   }
 
@@ -708,6 +727,8 @@ class Api {
     let cache = {};
     const p = this.videoCachePath || '';
     try {
+      // 清理上次中断遗留的未完成临时缓存（原子替换失败/取消时残留），原缓存文件不受影响
+      if (p) { const tmp = p + '.tmp'; if (fs.existsSync(tmp)) { try { fs.unlinkSync(tmp); } catch (e) {} } }
       if (p && fs.existsSync(p)) {
         const data = JSON.parse(fs.readFileSync(p, 'utf-8'));
         if (data && typeof data === 'object' && !Array.isArray(data)) cache = data;
@@ -824,12 +845,18 @@ class Api {
     return result;
   }
 
+  // 预检测缓存落盘：先写临时文件再原子替换（rename），完成才覆盖原缓存；
+  // 写入/替换失败时清理临时文件，原缓存文件保持有效可复用
   _saveVideoCache() {
     try {
       const p = this.videoCachePath || '';
       if (!p) return;
-      fs.writeFileSync(p, JSON.stringify(this._videoCache), 'utf-8');
-    } catch (e) {}
+      const tmp = p + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(this._videoCache), 'utf-8');
+      fs.renameSync(tmp, p); // 同盘原子替换；目标被占用等异常时原文件仍在
+    } catch (e) {
+      try { const p = (this.videoCachePath || '') + '.tmp'; if (p && fs.existsSync(p)) fs.unlinkSync(p); } catch (e2) {}
+    }
   }
 
   _isExcludedPath(target, excludes) {
@@ -842,20 +869,94 @@ class Api {
     return false;
   }
 
+  // 批量解析 .lnk 快捷方式目标（与视频批量脚本语义一致）：返回 { lnkPath: targetPath }；
+  // 解析失败/失效返回空对象降级，不影响预检测其余流程。
+  // 实现：临时 .ps1 + pwsh -File；JSON 经 base64 进出（argv/控制台代码页会破坏中文，base64 全 ASCII 免疫）
+  _resolveShortcutTargets(paths) {
+    if (!paths || !paths.length) return {};
+    const { spawnSync } = require('child_process');
+    const scriptLines = [
+      '$ErrorActionPreference = "SilentlyContinue"',
+      '$json = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($args[0]))',
+      '$l = ConvertFrom-Json -InputObject $json',
+      '$o = @{}',
+      'foreach ($p in $l) {',
+      '  try {',
+      '    if (Test-Path -LiteralPath $p -PathType Leaf) {',
+      '      $sh = New-Object -ComObject WScript.Shell',
+      '      $sc = $sh.CreateShortcut($p)',
+      '      if ($sc.TargetPath) { $o[$p] = $sc.TargetPath.Trim() }',
+      '    }',
+      '  } catch {}',
+      '}',
+      '$out = $o | ConvertTo-Json -Compress',
+      '[Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($out))',
+    ].join('\n');
+    const inputB64 = Buffer.from(JSON.stringify(paths), 'utf8').toString('base64');
+    const tmp = require('path').join(process.env.TEMP || '.', 'lnk_resolve_' + process.pid + '_' + Date.now() + '.ps1');
+    try {
+      fs.writeFileSync(tmp, scriptLines, 'utf8');
+      try {
+        const r = spawnSync('pwsh.exe', ['-NoProfile', '-NonInteractive', '-File', tmp, inputB64],
+          { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+        if (r.error || r.status !== 0 || !r.stdout) return {};
+        const json = Buffer.from(String(r.stdout).trim(), 'base64').toString('utf8');
+        const map = JSON.parse(json);
+        return map && typeof map === 'object' ? map : {};
+      } finally {
+        try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (e2) {}
+      }
+    } catch (e) {
+      try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (e2) {}
+      return {};
+    }
+  }
+
   async _precheckFolder(dir, excludes, nonround) {
-    // 第一遍：仅同步收集候选视频，按"根目录 + 各子目录"分组，暂不探测
+    // 第一遍：仅同步收集候选视频，按"根目录 + 各子目录(+快捷方式目标)"分组，暂不探测
     const groups = [];
     try {
       const items = fs.readdirSync(dir, { withFileTypes: true });
       const rootVideos = [];
       const subDirs = [];
+      const lnks = [];
       for (const ent of items) {
         const full = path.join(dir, ent.name);
         if (ent.isDirectory()) subDirs.push(full);
+        else if (ent.isFile() && path.extname(ent.name).toLowerCase() === '.lnk') lnks.push(full);
         else if (ent.isFile() && VIDEO_EXTS.has(path.extname(ent.name).toLowerCase())) rootVideos.push(full);
       }
       const rootCands = [];
       for (const v of rootVideos) if (!this._isExcludedPath(v, excludes)) rootCands.push(v);
+
+      // 快捷方式（与批量脚本一致）：解析目标，目录→独立组递归收集；视频文件→并入根组；失效/非视频→跳过
+      let rootCandsExtra = null;
+      const lnkGroups = [];
+      if (lnks.length) {
+        const map = this._resolveShortcutTargets(lnks);
+        if (map) {
+          const extra = [];
+          for (const l of lnks) {
+            const t = map[l];
+            if (!t) continue;
+            let st;
+            try { st = fs.statSync(t); } catch (e) { continue; }
+            if (st.isDirectory()) {
+              const cands = [];
+              for (const f of walkFiles(t)) {
+                if (!VIDEO_EXTS.has(path.extname(f).toLowerCase())) continue;
+                if (this._isExcludedPath(f, excludes)) continue;
+                cands.push(f);
+              }
+              lnkGroups.push(cands);
+            } else if (st.isFile() && VIDEO_EXTS.has(path.extname(t).toLowerCase())) {
+              if (!this._isExcludedPath(t, excludes)) extra.push(t);
+            }
+          }
+          if (extra.length) rootCandsExtra = extra;
+        }
+      }
+      if (rootCandsExtra) rootCands.push.apply(rootCands, rootCandsExtra);
       groups.push(rootCands);
       for (const sub of subDirs) {
         const cands = [];
@@ -866,6 +967,7 @@ class Api {
         }
         groups.push(cands);
       }
+      for (const g of lnkGroups) groups.push(g);
     } catch (e) { return { total: 0, groupCount: 0 }; }
 
     // 去重后并发探测（未命中缓存的才跑 ffprobe，限流）
@@ -928,27 +1030,6 @@ class Api {
     return results;
   }
 
-  // 自动配置水印目录：扫描所有配置，取第一个「存在有效素材路径且带可用水印」的配置的水印所在目录
-  detectWatermarkFromConfigs() {
-    const all = this._collectAllTxt();
-    for (const t of all) {
-      let cfg;
-      try { cfg = this.readConfig(t.full); } catch (e) { continue; }
-      const folders = Array.isArray(cfg.folders) ? cfg.folders : [];
-      let hasFolder = false;
-      for (const f of folders) {
-        const p = stripQuotes(String((f && typeof f === 'object') ? f.path : f || '').trim());
-        if (!p) continue;
-        try { if (fs.existsSync(p)) { hasFolder = true; break; } } catch (e) {}
-      }
-      if (!hasFolder) continue;
-      const wm = String((cfg && cfg.watermark) || '').trim();
-      if (!wm) continue;
-      try { if (fs.existsSync(wm)) return path.dirname(wm); } catch (e) {}
-    }
-    return '';
-  }
-
   // 重置预检测：清除物理缓存，收集所有配置指向的路径并全量探测（跨路径去重），可实时回报进度
   // 收集所有配置指向的视频候选：跨配置路径去重、目录递归收集、跳过非视频扩展名
   _gatherAllVideos() {
@@ -970,6 +1051,23 @@ class Api {
       const cands = [];
       if (st.isDirectory()) {
         for (const f of walkFiles(p)) if (VIDEO_EXTS.has(path.extname(f).toLowerCase())) cands.push(f);
+        // 与单路径预检测一致：跟随根目录下 .lnk 快捷方式（目录→收集目标下视频；视频文件→直接计入）
+        let items;
+        try { items = fs.readdirSync(p, { withFileTypes: true }); } catch (e) { items = []; }
+        const lnks = [];
+        for (const ent of items) if (ent.isFile() && path.extname(ent.name).toLowerCase() === '.lnk') lnks.push(path.join(p, ent.name));
+        if (lnks.length) {
+          const map = this._resolveShortcutTargets(lnks);
+          if (map) for (const l of lnks) {
+            const t = map[l];
+            if (!t) continue;
+            let ts;
+            try { ts = fs.statSync(t); } catch (e) { continue; }
+            if (ts.isDirectory()) {
+              for (const f of walkFiles(t)) if (VIDEO_EXTS.has(path.extname(f).toLowerCase())) cands.push(f);
+            } else if (ts.isFile() && VIDEO_EXTS.has(path.extname(t).toLowerCase())) cands.push(t);
+          }
+        }
       } else if (st.isFile() && VIDEO_EXTS.has(path.extname(p).toLowerCase())) cands.push(p);
       for (const f of cands) if (!seen.has(f)) { seen.add(f); allVideos.push(f); }
     }
@@ -977,12 +1075,10 @@ class Api {
   }
 
   async resetPrecheck(onProgress) {
-    try {
-      const cf = this.videoCachePath || '';
-      if (cf && fs.existsSync(cf)) fs.unlinkSync(cf);
-    } catch (e) {}
     this._videoCache = {};
     this._videoInfoCache = new Map();
+    // 不在开始时删除物理缓存：探测全部完成后才经 _saveVideoCache 原子替换覆盖原缓存；
+    // 若中途取消/异常，原缓存文件保持有效可复用，未完成的探测结果不落盘。
 
     // 收集所有配置指向的素材路径（跨路径去重）
     const allVideos = this._gatherAllVideos();
@@ -1003,8 +1099,11 @@ class Api {
       report({ done: probed, total });
     }, this.probeConcurrency, () => token !== this._precheckToken);
 
-    this._saveVideoCache();
     const cancelled = token !== this._precheckToken;
+    if (cancelled) { // 取消/中断：丢弃本次内存探测结果，下次从原缓存文件重新加载（不覆盖原文件）
+      this._videoCache = null;
+      this._videoInfoCache = new Map();
+    } else this._saveVideoCache(); // 全部完成才原子覆盖原缓存；取消/中断时保留原文件
     report({ done: probed, total, finished: true, cancelled });
     return { ok: true, total, valid, invalid: total - probed, cancelled };
   }
@@ -1037,8 +1136,11 @@ class Api {
       report({ done: base + probed, total });
     }, this.probeConcurrency, () => token !== this._precheckToken);
 
-    this._saveVideoCache();
     const cancelled = token !== this._precheckToken;
+    if (cancelled) { // 取消/中断：丢弃本次内存增量，下次从原缓存文件重新加载（不覆盖原文件）
+      this._videoCache = null;
+      this._videoInfoCache = new Map();
+    } else this._saveVideoCache(); // 已完成的增量结果才原子覆盖原缓存；取消/中断保留原文件
     report({ done: base + probed, total, finished: true, cancelled });
     return { ok: true, total, updated: probed, valid, cancelled };
   }
@@ -1127,6 +1229,7 @@ class Api {
     this._clipIndexRoot = this.root;
     this._clipIndex = new Map();
     if (!this.clipIndexCachePath) return;
+    cleanupTmp(this.clipIndexCachePath); // 清理上次中断遗留的未完成临时索引
     try {
       const data = JSON.parse(fs.readFileSync(this.clipIndexCachePath, 'utf-8'));
       if (data && data.root === this.root && data.dirs && typeof data.dirs === 'object') {
@@ -1142,10 +1245,8 @@ class Api {
     if (!this.clipIndexCachePath || !this._clipIndexDirty) return;
     const dirs = {};
     this._clipIndex.forEach((v, k) => { if (Array.isArray(v.entries)) dirs[k] = { mtime: v.mtime, entries: v.entries }; });
-    try {
-      fs.writeFileSync(this.clipIndexCachePath, JSON.stringify({ root: this.root, dirs }), 'utf-8');
-      this._clipIndexDirty = false;
-    } catch (e) {}
+    // 原子写：重建/渐进落盘只认完整结果，中断不写坏原索引
+    if (atomicWrite(this.clipIndexCachePath, JSON.stringify({ root: this.root, dirs }))) this._clipIndexDirty = false;
   }
 
   // 某配置目录的成片条目：目录 mtime 未变直接命中索引，否则重扫该目录并重建索引条目
@@ -1267,6 +1368,37 @@ class Api {
     return files;
   }
 
+  // 日志对应的复刻输出目录：取日志路径中首个日期段（月份/MMdd）之前为基址，
+  // 拼接 <月份>/<MMdd>/<模式目录>；返回复刻目录及命中的复刻产物（无匹配文件时仍给目录，供"打开文件夹"使用）
+  findReplicaOutput(logPath, videoName) {
+    const out = { originalDir: '', replicaDir: '', replicaFile: '' };
+    if (!logPath) return out;
+    const abs = path.resolve(String(logPath));
+    out.originalDir = path.dirname(abs);
+    const parts = abs.split(path.sep);
+    let idx = parts.findIndex((p) => /^\d+月$/.test(p));
+    if (idx < 0) idx = parts.findIndex((p) => /^\d{4}$/.test(p));
+    if (idx < 0) return out;
+    const base = parts.slice(0, idx).join(path.sep);
+    const month = parts[idx];
+    const day = parts[idx + 1] && /^\d{4}$/.test(parts[idx + 1]) ? parts[idx + 1] : '';
+    const root = day ? path.join(base, month, day) : path.join(base, month);
+    for (const mode of ['去重复刻', '原片复刻']) {
+      const dir = path.join(root, mode);
+      if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) continue;
+      out.replicaDir = dir;
+      try {
+        const baseName = String(videoName || '').replace(/\.mp4$/i, '').toLowerCase();
+        if (baseName) {
+          const hit = fs.readdirSync(dir).find((n) => /\.mp4$/i.test(n) && (n.toLowerCase().replace(/\.mp4$/i, '') === baseName || n.toLowerCase().replace(/\.mp4$/i, '').replace(/^\d{6}改-/, '') === baseName));
+          if (hit) out.replicaFile = path.join(dir, hit);
+        }
+      } catch (e) {}
+      break;
+    }
+    return out;
+  }
+
   logContent(fromPath, configName) {
     if (fromPath && String(fromPath).startsWith(REPLICA_MARK)) {
       return this._replicaLogContent(String(fromPath).slice(REPLICA_MARK.length));
@@ -1356,15 +1488,22 @@ class Api {
       failReason: '', log: [],
       createdAt: Date.now(), startedAt: null, endedAt: null, _stopRequested: false,
       planPos: 0,
-      outDir: srcPath ? this._taskOutDir(srcPath) : '',
+      outDir: this._taskOutDir(type, srcPath, env),
+      groupDate: this._taskGroupDate(type, env, Date.now()), // 业务归属日 MMDD：凌晨0-4点完成/提交归前一天（仅前端排序使用，不展示）
     };
     this.tasks.set(id, task);
     this._emitTasks();
     return task;
   }
 
-  // 任务成片文件夹：源 TXT 所在目录下以「成片」结尾的子目录，找不到则回退源目录
-  _taskOutDir(srcPath) {
+  // 任务成片文件夹：批量任务按提交时刻+配置名精确推算（与脚本实际输出目录一致）；
+  // 其余类型取源 TXT 所在目录下以「成片」结尾的子目录，找不到则回退源目录
+  _taskOutDir(type, srcPath, env) {
+    if (type === 'batch') {
+      const detail = this._batchTaskOutDetail({ env: env || {}, createdAt: Date.now() });
+      if (detail && detail.outDir) return detail.outDir;
+      return '';
+    }
     const d = path.dirname(path.resolve(srcPath));
     try {
       for (const e of fs.readdirSync(d)) {
@@ -1375,6 +1514,18 @@ class Api {
       }
     } catch (e2) {}
     return d;
+  }
+
+  // 业务归属日（MMDD）：按任务提交/创建时刻，凌晨 0-4 点归入前一天（跨日任务视同昨天产出）。
+  // 批量任务优先取提交时刻（BATCH_SUBMIT_TS），缺失（旧版本创建的任务）则用创建时刻兜底；
+  // 仅用于前端排序，不展示。
+  _taskGroupDate(type, env, createdAt) {
+    if (type !== 'batch') return '';
+    const ts = Number(env && env.BATCH_SUBMIT_TS) || Number(env && env.REPLICA_SUBMIT_TS) || Number(createdAt) || Date.now();
+    const d = new Date(ts);
+    if (d.getHours() < 4) d.setDate(d.getDate() - 1);
+    const p = (n) => (n < 10 ? '0' : '') + n;
+    return p(d.getMonth() + 1) + p(d.getDate());
   }
 
   // 排队执行：无运行任务则立即启动，否则进入队列（软件安排制作顺序）
@@ -1490,6 +1641,7 @@ class Api {
         status: t.status, lockState: t.lockState, paused: !!t.paused,
         progress: t.progress || { current: 0, total: 0 }, failReason: t.failReason || '',
         createdAt: t.createdAt, endedAt: t.endedAt, outDir: t.outDir || '',
+        groupDate: typeof t.groupDate === 'string' ? t.groupDate : '', // 业务归属日（前端排序用，不展示）
         // 任务总用时（秒）：首次开始至今的墙钟时间；已结束任务取结束时间
         elapsedSec: taskElapsed(t),
         // 计划序号：排队任务=队列第几位；暂停任务=冻结的显示顺位；显示与恢复插队都以此为准
@@ -1552,21 +1704,37 @@ class Api {
         createdAt: t.createdAt, startedAt: t.startedAt || null, endedAt: t.endedAt, planPos: t.planPos || 0,
         resumeIdx: typeof t.resumeIdx === 'number' ? t.resumeIdx : null,
         outDir: t.outDir || '', log: (t.log || []).slice(-500), _stopRequested: !!t._stopRequested,
+        groupDate: typeof t.groupDate === 'string' ? t.groupDate : '',
       })),
     };
-    try { fs.writeFileSync(this.taskStatePath, JSON.stringify(data), 'utf-8'); } catch (e) {}
+    // 原子写：任务列表高频落盘，写坏会导致整批任务记录丢失
+    atomicWrite(this.taskStatePath, JSON.stringify(data));
   }
   // 启动时恢复上次会话的任务列表（退出前已做 running→interrupted、queued→paused 转换）
   restoreTasks() {
     try {
       if (!this.taskStatePath || !fs.existsSync(this.taskStatePath)) return;
+      cleanupTmp(this.taskStatePath); // 清理上次中断遗留的未完成临时状态文件
       const data = JSON.parse(fs.readFileSync(this.taskStatePath, 'utf-8'));
       if (!data || !Array.isArray(data.tasks)) return;
       for (const t of data.tasks) {
         if (!t || typeof t.id !== 'string') continue;
         if (this.tasks.has(t.id)) continue;
         if (t.status !== 'paused' && t.status !== 'done' && t.status !== 'stopped' && t.status !== 'error' && t.status !== 'interrupted') continue;
-        this.tasks.set(t.id, Object.assign({}, t, { env: t.env || {}, pid: null, progress: t.progress || { current: 0, total: 0 }, log: Array.isArray(t.log) ? t.log : [] }));
+        const restored = Object.assign({}, t, { env: t.env || {}, pid: null, progress: t.progress || { current: 0, total: 0 }, log: Array.isArray(t.log) ? t.log : [] });
+        // 批量任务缺归属日时按提交/创建时刻补算（凌晨0-4点归前一天）
+        if (restored.type === 'batch' && typeof restored.groupDate !== 'string') restored.groupDate = this._taskGroupDate(restored.type, restored.env, restored.createdAt);
+        // 批量任务的成片文件夹：记录指向有效目录（含人工迁移/手工修正后）则保留；
+        // 失效时才按提交时刻推算 + 当天/前一天回退查找（旧记录 outDir 可能指向无关/已删除目录，
+        // 凌晨内容人工归入前一天的场景靠回退命中）
+        if (restored.type === 'batch') {
+          const live = restored.outDir && fs.existsSync(restored.outDir);
+          if (!live) {
+            const detail = this._batchTaskOutDetail(restored, true);
+            if (detail && detail.outDir) restored.outDir = detail.outDir;
+          }
+        }
+        this.tasks.set(restored.id, restored);
         const n = parseInt(String(t.id).replace(/\D/g, ''), 10);
         if (n > this.taskSeq) this.taskSeq = n;
       }
@@ -1597,12 +1765,13 @@ class Api {
     for (const t of this.tasks.values()) if (t.status === 'running') return true;
     return false;
   }
-  // 已结束任务单行删除（运行/排队/暂停中的任务不可删）
+  // 已结束任务单行删除（运行/排队/暂停中的任务不可删；连带删除任务标记文件）
   clearTask(id) {
     const t = this.tasks.get(id);
     if (!t) return { ok: false, error: '任务不存在' };
     if (t.status === 'running' || t.status === 'queued' || t.status === 'paused') return { ok: false, error: '进行中的任务不能删除' };
     this.tasks.delete(id);
+    this._removeMarker(t);
     this._emitTasks();
     return { ok: true };
   }
@@ -1666,20 +1835,205 @@ class Api {
     } catch (e) { return { ok: false, error: String(e) }; }
   }
 
+  // 重开失败/中断/停止的任务：完整复用原任务环境变量（含提交时刻，成片命名/日志/输出目录
+  // 与首次开始完全一致）重新制作；重开前删除该任务上次遗留的成片与日志产物。
+  rerunTask(id) {
+    const t = this.tasks.get(id);
+    if (!t) return { ok: false, error: '任务不存在' };
+    if (t.status !== 'error' && t.status !== 'interrupted' && t.status !== 'stopped') return { ok: false, error: '仅失败/中断/停止的任务可重新开始' };
+    // 优先使用任务标记：其中保存了完整 env 与逐个成片的产出清单（精确还原、不依赖日志窗口）
+    const marker = this._loadMarker(t);
+    const env = Object.assign({}, (marker && marker.env) || t.env || {});
+    const src = env.REPLICA_TXT ? String(env.REPLICA_TXT) : '';
+    if (!src) {
+      this._removeMarker(t);
+      return { ok: false, error: '原任务缺少 TXT 配置，无法重新开始' };
+    }
+    // 删除上次失败残留的成片与日志：有标记按标记精确清单，无标记回退日志解析+目录推算
+    if (marker) this._removeMarkerArtifacts(marker);
+    else this._removeTaskArtifacts(t);
+    this._removeMarker(t);
+    this.tasks.delete(id);
+    const task = this._createTask(t.type, t.title || this._taskTitle(src), t.script, env, src);
+    // 保留预填的进度结构（如批量任务的预计成片数/分组数），其余进度归零
+    task.progress = { current: 0, total: 0 };
+    if (t.progress && t.progress.groupCount > 0) task.progress.groupCount = t.progress.groupCount;
+    if (t.progress && t.progress.total > 0) task.progress.total = t.progress.total;
+    this._enqueueTask(task);
+    return { ok: true, taskId: task.id };
+  }
+
+  // ── 任务标记临时文件：存于任务成片文件夹（含完整 env 与逐成片产出清单）。
+  // 任务正常完成时删除；失败/中断/停止时保留，作为「该任务未完成」的标志且供重开精确还原。
+  _markerPath(task) {
+    const envTxt = task.env && task.env.REPLICA_TXT ? String(task.env.REPLICA_TXT) : '';
+    const base = task.outDir || (envTxt ? path.dirname(path.resolve(envTxt)) : '');
+    if (!base) return '';
+    return path.join(base, '.video-lab-mark-' + task.id + '.json');
+  }
+  _loadMarker(task) {
+    const p = this._markerPath(task);
+    if (!p || !fs.existsSync(p)) return null;
+    try { const d = JSON.parse(fs.readFileSync(p, 'utf-8')); return d && typeof d === 'object' ? d : null; } catch (e2) { return null; }
+  }
+  _saveMarker(task, data) {
+    const p = this._markerPath(task);
+    if (!p) return;
+    try { atomicWrite(p, JSON.stringify(data)); } catch (e2) {}
+  }
+  _removeMarker(task) {
+    const p = this._markerPath(task);
+    try { if (p && fs.existsSync(p)) fs.unlinkSync(p); } catch (e2) {}
+  }
+  // 任务真正开始执行时初始化标记（含 env 快照，重开可完整还原环境）
+  _touchMarker(task) {
+    this._saveMarker(task, {
+      taskId: task.id, type: task.type, title: task.title || '', script: task.script || '',
+      env: Object.assign({}, task.env || {}), createdAt: task.createdAt || Date.now(),
+      videos: [], batchOutDir: '',
+    });
+  }
+  // 追加产物记录：成片完成路径 / batch 专属输出目录（标记不存在时先创建）
+  _appendMarkerOut(task, key, value) {
+    if (!value) return;
+    let data = this._loadMarker(task);
+    if (!data) { this._touchMarker(task); data = this._loadMarker(task); }
+    if (!data) return;
+    if (key === 'videos') {
+      if (!Array.isArray(data.videos)) data.videos = [];
+      if (data.videos.indexOf(value) < 0) data.videos.push(value);
+    } else if (key === 'batchOutDir') {
+      data.batchOutDir = value;
+    }
+    this._saveMarker(task, data);
+  }
+
+  // 按任务标记精确删除失败任务遗留产物：
+  // 1) 标记中逐成片记录的输出文件（复刻/批量共用）；
+  // 2) batch 专属输出目录内的成片 mp4 与拼接日志（与重制结果同名冲突）；
+  //    源 TXT 正本若已被脚本移入输出目录且原位置不存在，先移回原处保证重开可读取。
+  _removeMarkerArtifacts(marker) {
+    const rm = (p) => {
+      try {
+        if (p && fs.existsSync(p)) {
+          const st = fs.statSync(p);
+          if (st.isFile()) fs.unlinkSync(p); else fs.rmSync(p, { recursive: true, force: true });
+        }
+      } catch (e2) {}
+    };
+    for (const v of (marker.videos || [])) rm(v);
+    if (marker.type === 'batch' && marker.batchOutDir) {
+      const src = (marker.env && marker.env.REPLICA_TXT) ? String(marker.env.REPLICA_TXT) : '';
+      if (src && !fs.existsSync(src)) {
+        const dest = path.join(marker.batchOutDir, path.basename(src));
+        try { if (fs.existsSync(dest) && fs.statSync(dest).isFile()) fs.renameSync(dest, src); } catch (e2) {}
+      }
+      try {
+        if (fs.existsSync(marker.batchOutDir) && fs.statSync(marker.batchOutDir).isDirectory()) {
+          for (const f of fs.readdirSync(marker.batchOutDir)) {
+            const fp = path.join(marker.batchOutDir, f);
+            if (fs.existsSync(fp) && fs.statSync(fp).isFile() && (path.extname(f).toLowerCase() === '.mp4' || /拼接日志/.test(f))) rm(fp);
+          }
+        }
+      } catch (e2) {}
+    }
+  }
+
+  // 删除失败任务在磁盘上遗留的产物（无任务标记时的回退方案）：
+  // 1) 任务日志中「✅ 成片完成：」明确列出的成片文件；
+  _removeTaskArtifacts(task) {
+    const rm = (p) => {
+      try {
+        if (p && fs.existsSync(p)) {
+          const st = fs.statSync(p);
+          if (st.isFile()) fs.unlinkSync(p); else fs.rmSync(p, { recursive: true, force: true });
+        }
+      } catch (e2) {}
+    };
+    // 1) 日志中列出的成片
+    for (const line of (task.log || [])) {
+      const m = /✅ 成片完成：(.+)$/.exec(line);
+      if (m) rm(String(m[1]).trim());
+    }
+    // 2) batch 专属输出目录（以提交时刻+配置名精确推算，日志行被滚动挤出时仍可命中）
+    if (task.type === 'batch') {
+      const detail = this._batchTaskOutDetail(task);
+      if (detail && detail.outDir) {
+        const src = (task.env && task.env.REPLICA_TXT) ? String(task.env.REPLICA_TXT) : '';
+        if (src && !fs.existsSync(src)) {
+          const dest = path.join(detail.outDir, path.basename(src));
+          try { if (fs.existsSync(dest) && fs.statSync(dest).isFile()) fs.renameSync(dest, src); } catch (e2) {}
+        }
+        try {
+          if (fs.existsSync(detail.outDir) && fs.statSync(detail.outDir).isDirectory()) {
+            for (const f of fs.readdirSync(detail.outDir)) {
+              const fp = path.join(detail.outDir, f);
+              if (fs.existsSync(fp) && fs.statSync(fp).isFile() && (path.extname(f).toLowerCase() === '.mp4' || /拼接日志/.test(f))) rm(fp);
+            }
+          }
+        } catch (e2) {}
+      }
+    }
+  }
+
+  // batch 专属输出目录推算：目录名规则 MMdd-HH时mm分-配置名-成片（与 video_batch.ps1 一致）
+  _batchTaskOutDetail(task, allowFallback) {
+    const src = (task.env && task.env.REPLICA_TXT) ? String(task.env.REPLICA_TXT) : '';
+    if (!src) return null;
+    const submit = Number(task.env && task.env.BATCH_SUBMIT_TS) || Number(task.env && task.env.REPLICA_SUBMIT_TS) || task.createdAt || Date.now();
+    const d = new Date(submit);
+    const p = (n) => (n < 10 ? '0' : '') + n;
+    const mmdd = p(d.getMonth() + 1) + p(d.getDate());
+    const hhmm = p(d.getHours()) + '时' + p(d.getMinutes()) + '分';
+    // 基目录：与脚本一致，从路径最外层起取首个「N月」/「4位数字」段之前的路径
+    const abs = path.resolve(src);
+    const parts = path.dirname(abs).split(path.sep).filter((s) => s && s !== '.');
+    let baseIdx = -1;
+    for (let i = 0; i < parts.length; i++) {
+      if (/^\d+月$/.test(parts[i]) || /^\d{4}$/.test(parts[i])) { baseIdx = i; break; }
+    }
+    const baseDir = baseIdx >= 0 ? (parts.slice(0, baseIdx).join(path.sep) || path.parse(abs).root) : path.dirname(abs);
+    const outputRoot = path.join(baseDir, (d.getMonth() + 1) + '月', mmdd);
+    const txtName = path.basename(abs).replace(/\.txt$/i, '');
+    const planned = path.join(outputRoot, mmdd + '-' + hhmm + '-' + txtName + '-成片');
+    if (fs.existsSync(planned)) return { outDir: planned };
+    // 规划目录不存在：可能是"凌晨内容归入前一天"被人工迁移（如 0831 凌晨任务移至 0830）。
+    // 回退查找当天与前一天「8月」目录下实际存在的同名成片目录（HH时mm分-配置名-成片）
+    if (allowFallback) {
+      const yday = new Date(d); yday.setDate(d.getDate() - 1);
+      const ymdd = p(yday.getMonth() + 1) + p(yday.getDate());
+      const monthDir = path.join(baseDir, (d.getMonth() + 1) + '月');
+      const key = hhmm + '-' + txtName + '-成片';
+      for (const day of [mmdd, ymdd]) {
+        const dd = path.join(monthDir, day);
+        try {
+          if (!fs.existsSync(dd) || !fs.statSync(dd).isDirectory()) continue;
+          for (const e of fs.readdirSync(dd)) {
+            if (!String(e).endsWith('成片') || !e.startsWith(day + '-')) continue;
+            if (!e.includes(key)) continue;
+            const f = path.join(dd, e);
+            if (fs.existsSync(f) && fs.statSync(f).isDirectory()) return { outDir: f };
+          }
+        } catch (e2) {}
+      }
+    }
+    return { outDir: planned };
+  }
+
   clearFinishedTasks(statuses) {
     // 仅清理指定的已结束状态任务（缺省：完成/停止/失败）；运行中、排队中、暂停中的任务保留
     const allow = new Set(Array.isArray(statuses) && statuses.length ? statuses : ['done', 'stopped', 'error']);
     for (const [id, t] of this.tasks) {
-      if (allow.has(t.status)) this.tasks.delete(id);
+      if (allow.has(t.status)) { this.tasks.delete(id); this._removeMarker(t); }
     }
     this._emitTasks();
     return { ok: true };
   }
 
-  // 清除已完成/已停止任务：支持按日期分组与三种作用域（仅列表 / 列表+mp4 / 全部清除）。
-  // 先删任务列表；文件删除均移动至系统回收站。
+  // 清除已完成/已停止任务：支持按日期分组 / 指定任务列表 / 三种作用域（仅列表 / 列表+mp4 / 全部清除）。
+  // 先删任务列表（连带删除任务标记文件）；文件删除均移动至系统回收站。
   async clearDoneTasks(opts) {
-    const { day, scope, statuses } = opts || {};
+    const { day, scope, statuses, ids } = opts || {};
     const allow = new Set(Array.isArray(statuses) && statuses.length ? statuses : ['done']);
     const dayOf = (ts) => {
       if (!ts) return '';
@@ -1687,9 +2041,11 @@ class Api {
       const p = (n) => (n < 10 ? '0' : '') + n;
       return String(d.getFullYear()).slice(2) + '.' + p(d.getMonth() + 1) + '.' + p(d.getDate());
     };
-    const targets = [...this.tasks.values()].filter((t) => allow.has(t.status) && (!day || dayOf(t.endedAt) === day));
-    // 先清任务列表
-    for (const t of targets) this.tasks.delete(t.id);
+    // 指定任务列表时精确按 id 清除（单任务条），否则按状态+日期筛选
+    const inIds = Array.isArray(ids) && ids.length ? new Set(ids) : null;
+    const targets = [...this.tasks.values()].filter((t) => (inIds ? inIds.has(t.id) : (allow.has(t.status) && (!day || dayOf(t.endedAt) === day))));
+    // 先清任务列表（连带任务标记）
+    for (const t of targets) { this.tasks.delete(t.id); this._removeMarker(t); }
     const errors = [];
     if (scope && scope !== 'list') {
       const { shell } = require('electron');
@@ -1733,6 +2089,94 @@ class Api {
     }
     this._emitTasks();
     return { ok: true, removed: targets.length, errors };
+  }
+
+  // 已完成批量任务重分组：修复分组数错误 / 忘记分组。规则与 video_batch.ps1 完全一致——
+  // 按日志记录顺序（即生成顺序）1..N 均匀分成 n 组（前 remainder 组各多 1 个），组后缀依次大写字母 A/B/C…；
+  // 已有旧分组后缀（末尾单个大写字母）会先剥除再补新后缀；同时把拼接日志中每个成片名行同步改为新名。
+  regroupTask(id, groupCount) {
+    const t = this.tasks.get(id);
+    if (!t) return { ok: false, error: '任务不存在' };
+    if (t.status !== 'done') return { ok: false, error: '仅已完成的任务可重分组' };
+    if (t.type !== 'batch') return { ok: false, error: '仅批量拼接任务支持重分组' };
+    const n = parseInt(String(groupCount), 10);
+    if (!(n > 0)) return { ok: false, error: '分组数必须是大于 0 的正整数' };
+    // 输出目录：优先任务日志中记录的「创建输出目录」（脚本实际输出目录），回退任务 outDir
+    let outDir = '';
+    for (const ln of (t.log || [])) {
+      const m = /✅ 创建输出目录：(.+)$/.exec(ln);
+      if (m) { outDir = String(m[1]).trim(); break; }
+    }
+    if (!outDir || !fs.existsSync(outDir)) outDir = t.outDir || '';
+    try {
+      if (!outDir || !fs.existsSync(outDir) || !fs.statSync(outDir).isDirectory()) return { ok: false, error: '找不到成片输出目录' };
+    } catch (e) { return { ok: false, error: '找不到成片输出目录' }; }
+    // 本批次专属的拼接日志（文件名含时间戳+配置名），同目录可能同时存在其他批次日志
+    let logPath = '';
+    try {
+      for (const f of fs.readdirSync(outDir)) {
+        if (/拼接日志\.txt$/i.test(f) && fs.statSync(path.join(outDir, f)).isFile()) { logPath = path.join(outDir, f); break; }
+      }
+    } catch (e) {}
+    if (!logPath) return { ok: false, error: '输出目录中未找到拼接日志文件' };
+    // 按生成顺序解析成片名（批量日志每块首行 = 成片文件名，与 _parseLog 同规则）
+    let entries = [];
+    try { entries = this._parseLog(logPath).map((en) => String(en.video || '').trim()).filter(Boolean); }
+    catch (e) { return { ok: false, error: '拼接日志解析失败' }; }
+    const total = entries.length;
+    if (!total) return { ok: false, error: '日志中没有成片记录' };
+    // 分组后缀计算：与脚本一致
+    const groupSize = Math.floor(total / n);
+    const remainder = total % n;
+    const letterFor = (idx) => {
+      if (n <= 1) return '';
+      let start = 1;
+      for (let g = 0; g < n; g++) {
+        const size = groupSize + (g < remainder ? 1 : 0);
+        if (idx >= start && idx < start + size) return String.fromCharCode(65 + g);
+        start += size;
+      }
+      return '';
+    };
+    const renamed = [];   // [旧名, 新名]
+    const errors = [];
+    for (let i = 0; i < total; i++) {
+      const oldName = entries[i];
+      const src = path.join(outDir, oldName);
+      try {
+        if (!fs.existsSync(src)) { errors.push('缺失文件：' + oldName); continue; }
+        const ext = path.extname(oldName);
+        let base = path.basename(oldName, ext);
+        base = base.replace(/[A-Z]$/, ''); // 剥除旧分组后缀
+        const newName = base + letterFor(i + 1) + ext;
+        if (newName === oldName) continue;
+        const dst = path.join(outDir, newName);
+        if (fs.existsSync(dst)) { errors.push('目标重名已跳过：' + newName); continue; }
+        fs.renameSync(src, dst);
+        renamed.push([oldName, newName]);
+      } catch (e) { errors.push('重命名失败：' + oldName + '（' + e.message + '）'); }
+    }
+    // 同步改写拼接日志中的成片名行（严格匹配旧名，避免误伤片段/水印行）
+    if (renamed.length) {
+      const map = new Map(renamed);
+      try {
+        const text = fs.readFileSync(logPath, 'utf-8');
+        const eol = text.includes('\r\n') ? '\r\n' : '\n';
+        const lines = text.split(/\r?\n/);
+        let ch = false;
+        for (let i = 0; i < lines.length; i++) {
+          const s = lines[i].trim();
+          if (map.has(s)) { lines[i] = map.get(s); ch = true; }
+        }
+        if (ch) fs.writeFileSync(logPath, lines.join(eol), 'utf-8');
+      } catch (e) { errors.push('日志同步失败：' + e.message); }
+      // 成片索引缓存失效：重命名后搜索/日志定位需重建
+      this._clipIndex = new Map();
+      this._clipIndexDirty = false;
+      this._clipIndexRoot = '';
+    }
+    if (renamed.length) this._markConfigModified();
+    return { ok: true, total, regrouped: renamed.length, errors };
   }
 
   // 更新日志（CHANGELOG.md 位于应用目录内，随 app.asar 打包）
@@ -1813,6 +2257,8 @@ class Api {
       });
       if (task) {
         task.pid = child.pid;
+        // 任务真正开始：创建任务标记（含 env 快照，供失败重开精确还原）
+        this._touchMarker(task);
         const decodeLine = (buf) => {
           try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); }
           catch (e) { try { return new TextDecoder('gbk').decode(buf); } catch (e2) { return buf.toString('latin1'); } }
@@ -1874,6 +2320,11 @@ class Api {
           if (/等待获取互斥锁/.test(s)) task.lockState = 'waiting';
           else if (/已获取互斥锁/.test(s)) task.lockState = 'locked';
           else if (/互斥锁已释放|任务全部完成|脚本完成/.test(s)) { task.lockState = 'released'; task.progress.liveLine = null; }
+          // 产物记录进任务标记：成片完成路径 / batch 专属输出目录（重开时据此精确删除）
+          const outpM = s.match(/✅ 成片完成：(.+)$/);
+          if (outpM) this._appendMarkerOut(task, 'videos', String(outpM[1]).trim());
+          const outdM = s.match(/✅ 创建输出目录：(.+)$/);
+          if (outdM) this._appendMarkerOut(task, 'batchOutDir', String(outdM[1]).trim());
           this._emitTasks();
         };
         const attach = (stream, ref) => stream.on('data', (chunk) => {
@@ -1891,6 +2342,8 @@ class Api {
           task.status = task._stopRequested ? 'stopped' : (code === 0 ? 'done' : 'error');
           task.paused = false;
           if (task.status === 'error') task.failReason = this._deriveFailReason(task);
+          // 任务完整完成：删除任务标记；失败/中断/停止保留（供重开精确还原）
+          if (task.status === 'done') this._removeMarker(task);
           this._emitTasks();
           // 运行任务结束：清空运行位并启动执行队列中的下一个任务（暂停/继续不影响插入后的推进）
           this._runningTaskId = null;
@@ -1939,14 +2392,12 @@ class Api {
   updateSettings(s) {
     const cfg = s || {};
     if (typeof cfg.root === 'string' && cfg.root && cfg.root !== this.root) this.setRoot(cfg.root);
-    for (const k of ['watermark_dir']) if (typeof cfg[k] === 'string') this.config[k] = cfg[k];
     if (cfg.batch && typeof cfg.batch === 'object') this.config.batch = Object.assign({}, this.config.batch, cfg.batch);
     if (cfg.replica && typeof cfg.replica === 'object') this.config.replica = Object.assign({}, this.config.replica, cfg.replica);
   }
 
-  // 水印归属校验：以本项目「多数配置使用的主流水印」为基准做一致性判定——
-  // 主流水印固化到 watermark_cache 物理缓存，平时直接比对缓存；仅换工作目录时重置重判。
-  // 只返回布尔值（不暴露真实路径/文件名），相对路径按项目目录解析。
+  // 水印归属校验：以本项目「主流水印」为基准做一致性判定；仅在用户启用判定时参与判断。
+// 未启用判定的项目一律放行（默认不启用，勾选后才判定）。只返回布尔值（不暴露真实路径/文件名）。
   checkWatermarkProject(project, watermarkPath) {
     const wm = String(watermarkPath || '').trim();
     try {
@@ -1956,19 +2407,109 @@ class Api {
       const wmKey = wmAbs.toLowerCase();
       this._loadWatermarkCache();
       const cacheKey = this.root + '\u0000' + project;
+      // 未启用判定：直接放行
+      if (!this._wmEnabled[cacheKey]) return { inProject: true };
       if (!Object.prototype.hasOwnProperty.call(this._wmCache, cacheKey)) {
-        // 本项目主流水印未固化：现场统计一次并落盘
+        // 本项目主流水印未固化：现场统计一次并落盘（保存前默认取配置主流作为初始值）
         this._wmCache[cacheKey] = this._computeMajorityWatermark(pdir);
         this._saveWatermarkCache();
       }
       const majorityKey = this._wmCache[cacheKey] || '';
-      // 无主流(项目无任何水印)放行；有主流则当前水印必须与其一致
+      // 无主流水印(项目无任何水印)放行；有则当前水印必须与其一致
       return { inProject: majorityKey === '' || wmKey === majorityKey };
     } catch (e) { return { inProject: true }; }
   }
 
+  // 读取项目主流水印设置（弹窗初始化）：main=已保存的设置（无则现场统计主流作为初始默认值）；enabled=是否启用判定
+  getProjectWatermark(project) {
+    try {
+      if (!this.root || !project) return { ok: true, main: '', enabled: false };
+      const pdir = path.resolve(path.join(this.root, project));
+      this._loadWatermarkCache();
+      const cacheKey = this.root + '\u0000' + project;
+      let main = this._wmCache[cacheKey] || '';
+      if (!main) main = this._computeMajorityWatermark(pdir); // 保留统计主流作初始默认值
+      return { ok: true, main, enabled: !!this._wmEnabled[cacheKey] };
+    } catch (e) { return { ok: false, error: String(e), main: '', enabled: false }; }
+  }
+
+  // 保存项目主流水印设置：更新判定参照文件与启用标记；applyToAll=true 时把本项目全部 txt（含日志）的水印行改为新水印
+  setProjectWatermark(project, watermark, enabled, applyToAll) {
+    try {
+      const wm = String(watermark || '').trim();
+      const pdir = path.resolve(path.join(this.root, project));
+      const wmKey = wm ? (path.isAbsolute(wm) ? path.resolve(wm) : path.resolve(pdir, wm)).toLowerCase() : '';
+      this._loadWatermarkCache();
+      const cacheKey = this.root + '\u0000' + project;
+      if (wmKey) { this._wmCache[cacheKey] = wmKey; this._wmEnabled[cacheKey] = !!enabled; }
+      else {
+        delete this._wmCache[cacheKey];
+        delete this._wmEnabled[cacheKey]; // 未设置水印时视同不启用
+      }
+      this._saveWatermarkCache();
+      if (applyToAll && wm && fs.existsSync(pdir) && fs.statSync(pdir).isDirectory()) {
+        const replaced = this._replaceProjectWatermarks(pdir, wm);
+        this._markConfigModified(); // 改动配置：清内存缓存并触发前端即时刷新
+        return { ok: true, replaced };
+      }
+      return { ok: true, replaced: 0 };
+    } catch (e) { return { ok: false, error: String(e) }; }
+  }
+
+  // 递归改写本项目目录下全部 txt 的水印行：配置 txt 替换末尾水印行（保留其余行原样），日志 txt 替换全部 .png 行
+  _replaceProjectWatermarks(pdir, newWm) {
+    let replaced = 0;
+    const walk = (dir) => {
+      let entries = [];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+      for (const en of entries) {
+        const fp = path.join(dir, en.name);
+        if (en.isDirectory()) { walk(fp); continue; }
+        if (!en.isFile() || path.extname(en.name).toLowerCase() !== '.txt') continue;
+        if (this._replaceWmLine(fp, newWm)) replaced++;
+      }
+    };
+    walk(pdir);
+    return replaced;
+  }
+  _replaceWmLine(fp, newWm) {
+    let text;
+    try { text = fs.readFileSync(fp, 'utf-8'); } catch (e) { return false; }
+    const eol = (text.replace(/\r?\n/g, '\n').length === text.length) ? '\n' : (text.includes('\r\n') ? '\r\n' : '\n');
+    const lines = text.split(/\r?\n/);
+    const isLog = LOG_NAME_RE.test(path.basename(fp));
+    let changed = false;
+    if (isLog) {
+      // 日志 txt：水印行是成片块末尾的 .png 路径行，全部替换为新水印
+      for (let i = 0; i < lines.length; i++) {
+        const s = lines[i].trim();
+        if (!s || !/\.png$/i.test(s)) continue;
+        if (lines[i] !== newWm) { lines[i] = newWm; changed = true; }
+      }
+    } else {
+      // 配置 txt：水印行 = 最后一个 PNG 路径行（非排除/非注释）；无则追加
+      let idx = -1;
+      for (let i = lines.length - 1; i >= 0 && idx < 0; i--) {
+        const s = lines[i].trim();
+        if (!s || s.startsWith('=') || s.startsWith('-')) continue;
+        if (/\.png$/i.test(s)) idx = i;
+      }
+      if (idx >= 0) {
+        if (lines[idx] !== newWm) { lines[idx] = newWm; changed = true; }
+      } else {
+        if (lines.length && lines[lines.length - 1].trim()) lines.push('');
+        lines.push(newWm);
+        changed = true;
+      }
+    }
+    if (!changed) return false;
+    try { fs.writeFileSync(fp, lines.join(eol), 'utf-8'); } catch (e) { return false; }
+    return true;
+  }
+
   // 查找主流水印与指定水印一致的项目（归属判定升级：供保存/启动时选择目标项目）
   // 复用 watermark_cache 缓存，缺失项目才现场统计并落盘；返回项目名数组（不含复刻）
+  // 若当前项目本身就以该水印为主流（共用或多个项目同时使用），归属明确、不触发弹窗
   findWatermarkProject(project, watermarkPath) {
     try {
       const wm = String(watermarkPath || '').trim();
@@ -1979,20 +2520,29 @@ class Api {
       this._loadWatermarkCache();
       const seen = new Map(); // 项目目录 -> 项目名（去重）
       for (const t of this._collectAllTxt()) {
-        const pdir = path.resolve(t.pdir);
-        if (!seen.has(pdir)) seen.set(pdir, path.basename(t.pdir));
+        const pd = path.resolve(t.pdir);
+        if (!seen.has(pd)) seen.set(pd, path.basename(t.pdir));
       }
       let dirty = false;
-      const hits = [];
-      for (const [pdir, project] of seen) {
-        if (project === REPLICA_PROJECT) continue; // 复刻虚拟项目无配置水印
-        const cacheKey = this.root + '\u0000' + project;
-        if (!Object.prototype.hasOwnProperty.call(this._wmCache, cacheKey)) {
-          this._wmCache[cacheKey] = this._computeMajorityWatermark(pdir);
+      const majorityOf = (pd, proj) => {
+        const ck = this.root + '\u0000' + proj;
+        if (!Object.prototype.hasOwnProperty.call(this._wmCache, ck)) {
+          this._wmCache[ck] = this._computeMajorityWatermark(pd);
           dirty = true;
         }
-        const mk = this._wmCache[cacheKey] || '';
-        if (mk !== '' && mk === wmKey) hits.push(project);
+        return this._wmCache[ck] || '';
+      };
+      // 当前项目自己就在用该水印：共用场景归属明确，直接放行不弹窗
+      const curMk = majorityOf(pdir, project);
+      if (curMk !== '' && curMk === wmKey) {
+        if (dirty) this._saveWatermarkCache();
+        return { hits: [], inOwn: true };
+      }
+      const hits = [];
+      for (const [pd, proj] of seen) {
+        if (proj === REPLICA_PROJECT) continue; // 复刻虚拟项目无配置水印
+        const mk = majorityOf(pd, proj);
+        if (mk !== '' && mk === wmKey) hits.push(proj);
       }
       if (dirty) this._saveWatermarkCache();
       return { hits };
@@ -2042,7 +2592,9 @@ class Api {
     if (this._wmCacheLoadedRoot === this.root || !this.watermarkCachePath) return;
     this._wmCacheLoadedRoot = this.root;
     this._wmCache = {};
+    this._wmEnabled = {};
     const prefix = this.root + '\u0000';
+    cleanupTmp(this.watermarkCachePath); // 清理上次中断遗留的未完成临时缓存
     try {
       const data = JSON.parse(fs.readFileSync(this.watermarkCachePath, 'utf-8'));
       if (data && typeof data.watermarks === 'object' && data.watermarks) {
@@ -2051,12 +2603,17 @@ class Api {
           if (Object.prototype.hasOwnProperty.call(data.watermarks, k) && k.startsWith(prefix)) this._wmCache[k] = data.watermarks[k];
         }
       }
+      if (data && typeof data.enabled === 'object' && data.enabled) {
+        for (const k in data.enabled) {
+          if (Object.prototype.hasOwnProperty.call(data.enabled, k) && k.startsWith(prefix)) this._wmEnabled[k] = !!data.enabled[k];
+        }
+      }
     } catch (e) {}
   }
 
   _saveWatermarkCache() {
     if (!this.watermarkCachePath) return;
-    try { fs.writeFileSync(this.watermarkCachePath, JSON.stringify({ watermarks: this._wmCache || {} }), 'utf-8'); } catch (e) {}
+    atomicWrite(this.watermarkCachePath, JSON.stringify({ watermarks: this._wmCache || {}, enabled: this._wmEnabled || {} }));
   }
 
   runBatch(filePath, count, group) {

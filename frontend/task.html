@@ -5,7 +5,6 @@
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="skins/white_blue.css">
   <link rel="stylesheet" href="skins/Black_Orange.css">
-  <link rel="stylesheet" href="skins/Gray_Orange.css">
   <link rel="stylesheet" href="skins/Maid_Atelier.css">
   <style>
     * { box-sizing: border-box; }
@@ -158,6 +157,9 @@
       flex-shrink: 0; padding: 0 6px; height: 16px; line-height: 16px; border-radius: 8px;
       font-size: 10px; background: var(--bg-overlay-l2); color: var(--text-secondary);
     }
+    /* 按任务模式区分徽章颜色（变量随皮肤，不写死） */
+    .task-card__tag--batch { background: var(--brand-500); color: var(--text-onaccent); }
+    .task-card__tag--replica { background: var(--status-success-default); color: var(--text-onaccent); }
     .task-card__lock { flex-shrink: 0; font-size: var(--body-xs-font-size); }
     .task-card__lock--waiting { color: var(--status-warning-default); }
     .task-card__lock--locked { color: var(--status-primary-default); }
@@ -177,6 +179,15 @@
     .task-card__stop { border: 1px solid var(--status-error-default); background: transparent; color: var(--status-error-default); }
     .task-card__stop:hover { background: var(--status-error-surface-l1); }
     .task-card__stop:disabled { border-color: var(--border-neutral-l2); color: var(--text-disabled); cursor: default; background: transparent; }
+    /* 失败任务重新开始按钮：品牌主题色实底，与「保存为当日配置」按钮同一主题 */
+    .task-card__rerun {
+      flex-shrink: 0; height: 20px; padding: 0 8px; border-radius: 4px;
+      display: inline-flex; align-items: center; gap: 4px;
+      font-family: var(--font-family-default); font-size: var(--body-xs-font-size); cursor: pointer;
+      border: 1px solid var(--brand-500); background: var(--brand-500); color: var(--text-onbrand);
+    }
+    .task-card__rerun:hover { background: var(--brand-400); border-color: var(--brand-400); }
+    .task-card__rerun svg { flex-shrink: 0; }
     /* 行级删除按钮：样式与配置模式排除字段删除按钮（.config-exclude-row__remove）完全一致 */
     .task-card__del {
       flex-shrink: 0; width: 20px; height: 20px; padding: 0;

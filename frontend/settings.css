@@ -112,6 +112,28 @@ body {
   color: var(--text-secondary);
   margin-bottom: 6px;
 }
+.form-group__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.form-group__head .form-group__label { margin-bottom: 6px; }
+.cfg-open-btn {
+  flex: none;
+  padding: 4px 12px;
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+.cfg-open-btn:hover {
+  color: var(--text-default);
+  border-color: var(--border-neutral-l3);
+  background: var(--bg-overlay-l2);
+}
 .form-group__label small {
   display: block;
   font-size: 11px;
@@ -167,7 +189,7 @@ body {
 }
 .btn:hover { background: var(--bg-overlay-l1); }
 .btn-ghost { flex: 0 0 auto; }
-.btn-primary { background: var(--brand-500); border-color: transparent; color: #fff; }
+.btn-primary { background: var(--brand-500); border-color: transparent; color: var(--text-onaccent); }
 .btn-primary:hover { background: var(--brand-600); }
 .btn-primary:disabled {
   background: var(--bg-base-tertiary, #e2e2e2);

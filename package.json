@@ -1,12 +1,14 @@
 {
   "name": "video-lab",
-  "version": "1.5.0",
+  "version": "1.5.2",
   "description": "Video Lab — 批量成片项目管理",
   "author": "Video Lab",
   "main": "main.js",
   "scripts": {
     "start": "node run.js",
-    "dist": "electron-builder --win portable --x64"
+    "dist": "pwsh -NoProfile -File \"../../../打包exe.ps1\"",
+    "dist:dir": "pwsh -NoProfile -File \"../../../打包exe.ps1\" -Target dir",
+    "dist:check": "pwsh -NoProfile -File \"../../../打包exe.ps1\" -CheckOnly"
   },
   "build": {
     "appId": "com.videolab.manager",
@@ -54,8 +56,7 @@
             "x64"
           ]
         }
-      ],
-      "signAndEditExecutable": false
+      ]
     },
     "portable": {
       "artifactName": "${productName}.exe"

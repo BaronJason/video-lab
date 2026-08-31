@@ -272,6 +272,12 @@ class Api {
   getRoot() { return this.root; }
 
   setRoot(newRoot) {
+    // 相同路径（如启动时 ensureConfig 每次都调用 setRoot(同 root)）：仅同步内存，不清缓存——
+    // 否则会清掉已保存的主流水印设置（watermark_cache 被误删，用户需重新设置）
+    if (String(newRoot || '') === String(this.root || '')) {
+      this.root = newRoot || '';
+      return;
+    }
     // 更换工作目录（即使重选相同目录）：水印主流缓存物理重置+清内存，
     // 与全缓存重置同语义——下次判定/刷新按新目录现场重新计算归属
     if (this.watermarkCachePath) { try { fs.unlinkSync(this.watermarkCachePath); } catch (e) {} }

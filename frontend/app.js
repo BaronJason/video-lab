@@ -27,14 +27,18 @@
     var name = s.replace(/^.*[\\/]/, '');
     return name.replace(/\.[^.]+$/, '');
   }
-  // 水印栏行内结构：点击文件名更换水印 + 右侧两个图标按钮（打开文件 / 打开文件夹）
-  function wmRowHtml(wm) {
+  // 水印栏行内结构：点击文件名更换水印 + 右侧两个图标按钮（打开文件 / 打开文件夹）；
+  // withActions=false 时不渲染右侧按钮（主流水印设置弹窗按需求隐藏）
+  function wmRowHtml(wm, withActions) {
     var p = wm ? String(wm) : '';
+    var showActions = withActions !== false;
     var h = '<div class="config-watermark__row">';
     if (p) h += '<div class="config-watermark__path" title="' + escapeHtml(p) + '">' + escapeHtml(baseNameNoExt(p)) + '</div>';
     else h += '<div class="config-watermark__path config-watermark__path--empty" title="点击更换水印">未设置水印</div>';
-    h += '<button type="button" class="config-watermark__btn" data-wm="open" title="打开文件"' + (p ? '' : ' disabled') + '>' + icon('image', 15) + '</button>';
-    h += '<button type="button" class="config-watermark__btn" data-wm="folder" title="打开文件夹"' + (p ? '' : ' disabled') + '>' + icon('folder-open', 15) + '</button>';
+    if (showActions) {
+      h += '<button type="button" class="config-watermark__btn" data-wm="open" title="打开文件"' + (p ? '' : ' disabled') + '>' + icon('image', 15) + '</button>';
+      h += '<button type="button" class="config-watermark__btn" data-wm="folder" title="打开文件夹"' + (p ? '' : ' disabled') + '>' + icon('folder-open', 15) + '</button>';
+    }
     return h + '</div>';
   }
   function showDialog(opts) {
@@ -123,7 +127,7 @@
         var bFold = root.querySelector('[data-wm="folder"]');
         if (bFold) bFold.addEventListener('click', function () { if (curWm) call('open_parent', curWm); });
       }
-      function renderRow() { row.innerHTML = wmRowHtml(curWm); bindWmRow(row); }
+      function renderRow() { row.innerHTML = wmRowHtml(curWm, false); bindWmRow(row); }
       renderRow();
       var closed = false;
       function closeDialog() { overlay.remove(); closed = true; }

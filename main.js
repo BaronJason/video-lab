@@ -154,6 +154,23 @@ function resolveRoot(config) {
 }
 
 const config = loadConfig();
+// ── 每日定时检查更新：按设置整点触发静默检查，检查后滚动安排次日（应用需保持运行） ──
+let dailyUpdateTimer = null;
+function scheduleDailyUpdateCheck() {
+  if (dailyUpdateTimer) { clearTimeout(dailyUpdateTimer); dailyUpdateTimer = null; }
+  if (!UPDATE_ENABLED || config.check_update_daily !== true) return;
+  const hour = parseInt(config.check_update_hour, 10);
+  if (!(hour >= 0 && hour <= 23)) return;
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(hour, 0, 0, 0);
+  if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
+  dailyUpdateTimer = setTimeout(function () {
+    dailyUpdateTimer = null;
+    checkForUpdate({ silent: true }).catch(function () {});
+    scheduleDailyUpdateCheck();
+  }, Math.min(next.getTime() - now.getTime(), 24 * 3600 * 1000));
+}
 const root = resolveRoot(config);
 // 缓存统一放「配置和数据的保存位置」下 Cache 子文件夹（打包版）；开发版放临时目录避免污染源码：
 //   配置在程序目录 → Cache 在程序目录；配置在 AppData → Cache 也在 AppData（切换存储位置时一并迁移）
@@ -569,7 +586,8 @@ async function checkForUpdate(opts) {
     writeUpdateLog('检查成功：current=' + APP_VERSION + ' latest=v' + tag + ' hasUpdate=' + hasUpdate + ' (' + (Date.now() - t0) + 'ms)');
     if (hasUpdate) {
       if (!silent) sendToSettings('check_update_result', info);
-      if (asset && notifyMain) sendToMain('update_available', info);
+      if ((asset || parts.length) && notifyMain) sendToMain('update_available', info);
+      else if (!silent && notifyMain) sendToMain('update_none', Object.assign({}, info, { message: '发现新版本，但 Release 缺少便携包' }));
       else if (!silent && notifyMain) sendToMain('update_none', Object.assign({}, info, { message: '发现新版本，但 Release 缺少便携包' }));
     } else {
       if (!silent) sendToSettings('check_update_result', info);
@@ -934,6 +952,9 @@ function registerIpc() {
   ipcMain.handle('read_config', (e, p) => api.readConfig(p));
   ipcMain.handle('save_config', (e, p, folders, excludes, watermark) => api.saveConfig(p, folders, excludes, watermark));
   ipcMain.handle('save_config_today', (e, project, name, configName, folders, excludes, watermark) => api.saveConfigToday(project, name, configName, folders, excludes, watermark));
+  ipcMain.handle('new_empty_config', (e, project) => api.newEmptyConfig(project));
+  ipcMain.handle('remove_branch', (e, p, scope) => api.removeBranch(p, scope));
+  ipcMain.handle('branch_other_txt', (e, p) => api.branchOtherTxt(p));
   ipcMain.handle('precheck', (e, paths, excludes) => api.precheck(paths, excludes));
   ipcMain.handle('reset_precheck', (e) => { const sender = e.sender; return api.resetPrecheck((s) => { try { sender.send('reset_progress', s); } catch (err) {} }); });
   // 仅刷新预缓存：不删缓存，只对缺失/变化的视频增量更新（与重置同通道回报进度）
@@ -976,72 +997,6 @@ function registerIpc() {
       return { ok: false, error: String(e) };
     }
   });
-  // 水印悬浮预览：独立置顶小窗，可越出主窗口显示；窗口按水印图实际比例自适应（最大 320px），位置按显示器工作区计算（10px 间距、右上贴齐）
-  let wmPreviewWin = null;
-  // 定位统一取真实光标屏幕坐标（DIP），绕开前端 clientX/Y 的缩放换算，避免偏到屏幕左上
-  function wmPreviewPosition() {
-    if (!wmPreviewWin || wmPreviewWin.isDestroyed()) return;
-    const { screen } = require('electron');
-    const cp = screen.getCursorScreenPoint();
-    const wa = screen.getDisplayNearestPoint(cp).workArea;
-    // 移动过程只动位置，尺寸一律用显式缓存值，避免 getSize/setContentSize 联动导致忽大忽小
-    const W = (wmPreviewWin._wmSize && wmPreviewWin._wmSize[0]) || 300;
-    const H = (wmPreviewWin._wmSize && wmPreviewWin._wmSize[1]) || 300;
-    const x = cp.x, y = cp.y;
-    let px = Math.floor(x + 10), py = Math.floor(y - H - 10);
-    if (px + W > wa.x + wa.width) px = Math.floor(x - W - 10);
-    if (py < wa.y) py = Math.floor(y + 10);
-    if (px < wa.x) px = wa.x;
-    if (py + H > wa.y + wa.height) py = wa.y + wa.height - H;
-    wmPreviewWin.setPosition(Math.max(wa.x, Math.min(px, wa.x + wa.width - W)), Math.max(wa.y, Math.min(py, wa.y + wa.height - H)), false);
-  }
-  ipcMain.handle('watermark_preview_show', (e, rawPath) => {
-    if (typeof rawPath !== 'string' || !rawPath.trim()) return { ok: false };
-    const abs = path.resolve(rawPath);
-    const image = nativeImage.createFromPath(abs);
-    const size = image.isEmpty() ? { width: 320, height: 320 } : image.getSize();
-    const maxSide = 320;
-    const scale = Math.min(1, maxSide / Math.max(size.width || 1, size.height || 1));
-    const w = Math.max(48, Math.round(size.width * scale)), h = Math.max(48, Math.round(size.height * scale));
-    const W = w, H = h; // 窗口 = 图片实际比例尺寸，无边框无留白
-    // 尺寸防护：任何非预期 resize（如系统/Move 触发）都立即拉回设定尺寸，防止移动中越来越大
-    function wmResizeGuard() {
-      if (!wmPreviewWin || wmPreviewWin.isDestroyed() || !wmPreviewWin._wmSize) return;
-      const cur = wmPreviewWin.getContentSize();
-      if (cur[0] !== wmPreviewWin._wmSize[0] || cur[1] !== wmPreviewWin._wmSize[1]) {
-        wmPreviewWin.setContentSize(wmPreviewWin._wmSize[0], wmPreviewWin._wmSize[1], false);
-      }
-    }
-    if (!wmPreviewWin || wmPreviewWin.isDestroyed()) {
-      wmPreviewWin = new BrowserWindow({
-        width: W, height: H, frame: false, transparent: true, resizable: false,
-        backgroundColor: '#00000000', // 全透明底，避免圆角外侧出现实色角
-        show: false, skipTaskbar: true, alwaysOnTop: true, hasShadow: false, focusable: false,
-        webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: false }
-      });
-      wmPreviewWin.setAlwaysOnTop(true, 'floating');
-      wmPreviewWin.setIgnoreMouseEvents(true, { forward: true }); // 鼠标穿透，避免遮挡主窗口 hover
-      wmPreviewWin.on('closed', () => { wmPreviewWin = null; });
-    }
-    wmPreviewWin.removeListener('resize', wmResizeGuard);
-    wmPreviewWin.on('resize', wmResizeGuard);
-    // 仅尺寸变化时调整窗口大小，避免每次 show 触发布局抖动
-    wmPreviewWin._wmSize = [W, H];
-    const cur = wmPreviewWin.getSize();
-    if (cur[0] !== W || cur[1] !== H) wmPreviewWin.setContentSize(W, H, false);
-    const fileUrl = 'file://' + encodeURI(abs.replace(/\\/g, '/'));
-    // 同一张图不重复加载，避免闪烁；skin 变化时（含边框样式）强制刷新
-    const urlWithSkin = 'file:///' + path.join(__dirname, 'frontend', 'wm_preview.html').replace(/\\/g, '/') + '?p=' + encodeURIComponent(fileUrl) + '&skin=' + encodeURIComponent((loadConfig().skin || 'white_blue'));
-    if (wmPreviewWin._lastUrl !== urlWithSkin) {
-      wmPreviewWin._lastUrl = urlWithSkin;
-      wmPreviewWin.loadURL(urlWithSkin);
-    }
-    wmPreviewWin.showInactive();
-    wmPreviewPosition();
-    return { ok: true };
-  });
-  ipcMain.handle('watermark_preview_move', () => { wmPreviewPosition(); return { ok: true }; });
-  ipcMain.handle('watermark_preview_hide', () => { if (wmPreviewWin && !wmPreviewWin.isDestroyed()) wmPreviewWin.hide(); return { ok: true }; });
   ipcMain.handle('clear_task', (e, id) => api.clearTask(id));
   ipcMain.handle('regroup_task', (e, id, groupCount) => api.regroupTask(id, groupCount));
   ipcMain.handle('resume_all_tasks', () => api.resumeAllTasks());
@@ -1081,6 +1036,8 @@ function registerIpc() {
       batch: Object.assign({}, DEFAULT_CONFIG.batch, c.batch),
       replica: Object.assign({}, DEFAULT_CONFIG.replica, c.replica),
       auto_check_update: c.auto_check_update !== false,
+      check_update_daily: c.check_update_daily === true,
+      check_update_hour: (() => { const h = parseInt(c.check_update_hour, 10); return (h >= 0 && h <= 23) ? h : 9; })(),
       update_source: c.update_source === 'github' ? 'github' : 'gitee',
       config_storage: c.config_storage === 'appdata' ? 'appdata' : 'program',
       config_path: configFilePath(),
@@ -1101,6 +1058,8 @@ function registerIpc() {
       }
       if (s.config_storage === 'program' || s.config_storage === 'appdata') cfg.config_storage = s.config_storage;
       if (typeof s.auto_check_update === 'boolean') cfg.auto_check_update = s.auto_check_update;
+      if (typeof s.check_update_daily === 'boolean') cfg.check_update_daily = s.check_update_daily;
+      if (s.check_update_hour !== undefined && s.check_update_hour !== null) { const h = parseInt(s.check_update_hour, 10); if (h >= 0 && h <= 23) cfg.check_update_hour = h; }
       if (typeof s.autostart === 'boolean') cfg.autostart = s.autostart;
       if (s.close_behavior === 'exit' || s.close_behavior === 'tray') cfg.close_behavior = s.close_behavior;
       if (s.update_source === 'github' || s.update_source === 'gitee') cfg.update_source = s.update_source;
@@ -1117,6 +1076,7 @@ function registerIpc() {
     // 应用开机自启动（openAtLogin + --autostart 静默托盘启动）；开发版不注册，避免污染开发环境
     try { if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: cfg.autostart === true, args: ['--autostart'] }); } catch (e) {}
     Object.assign(config, cfg);
+    scheduleDailyUpdateCheck(); // 定时检查设置可能变更：重新安排
     api.updateSettings(cfg);
     for (const w of BrowserWindow.getAllWindows()) w.webContents.send('settings_saved', cfg);
     return { ok: true, config_moved: configMoved };
@@ -1192,6 +1152,12 @@ function registerIpc() {
   ipcMain.handle('set_skin', (e, skin) => { const v = String(skin || '').trim(); config.skin = v || 'white_blue'; saveConfig(config); return config.skin; });
   ipcMain.handle('open_path', async (e, p) => { const target = path.resolve(p); if (fs.existsSync(target)) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '路径不存在' }; });
   ipcMain.handle('open_parent', async (e, p) => { const target = path.dirname(path.resolve(p)); if (fs.existsSync(target)) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '路径不存在' }; });
+  ipcMain.handle('open_project_dir', async (e, project) => {
+    const root = api.getRoot();
+    const target = path.resolve(root || '', String(project || ''));
+    if (fs.existsSync(target)) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; }
+    return { ok: false, error: '项目目录不存在' };
+  });
   ipcMain.handle('external_edit', async (e, p) => { const target = path.resolve(p); if (fs.existsSync(target) && fs.statSync(target).isFile()) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '文件不存在' }; });
   ipcMain.handle('pick_watermark', async (e, prevPath) => {
     // 默认定位到上一个水印所在位置（当前配置里已有的水印路径），便于就近选择新水印
@@ -1204,8 +1170,12 @@ function registerIpc() {
     return result.canceled || !result.filePaths || result.filePaths.length === 0 ? [] : result.filePaths;
   });
   ipcMain.handle('pick_paths', async () => {
-    const result = await dialog.showOpenDialog(mainWin, { title: '选择要添加的素材路径（文件夹或视频文件）', defaultPath: api.getRoot(), properties: ['openFile', 'openDirectory', 'multiSelections'] });
+    const result = await dialog.showOpenDialog(mainWin, { title: '选择要添加的文件夹', defaultPath: api.getRoot(), properties: ['openDirectory', 'multiSelections'] });
     return result.canceled || !result.filePaths || result.filePaths.length === 0 ? [] : result.filePaths;
+  });
+  ipcMain.handle('pick_single_folder', async () => {
+    const result = await dialog.showOpenDialog(mainWin, { title: '选择要修改为的文件夹', defaultPath: api.getRoot(), properties: ['openDirectory'] });
+    return result.canceled || !result.filePaths || result.filePaths.length === 0 ? '' : result.filePaths[0];
   });
 
   // ── 自制标题栏（frame:false）窗口控制 ──
@@ -1328,6 +1298,7 @@ app.whenReady().then(async () => {
   if (UPDATE_ENABLED && mainWin && !mainWin.isDestroyed()) {
     mainWin.webContents.once('did-finish-load', () => {
       if (config.auto_check_update !== false) checkForUpdate({ silent: true });
+      scheduleDailyUpdateCheck();
     });
   }
   api.restoreTasks(); // 恢复上次会话的任务列表（退出时已做中断/暂停转换）

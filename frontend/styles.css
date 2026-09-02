@@ -1775,6 +1775,32 @@ body[data-preview-collapsed] .center-global-search .ds-input {
   line-height: var(--heading-xs-line-height);
   color: var(--text-default);
 }
+/* 侧栏标题行「新增配置」纯图标按钮：样式完全参考界面右上角预览展开按钮（含阴影、hover 上浮） */
+.sidebar__new-config {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: 50%;
+  background: var(--bg-base-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--text-default) 14%, transparent);
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease, transform 0.12s ease;
+}
+.sidebar__new-config svg {
+  display: block; /* 图标以块级参与 flex 居中，避免内联基线导致的竖向偏移 */
+}
+.sidebar__new-config:hover {
+  background: var(--bg-base-tertiary);
+  color: var(--text-default);
+  border-color: var(--border-neutral-l3);
+  transform: translateY(-1px);
+}
 .sidebar__recheck {
   display: inline-flex;
   align-items: center;
@@ -2602,6 +2628,25 @@ body[data-preview-collapsed] .center-global-search .ds-input {
   background: var(--bg-base-default);
   color: var(--text-default);
 }
+/* Modify path button */
+.config-path-row__browse {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: var(--radius-4);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.1s ease;
+}
+.config-path-row__browse:hover {
+  background: var(--bg-base-tertiary);
+  color: var(--text-default);
+}
 /* Open path button */
 .config-path-row__open {
   display: inline-flex;
@@ -2734,6 +2779,11 @@ body[data-preview-collapsed] .center-global-search .ds-input {
   letter-spacing: 0.5px;
   padding-left: var(--spacer-4);
 }
+/* 与数据行 __browse 按钮对齐的空占位 */
+.config-path-subheader__browse {
+  width: 24px;
+  flex-shrink: 0;
+}
 .config-path-subheader__open {
   width: 24px;
   flex-shrink: 0;
@@ -2848,7 +2898,6 @@ body[data-preview-collapsed] .center-global-search .ds-input {
   width: 100%;
   box-sizing: border-box;
 }
-/* 水印文件名悬浮预览由独立置顶小窗承担（frontend/wm_preview.html），无 DOM 内预览样式 */
 
 /* Exclude fields */
 .config-editor__exclude-list {
@@ -4004,6 +4053,15 @@ body[data-preview-collapsed] .center-global-search .ds-input {
 .modal-btn--danger:hover {
   background: var(--status-error-hover);
   border-color: var(--status-error-hover);
+}
+/* 弹窗禁用按钮（如分支移除中无对应模式 TXT）：灰显不可点，hover 不再变色 */
+.modal-btn--disabled,
+.modal-btn--disabled:hover {
+  opacity: 0.45;
+  color: var(--text-disabled);
+  background: var(--bg-base-tertiary);
+  border-color: var(--border-neutral-l1);
+  cursor: not-allowed;
 }
 /* 主流水印设置弹窗：窄宽两行布局——说明文字左对齐、复选框/水印按钮组右对齐 */
 .modal-card--wm { width: 360px; }

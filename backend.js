@@ -26,6 +26,8 @@ const DEFAULT_CONFIG = {
   scripts_dir: '',
   skin: 'white_blue',
   auto_check_update: true,    // 启动时自动检查更新
+  check_update_daily: false,  // 每日定时检查更新（整点触发，需 app 保持运行）
+  check_update_hour: 9,       // 每日定时检查更新时间（24 小时制整点 0-23，默认 9）
   update_source: 'gitee',     // 更新源：gitee=码云 release / github=GitHub release，默认码云
   config_storage: 'program',  // 配置文件保存位置：program=程序所在目录 / appdata=%APPDATA%\Video Lab
   // video_batch.ps1 顶部全局参数（文件内同名常量被顶部读环境变量 BATCH_* 覆盖）
@@ -496,7 +498,15 @@ class Api {
       for (const name of names) {
         const versions = this._buildVersionsFromList(name, txs);
         const latest = versions.length ? versions[0].label : '';
-        txts.push({ name, latest, count: versions.length, dup: dupNames.has(name) });
+        // 最新版本无素材路径 → 空白配置（侧栏置顶排序依据）；带水印/排除仍视为空白
+        let empty = false;
+        if (versions.length) {
+          try {
+            const cfg = this.readConfig(versions[0].path);
+            empty = !(cfg.folders || []).some((f) => String(f && typeof f === 'object' ? f.path : f).trim() !== '');
+          } catch (e) {}
+        }
+        txts.push({ name, latest, count: versions.length, dup: dupNames.has(name), empty });
       }
       let mtime = 0;
       try { mtime = fs.statSync(pdir).mtimeMs; } catch (e) {}
@@ -726,6 +736,104 @@ class Api {
     fs.writeFileSync(filePath, this._rewriteText(folders, excludes, watermark), 'utf-8');
     this._markConfigModified();
     return { ok: true, path: filePath };
+  }
+
+  // 新增空白配置：今日目录下创建无素材路径的 TXT（与保存为当日配置同目录规则）；
+  // 项目启用主流水印时自动一并写上新配置的水印行
+  newEmptyConfig(project) {
+    try {
+      if (!this.root || !project) return { ok: false, error: '未指定项目' };
+      const pdir = path.resolve(path.join(this.root, project));
+      if (!fs.existsSync(pdir) || !fs.statSync(pdir).isDirectory()) return { ok: false, error: '项目目录不存在：' + pdir };
+      const now = new Date();
+      const monthDir = String(now.getMonth() + 1) + '月';
+      const dayDir = String(now.getMonth() + 1).padStart(2, '0') + String(now.getDate()).padStart(2, '0');
+      const targetDir = path.join(pdir, monthDir, dayDir);
+      fs.mkdirSync(targetDir, { recursive: true });
+      // 默认文件名唯一：新建配置.txt → 新建配置 (1).txt → …
+      let name = '新建配置';
+      for (let i = 1; fs.existsSync(path.join(targetDir, name + '.txt')); i++) { name = '新建配置 (' + i + ')'; }
+      const filePath = path.join(targetDir, name + '.txt');
+      const wm = this.getProjectWatermark(project);
+      const watermark = (wm && wm.ok && wm.enabled && wm.main) ? wm.main : '';
+      fs.writeFileSync(filePath, this._rewriteText([], [], watermark), 'utf-8');
+      this._markConfigModified();
+      return { ok: true, path: filePath, name, watermark };
+    } catch (e) { return { ok: false, error: String(e) }; }
+  }
+
+  // 移除日期分支（配置/日志 TXT）：
+  // scope=txt 仅删当前文件；both 删除所在目录下全部 TXT（双模式配置+日志，成片保留）；folder 删除整个日期文件夹（含成片）
+  // 删除后若目录为空则逐级向上清理空目录（以工作根为边界）
+  removeBranch(filePath, scope) {
+    try {
+      if (!this.root) return { ok: false, error: '未配置工作路径' };
+      filePath = path.resolve(filePath);
+      const root = path.resolve(this.root);
+      if (filePath !== root && !filePath.startsWith(root + path.sep)) return { ok: false, error: '目标不在工作路径内' };
+      if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return { ok: false, error: '文件不存在：' + filePath };
+      const dir = path.dirname(filePath);
+      const mode = scope === 'folder' ? 'folder' : (scope === 'both' ? 'both' : 'txt');
+      if (mode === 'folder') {
+        if (dir.length <= root.length) return { ok: false, error: '不允许删除工作根目录' };
+        this._rmtree(dir);
+      } else {
+        if (mode === 'both') {
+          let entries = [];
+          try { entries = fs.readdirSync(dir); } catch (e) {}
+          for (const ent of entries) {
+            const full = path.join(dir, String(ent));
+            let st;
+            try { st = fs.statSync(full); } catch (e) { continue; }
+            if (st.isFile() && String(ent).toLowerCase().endsWith('.txt')) { try { fs.unlinkSync(full); } catch (e) {} }
+          }
+        } else {
+          if (!filePath.toLowerCase().endsWith('.txt')) return { ok: false, error: '仅支持移除 TXT 分支' };
+          fs.unlinkSync(filePath);
+        }
+      }
+      // 逐级向上删除空目录：任一目录非空即停止；到工作根为止，不会越界
+      let cur = mode === 'folder' ? path.dirname(dir) : dir;
+      while (cur.length > root.length && cur !== root) {
+        let entries = [];
+        try { entries = fs.readdirSync(cur); } catch (e) { break; }
+        if (entries.length) break;
+        try { fs.rmdirSync(cur); } catch (e) { break; }
+        cur = path.dirname(cur);
+      }
+      this._markConfigModified();
+      return { ok: true };
+    } catch (e) { return { ok: false, error: String(e) }; }
+  }
+
+  // 递归删除目录树（含内部全部文件与子目录）
+  _rmtree(p) {
+    let entries = [];
+    try { entries = fs.readdirSync(p, { withFileTypes: true }); } catch (e) { return; }
+    for (const ent of entries) {
+      const full = path.join(p, ent.name);
+      if (ent.isDirectory()) this._rmtree(full);
+      else { try { fs.unlinkSync(full); } catch (e) {} }
+    }
+    try { fs.rmdirSync(p); } catch (e) {}
+  }
+
+  // 判断给定分支的所在目录是否存在「另一模式」的 TXT（配置↔日志；如 * 外部配置无对应日志）
+  branchOtherTxt(filePath) {
+    try {
+      const dir = path.dirname(path.resolve(String(filePath || '')));
+      if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return { ok: true, hasOther: false };
+      const currentIsLog = LOG_NAME_RE.test(path.basename(filePath));
+      let txts = [];
+      try {
+        txts = fs.readdirSync(dir).filter((n) => String(n).toLowerCase().endsWith('.txt'))
+          .filter((n) => { let st; try { st = fs.statSync(path.join(dir, n)); } catch (e) { return false; } return st.isFile(); });
+      } catch (e) {}
+      const logs = txts.filter((n) => LOG_NAME_RE.test(n));
+      const confs = txts.filter((n) => !LOG_NAME_RE.test(n));
+      const hasOther = currentIsLog ? confs.length > 0 : logs.length > 0;
+      return { ok: true, hasOther };
+    } catch (e) { return { ok: false, error: String(e), hasOther: false }; }
   }
 
   _loadVideoCache() {
@@ -1323,6 +1431,12 @@ class Api {
       for (const e of entries) {
         const v = String(e.video || '');
         if (!v.toLowerCase().includes(q)) continue;
+        // 日志条目仅归属其同名配置（同日期目录下多配置并存时互不串扰）
+        const cfgName = this._configNameFromLog(e.log_path);
+        if (!cfgName) continue;
+        let tName = t.name;
+        if (tName.charAt(0) === '*') tName = tName.slice(1).trim(); // 当日外部 * 配置：按去前缀名匹配
+        if (cfgName !== tName) continue;
         const key = e.log_path + '\u0000' + v;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -2181,7 +2295,14 @@ class Api {
       this._clipIndexDirty = false;
       this._clipIndexRoot = '';
     }
+    if (renamed.length) {
+    // 同步刷新任务记录的分组数，任务列表卡片随之更新（分组数=输入值；1 表示取消分组置 0 不显示）
+    t.progress = Object.assign({}, t.progress || {}, { groupCount: n > 1 ? n : 0 });
+    this.persistTasks();
+    this._emitTasks();
+    }
     if (renamed.length) this._markConfigModified();
+    return { ok: true, total, regrouped: renamed.length, errors };
     return { ok: true, total, regrouped: renamed.length, errors };
   }
 

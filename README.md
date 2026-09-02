@@ -8,7 +8,7 @@
 
 <br>
 
-[![版本](https://img.shields.io/badge/版本-1.5.2-0078D7?style=flat-square)](https://github.com/BaronJason/video-lab/releases)
+[![版本](https://img.shields.io/badge/版本-1.6.0-0078D7?style=flat-square)](https://github.com/BaronJason/video-lab/releases)
 ![Platform](https://img.shields.io/badge/平台-Windows%2010%2F11-00A4EF?style=flat-square)
 ![PowerShell](https://img.shields.io/badge/运行时-PowerShell%207-5391FE?style=flat-square)
 ![FFmpeg](https://img.shields.io/badge/FFmpeg-必需-FF7F2A?style=flat-square)
@@ -36,7 +36,7 @@ Video Lab/
 │  ├─ index.html        # 主窗口页面
 │  ├─ settings.*        # 设置页（html/js/css）
 │  ├─ task.*            # 任务列表（html/js）
-│  ├─ guide.* / preview.html / trayMenu.html / wm_preview.html
+│  ├─ guide.* / preview.html / trayMenu.html
 │  ├─ app.js / icons.js / styles.css / titlebar.js
 │  ├─ skins/            # 皮肤（Black_Orange / white_blue / Maid_Atelier + assets）
 │  └─ assets/           # 前端静态资源（内置字体等）

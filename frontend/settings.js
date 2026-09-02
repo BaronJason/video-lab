@@ -184,13 +184,31 @@
     $('batchNamePreview').textContent = name;
   }
 
+  // 每日定时检查更新时间下拉：24 小时制整点选项（默认 9:00）
+  function fillCheckUpdateHourOptions() {
+    var sel = $('checkUpdateHour');
+    if (!sel || sel.options.length > 0) return;
+    for (var i = 0; i < 24; i++) {
+      var o = document.createElement('option');
+      o.value = i;
+      o.textContent = i + ':00';
+      if (i === 9) o.selected = true;
+      sel.appendChild(o);
+    }
+  }
+
   function loadSettings() {
+    fillCheckUpdateHourOptions();
     api.get_settings().then(function (s) {
       if (!s) return;
       setSkin(s.skin);
       $('cfgRoot').value = s.root || '';
       var chk = $('autoCheckUpdate');
       if (chk) chk.checked = s.auto_check_update !== false;
+      var cd = $('checkUpdateDaily');
+      if (cd) cd.checked = s.check_update_daily === true;
+      var ch = $('checkUpdateHour');
+      if (ch) ch.value = (s.check_update_hour >= 0 && s.check_update_hour <= 23) ? s.check_update_hour : 9;
       var as = $('autoStart');
       if (as) as.checked = s.autostart === true;
       var cbv = s.close_behavior === 'exit' ? 'exit' : 'tray';
@@ -322,6 +340,8 @@
         skin: skin,
         root: $('cfgRoot').value.trim(),
         auto_check_update: !!$('autoCheckUpdate').checked,
+        check_update_daily: !!$('checkUpdateDaily').checked,
+        check_update_hour: parseInt($('checkUpdateHour').value, 10) || 9,
         autostart: !!$('autoStart').checked,
         close_behavior: cbEl ? cbEl.value : 'tray',
         update_source: srcEl ? srcEl.value : 'gitee',

@@ -293,7 +293,9 @@ body {
 .settings-view::-webkit-scrollbar-thumb { background: var(--border-neutral-l2); border-radius: 4px; }
 
 /* ─── 更新 / 配置保存位置（勾选与单选） ─── */
-.opt-row { display: flex; align-items: center; padding: 4px 0; }
+.opt-row { display: flex; align-items: center; padding: 4px 0; gap: 8px; }
+/* 每日定时检查更新下拉框：紧凑宽度，与左侧勾选间隔 8px */
+.opt-time-select { width: 80px; flex-shrink: 0; height: 30px; padding: 0 6px; cursor: pointer; }
 .opt-check,
 .opt-radio {
   display: inline-flex;

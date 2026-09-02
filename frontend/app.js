@@ -51,9 +51,9 @@
       if (opts.message) html += '<div class="modal__message">' + escapeHtml(opts.message) + '</div>';
       html += '<div class="modal__actions">';
       (opts.buttons || []).forEach(function (b) {
-        var cls = 'modal-btn' + (b.danger ? ' modal-btn--danger' : '') + (b.primary ? ' modal-btn--primary' : '') + (b.cls ? ' ' + b.cls : '');
+        var cls = 'modal-btn' + (b.danger ? ' modal-btn--danger' : '') + (b.primary ? ' modal-btn--primary' : '') + (b.cls ? ' ' + b.cls : '') + (b.disabled ? ' modal-btn--disabled' : '');
         var ics = b.icon ? icon(b.icon, 14) : '';
-        html += '<button type="button" class="' + cls + '">' + ics + escapeHtml(b.label) + '</button>';
+        html += '<button type="button" class="' + cls + '"' + (b.disabled ? ' disabled' : '') + (b.hint ? ' title="' + escapeHtml(b.hint) + '"' : '') + '>' + ics + escapeHtml(b.label) + '</button>';
       });
       html += '</div>';
       card.innerHTML = html;
@@ -254,11 +254,18 @@
   }
   function sortedTxts(txts) {
     var list = txts.slice();
-    if (state.sortMode === 'time') {
-      list.sort(function (a, b) { var d = branchNum(b.latest) - branchNum(a.latest); return state.sortTimeDesc ? d : -d; });
-    } else {
-      list.sort(function (a, b) { var r = sortByName(a, b); return state.sortAsc ? r : -r; });
-    }
+    list.sort(function (a, b) {
+      // 空白配置（无素材路径）恒置顶：任意排序模式下固定排在其他配置之上
+      if (a.empty && !b.empty) return -1;
+      if (!a.empty && b.empty) return 1;
+      if (state.sortMode === 'time') {
+        var d = branchNum(b.latest) - branchNum(a.latest);
+        return state.sortTimeDesc ? d : -d;
+      } else {
+        var r = sortByName(a, b);
+        return state.sortAsc ? r : -r;
+      }
+    });
     return list;
   }
   // 时间排序按月份分组：取配置版本 label（如 0802、0802-1、0802*）开头的两位月份，忽略后缀
@@ -642,7 +649,7 @@
     // 配置间切换（silent）时不给进场动画：与徽章 --static 同思路，避免重建页面时的滑入感
     var html = '<div class="config-editor' + (silent ? ' config-editor--static' : '') + '">';
     html += '<div class="config-editor__col config-editor__col--paths">';
-    html += '<div class="config-path-subheader"><span class="config-path-subheader__sort">排序</span><span class="config-path-subheader__nopoll">取消轮询</span><span class="config-path-subheader__path">路径</span><span class="config-path-subheader__check">预检测结果</span><span class="config-path-subheader__open"></span><span class="config-path-subheader__remove"></span></div>';
+    html += '<div class="config-path-subheader"><span class="config-path-subheader__sort">排序</span><span class="config-path-subheader__nopoll">取消轮询</span><span class="config-path-subheader__path">路径</span><span class="config-path-subheader__check">预检测结果</span><span class="config-path-subheader__browse"></span><span class="config-path-subheader__open"></span><span class="config-path-subheader__remove"></span></div>';
     html += '<div class="config-editor__path-list" id="pathList">';
     folders.forEach(function (f, idx) {
       html += '<div class="config-path-row" data-index="' + idx + '" data-orig="' + escapeHtml(f.path) + '" data-orig-idx="' + idx + '">';
@@ -650,6 +657,7 @@
       html += '<label class="config-path-row__checkbox" title="勾选 = 不轮询（添加 = 前缀）"><input type="checkbox" class="config-path-row__check" ' + (f.nonround ? 'checked' : '') + '><span class="config-path-row__check-mark"></span></label>';
       html += '<input type="text" class="config-path-row__input" value="' + escapeHtml(f.path) + '" title="' + escapeHtml(f.path) + '">';
       html += '<span class="config-path-row__precheck" data-index="' + idx + '"><span class="config-path-row__badge precheck--pending">检测中…</span></span>';
+      html += '<button class="config-path-row__browse" title="修改路径">' + icon('pencil', 14) + '</button>';
       html += '<button class="config-path-row__open" title="打开路径">' + icon('folder-open', 14) + '</button>';
       html += '<button class="config-path-row__remove" title="移除路径">' + icon('x', 14) + '</button></div>';
     });
@@ -677,7 +685,6 @@
     html += '<div class="config-editor__wm-field"><input type="text" class="config-bottombar__input config-bottombar__input--name" id="inputConfigName" value="' + escapeHtml((data && data.name) || '') + '"></div></div>';
     html += '</div></div>';
     container.innerHTML = html;
-    bindWatermarkPreview(container);
     buildConfigBar(); bindEditorEvents(); bindResizers(container); bindModifiedWatchers(container); runPrecheck();
     // 仅真正加载配置时（_configOrig 为 null）建立修改基线；局部重建（如水印变更）不重置，保证各部分修改相互独立
     if (state._configOrig === null || state._configOrig === undefined) {
@@ -691,31 +698,6 @@
     }
     refreshConfigModified();
   }
-  // 水印文件名悬浮预览：hover 时经主进程打开独立置顶小窗显示 PNG（可越出主窗口、按图比例自适应），透明 PNG 直接透底显示
-  function bindWatermarkPreview(container) {
-    var shown = false;
-    var lastMove = 0;
-    container.addEventListener('mouseover', function (e) {
-      var t = e.target && e.target.closest ? e.target.closest('.config-watermark__path') : null;
-      if (!t) { if (shown) { call('watermark_preview_hide'); shown = false; } return; }
-      var wm = state.configData && state.configData.watermark ? String(state.configData.watermark) : '';
-      if (!wm) return;
-      call('watermark_preview_move', e.clientX, e.clientY); // 先定位再显示，避免窗口先在默认位置闪现
-      call('watermark_preview_show', wm);
-      shown = true;
-    });
-    container.addEventListener('mousemove', function (e) {
-      if (!shown) return;
-      var now = Date.now();
-      if (now - lastMove < 16) return; // 约 60fps：平滑跟随（位置由主进程按真实光标计算，尺寸有 resizeGuard 兜底）
-      lastMove = now;
-      call('watermark_preview_move', e.clientX, e.clientY);
-    });
-    container.addEventListener('mouseleave', function () {
-      if (shown) { call('watermark_preview_hide'); shown = false; }
-    });
-  }
-
   function buildConfigBar() {
     var bar = $('configBar');
     if (!bar) return;
@@ -1055,6 +1037,15 @@
         }
         updatePathCount(); runPrecheck(); refreshPreviewIfModified(); refreshConfigModified();
       }
+      else if (t.classList.contains('config-path-row__browse')) {
+        var brRow = t.closest('.config-path-row');
+        var brInput = brRow.querySelector('.config-path-row__input');
+        call('pick_single_folder').then(function (np) {
+          if (!np) return;
+          brInput.value = np; brInput.title = np;
+          runPrecheck(); refreshPreviewIfModified(); refreshConfigModified();
+        }).catch(function (e) { setStatus('修改路径失败：' + e.message); });
+      }
       else if (t.classList.contains('config-path-row__open')) { var input = t.closest('.config-path-row').querySelector('.config-path-row__input'); call('open_path', input.value.trim()); }
       else if (t.classList.contains('config-exclude-row__remove')) {
         var exRow = t.closest('.config-exclude-row');
@@ -1100,13 +1091,23 @@
           }
         }]);
       } else {
-        showMenu(e.clientX, e.clientY, [{
-          label: '移除',
-          action: function () {
-            pRow.remove();
-            updatePathCount(); runPrecheck(); refreshPreviewIfModified(); refreshConfigModified();
+        showMenu(e.clientX, e.clientY, [
+          {
+            label: '在上一行新增路径',
+            action: function () { insertPathRow(pRow, 'before'); }
+          },
+          {
+            label: '在下一行新增路径',
+            action: function () { insertPathRow(pRow, 'after'); }
+          },
+          {
+            label: '移除',
+            action: function () {
+              pRow.remove();
+              updatePathCount(); runPrecheck(); refreshPreviewIfModified(); refreshConfigModified();
+            }
           }
-        }]);
+        ]);
       }
     };
     container.addEventListener('contextmenu', container._delegatedCtx);
@@ -1164,15 +1165,32 @@
     if (!v) { input.focus(); return; }
     if (addExcludeRow(v)) { input.value = ''; updateExcludeCount(); runPrecheck(); refreshPreviewIfModified(); }
   }
+  function pathRowHtml(value) {
+    var v = value == null ? '' : String(value);
+    return '<span class="config-path-row__drag" draggable="true" title="按住拖动排序">' + icon('grip-vertical', 14) + '</span><label class="config-path-row__checkbox" title="勾选 = 不轮询（添加 = 前缀）"><input type="checkbox" class="config-path-row__check"><span class="config-path-row__check-mark"></span></label><input type="text" class="config-path-row__input" value="' + escapeHtml(v) + '" title="' + escapeHtml(v) + '"><span class="config-path-row__precheck"><span class="config-path-row__badge precheck--pending">检测中…</span></span><button class="config-path-row__browse" title="修改路径">' + icon('pencil', 14) + '</button><button class="config-path-row__open" title="打开路径">' + icon('folder-open', 14) + '</button><button class="config-path-row__remove" title="移除路径">' + icon('x', 14) + '</button>';
+  }
   function addPathRow(path) {
     var p = String(path == null ? '' : path).trim();
     if (!p) return;
     var idx = $('pathList').querySelectorAll('.config-path-row').length;
     var row = document.createElement('div');
     row.className = 'config-path-row'; row.dataset.index = idx;
-    row.innerHTML = '<span class="config-path-row__drag" draggable="true" title="按住拖动排序">' + icon('grip-vertical', 14) + '</span><label class="config-path-row__checkbox" title="勾选 = 不轮询（添加 = 前缀）"><input type="checkbox" class="config-path-row__check"><span class="config-path-row__check-mark"></span></label><input type="text" class="config-path-row__input" value="' + escapeHtml(p) + '" title="' + escapeHtml(p) + '"><span class="config-path-row__precheck"><span class="config-path-row__badge precheck--pending">检测中…</span></span><button class="config-path-row__open" title="打开路径">' + icon('folder-open', 14) + '</button><button class="config-path-row__remove" title="移除路径">' + icon('x', 14) + '</button>';
+    row.innerHTML = pathRowHtml(p);
     $('pathList').appendChild(row);
     updatePathCount(); runPrecheck(); refreshPreviewIfModified();
+  }
+  // 在指定行之上/之下插入空白路径行（新增路径待填写），并聚焦新行输入框
+  function insertPathRow(refRow, pos) {
+    var row = document.createElement('div');
+    row.className = 'config-path-row';
+    row.innerHTML = pathRowHtml('');
+    var list = $('pathList');
+    if (pos === 'before') list.insertBefore(row, refRow);
+    else if (refRow.nextSibling) list.insertBefore(row, refRow.nextSibling);
+    else list.appendChild(row);
+    reindexPathRows(); updatePathCount(); runPrecheck(); refreshPreviewIfModified(); refreshConfigModified();
+    var inp = row.querySelector('.config-path-row__input');
+    if (inp) { inp.focus(); inp.select(); }
   }
   function addPathField() {
     call('pick_paths').then(function (paths) {
@@ -1225,7 +1243,7 @@
       var message = hits.length === 1
         ? '当前水印与项目「' + hits[0] + '」的主流水印一致。\n保存的内容将归属到哪个项目？'
         : '该水印在多个项目中均为主流水印，请选择归属项目：';
-      return showSaveDestDialog({ title: '水印归属提示', message: message, rows: rows }).then(function (v) { return v == null ? state.activeProject : v; });
+      return showSaveDestDialog({ title: '水印归属提示', message: message, rows: rows }).then(function (v) { return v == null ? null : v; });
     }).catch(function () { return state.activeProject; });
   }
   // 另存到其他项目：目标项目已有同名配置 → 覆盖其最新版本；无 → 保存为当日配置（原文件保留）
@@ -1247,6 +1265,7 @@
     var ed = getEditorState();
     var path = state.configData.path;
     return resolveDestProject().then(function (dest) {
+      if (dest === null) { setStatus('已取消保存'); return false; }
       if (dest !== state.activeProject) {
         // 另存到其他项目：原文件保留
         return saveAsToProject(dest, ed).then(function (r) {
@@ -1279,6 +1298,7 @@
     var ed = getEditorState();
     var configName = $('inputConfigName').value.trim() || state.activeTxt;
     return resolveDestProject().then(function (dest) {
+      if (dest === null) { setStatus('已取消保存'); return false; }
       return call('save_config_today', dest, state.activeTxt, configName, ed.folders, ed.excludes, ed.watermark).then(function (r) {
         if (r && r.ok) { setStatus('已保存为当日配置：' + r.path); jumpToVersionPath(r.path, dest); return true; }
         setStatus('保存失败：' + ((r && r.error) || '未知错误')); return false;
@@ -1305,6 +1325,16 @@
       if (state.activeVersion) loadConfig(state.activeVersion.path); else { state.configData = null; buildCenterBottom(); buildRightPanel(); }
     }).catch(function (e) { setStatus('刷新版本失败：' + e.message); });
   }
+  // 侧栏「新增配置」：在当前选定项目下新建空白配置（今日目录），完成后定位并打开
+  function createNewConfig() {
+    var pr = state.expandedProject || state.activeProject;
+    if (!pr) { setStatus('请先在项目列表中选择要新增配置的项目'); return; }
+    call('new_empty_config', pr).then(function (r) {
+      if (!(r && r.ok)) { setStatus('新增配置失败：' + ((r && r.error) || '未知错误')); return; }
+      setStatus('已新增空白配置：' + r.path);
+      jumpToVersionPath(r.path, pr);
+    }).catch(function (e) { setStatus('新增配置失败：' + e.message); });
+  }
   function runScript() {
     if (_envBad()) { setStatus('运行环境缺失'); return; }
     if (!state.activeVersion) return;
@@ -1317,6 +1347,7 @@
     var ed = getEditorState();
     var configName = $('inputConfigName').value.trim() || state.activeTxt;
     resolveDestProject().then(function (dest) {
+      if (dest === null) { setStatus('已取消启动'); return; }
       call('save_config_today', dest, state.activeTxt, configName, ed.folders, ed.excludes, ed.watermark).then(function (saved) {
         if (!saved || !saved.ok) { setStatus('保存失败：' + ((saved && saved.error) || '未知错误')); return; }
         setStatus('已保存并启动脚本：' + saved.path);
@@ -2335,14 +2366,17 @@
     if (probeCancel) probeCancel.addEventListener('click', function () { setStatus('正在取消后台预检测…'); call('cancel_precheck'); });
     document.addEventListener('vl:reset-center', function () { collapsePreviewPanel(); checkConfigModifiedBeforeLeave(resetCenterToLaunch); });
     $('sidebarTree').addEventListener('scroll', syncAzHighlight);
-    // 右键项目名：主流水印设置（复刻虚拟项目无配置水印，不提供）
+    // 右键项目名：打开项目位置 / 主流水印设置（复刻虚拟项目无配置水印，不提供）
     $('sidebarTree').addEventListener('contextmenu', function (e) {
       var ph = e.target.closest('.tree-project__name');
       if (!ph) return;
       var pname = ph.getAttribute('data-project');
       if (!pname || pname === REPLICA_PROJECT) return;
       e.preventDefault();
-      showMenu(e.clientX, e.clientY, [{ label: '主流水印设置', action: function () { openProjectWatermarkDialog(pname); } }]);
+      showMenu(e.clientX, e.clientY, [
+        { label: '打开项目位置', action: function () { call('open_project_dir', pname).then(function (r) { if (!(r && r.ok)) setStatus('打开项目失败：' + ((r && r.error) || '未知错误')); }).catch(function (err) { setStatus('打开项目失败：' + err.message); }); } },
+        { label: '主流水印设置', action: function () { openProjectWatermarkDialog(pname); } }
+      ]);
     });
     $('sidebarTree').addEventListener('click', function (e) {
       var projectHeader = e.target.closest('.tree-project__name');
@@ -2429,6 +2463,8 @@
     });
     $('btnSortName').addEventListener('click', function () { if (state.sortMode === 'name') state.sortAsc = !state.sortAsc; else state.sortMode = 'name'; updateSortButtons(); buildSidebar(); });
     $('btnSortTime').addEventListener('click', function () { if (state.sortMode === 'time') state.sortTimeDesc = !state.sortTimeDesc; else state.sortMode = 'time'; updateSortButtons(); buildSidebar(); });
+    var btnNewCfg = $('btnNewConfig');
+    if (btnNewCfg) btnNewCfg.addEventListener('click', createNewConfig);
     $('dateBranches').addEventListener('click', function (e) { var btn = e.target.closest('.date-branch-btn'); if (!btn) return; if (btn.getAttribute('data-date') != null) { var switching = state.activeLogPath != null; state.activeLogDate = btn.getAttribute('data-date'); state.activeLogPath = btn.getAttribute('data-file') || null; buildDateBranches(switching); buildCenterBottom(); return; } selectVersion(btn.getAttribute('data-label')); });
     $('dateBranches').addEventListener('dblclick', function (e) { var btn = e.target.closest('.date-branch-btn'); if (!btn) return; var fp = btn.getAttribute('data-file'); if (fp) { call('open_parent', fp); return; } var label = btn.getAttribute('data-label'); var v = state.versions.find(function (x) { return x.label === label; }); if (v) call('open_parent', v.path); });
     $('dateBranches').addEventListener('contextmenu', function (e) {
@@ -2436,21 +2472,77 @@
       if (!btn) return;
       e.preventDefault();
       var fp = btn.getAttribute('data-file');
+      var target = '';
+      var modeName = '日志';
       if (fp) {
+        target = fp;
+        modeName = '日志';
         showMenu(e.clientX, e.clientY, [
           { label: '打开文件', action: function () { call('open_path', fp); } },
-          { label: '打开路径', action: function () { call('open_parent', fp); } }
+          { label: '打开路径', action: function () { call('open_parent', fp); } },
+          { label: '移除', action: function () { confirmRemoveBranch(target, modeName); } }
         ]);
         return;
       }
       var label = btn.getAttribute('data-label');
       var v = state.versions.find(function (x) { return x.label === label; });
       if (!v) return;
+      target = v.path;
+      modeName = '配置';
       showMenu(e.clientX, e.clientY, [
         { label: '打开文件', action: function () { call('open_path', v.path); } },
-        { label: '打开路径', action: function () { call('open_parent', v.path); } }
+        { label: '打开路径', action: function () { call('open_parent', v.path); } },
+        { label: '移除', action: function () { confirmRemoveBranch(target, modeName); } }
       ]);
     });
+    // 移除日期分支：三选一弹窗（样式同任务清除弹窗）——仅删当前 / 双模式 / 连同成片文件夹
+    // 文案按当前分支模式动态显示（配置↔日志）；目录无另一模式 TXT 时禁用双模式按钮
+    function confirmRemoveBranch(target, modeName) {
+      if (!target) return;
+      call('branch_other_txt', target).then(function (info) {
+        info = info || {};
+        openRemoveBranchDialog(target, modeName, !!info.hasOther);
+      }).catch(function () {
+        openRemoveBranchDialog(target, modeName, true);
+      });
+    }
+    function openRemoveBranchDialog(target, modeName, hasOther) {
+      var otherName = modeName === '日志' ? '配置' : '日志';
+      var bothLabel = '移除' + modeName + '/' + otherName;
+      var bothDesc = hasOther
+        ? '连同该日期下的【' + otherName + '】TXT一并删除（成片保留）'
+        : '不可用（该日期下没有对应的【' + otherName + '】TXT）';
+      showDialog({
+        title: '移除该' + modeName,
+        cssClass: 'modal-card--wide',
+        message: target + '\n\n请选择移除方式：\n' +
+          '· 仅移除该' + modeName + '：只删除当前【' + modeName + '】文件\n' +
+          '· ' + bothLabel + '：' + bothDesc + '\n' +
+          '· 连同成片移除：删除整个文件夹（含成片视频）',
+        buttons: [
+          { label: '仅移除该' + modeName, value: 'txt', primary: true },
+          { label: bothLabel, value: 'both', primary: true, disabled: !hasOther, hint: hasOther ? '' : '该日期下没有对应的' + otherName + 'TXT' },
+          { label: '连同成片移除', value: 'folder', danger: true }
+        ]
+      }).then(function (v) {
+        if (!v) return;
+        if (v === 'folder') {
+          var targetDir = String(target).replace(/[\\/][^\\/]*$/, '');
+          showDialog({
+            title: '确认整体删除',
+            message: '将删除整个文件夹（含成片视频及全部子项）：\n' + targetDir + '\n\n删除后无法恢复，是否继续？',
+            buttons: [ { label: '继续删除', value: 'go', danger: true, primary: true } ]
+          }).then(function (ok) { if (ok) doRemoveBranch(target, v); });
+        } else doRemoveBranch(target, v);
+      });
+    }
+    function doRemoveBranch(target, scope) {
+      call('remove_branch', target, scope).then(function (r) {
+        if (!(r && r.ok)) { setStatus('移除失败：' + ((r && r.error) || '未知错误')); return; }
+        setStatus('已移除' + (scope === 'folder' ? '日期文件夹' : '分支文件') + '，并清理空文件夹');
+        refreshData();
+      }).catch(function (err) { setStatus('移除失败：' + err.message); });
+    }
     $('modeFilelist').addEventListener('click', function () {
       if (state.activeLogDate) {
         // 日志 → 配置：按当前选中日志重新定位到对应配置文件版本（正本/序号 或 当日外部 *）

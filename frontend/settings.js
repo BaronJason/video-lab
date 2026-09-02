@@ -214,6 +214,8 @@
       var cbv = s.close_behavior === 'exit' ? 'exit' : 'tray';
       document.querySelectorAll('input[name="closeBehavior"]').forEach(function (r) { r.checked = r.value === cbv; });
       document.querySelectorAll('input[name="updateSource"]').forEach(function (r) { r.checked = r.value === s.update_source; });
+      var um = s.update_mode === 'auto' ? 'auto' : 'notify';
+      document.querySelectorAll('input[name="updateMode"]').forEach(function (r) { r.checked = r.value === um; });
       var storage = s.config_storage === 'appdata' ? 'appdata' : 'program';
       document.querySelectorAll('input[name="configStorage"]').forEach(function (r) { r.checked = r.value === storage; });
       var pp = $('cfgPathProgram'), pa = $('cfgPathAppdata');
@@ -335,6 +337,7 @@
       var skin = document.documentElement.getAttribute('data-skin') || THEMES[0].id;
       var storageEl = document.querySelector('input[name="configStorage"]:checked');
       var srcEl = document.querySelector('input[name="updateSource"]:checked');
+      var umEl = document.querySelector('input[name="updateMode"]:checked');
       var cbEl = document.querySelector('input[name="closeBehavior"]:checked');
       api.save_settings({
         skin: skin,
@@ -345,6 +348,7 @@
         autostart: !!$('autoStart').checked,
         close_behavior: cbEl ? cbEl.value : 'tray',
         update_source: srcEl ? srcEl.value : 'gitee',
+        update_mode: umEl ? umEl.value : 'notify',
         config_storage: storageEl ? storageEl.value : 'program',
         batch: state.batch,
         replica: state.replica
@@ -374,7 +378,10 @@
       api.check_update(false).then(function (info) {
         if (!info) { setStatus('检查更新失败', false); return; }
         if (info.busy) { setStatus('已有更新操作进行中，请稍候', true); return; }
-        if (info.hasUpdate) showUpdateConfirm(info);
+        if (info.hasUpdate) {
+          if (info.autoDownload) setStatus('发现新版本 v' + info.latest + '，已自动开始下载，进度见主窗口状态栏', true);
+          else showUpdateConfirm(info);
+        }
         else if (info.ok) setStatus('已是最新版本 v' + info.current, true);
         else setStatus('检查更新失败：' + (info.error || '未知错误'), false);
       }).catch(function () { setStatus('检查更新失败', false); });

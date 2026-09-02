@@ -120,14 +120,27 @@
           </label>
           <select class="form-input opt-time-select" id="checkUpdateHour" title="每日定时检查更新时间（24小时制整点，默认 9:00）"></select>
         </div>
-        <div class="opt-row">
+        <div class="opt-row opt-row--spaced" title="更新方式：发现新版本后自动检查并下载 / 仅提醒（对启动时检查、手动检查、定时检查均生效）">
+          <label class="opt-radio">
+            <input type="radio" name="updateMode" value="auto">
+            <span class="opt-radio__dot"></span>
+            <span class="opt-radio__label">自动检查并下载</span>
+          </label>
+          <label class="opt-radio">
+            <input type="radio" name="updateMode" value="notify">
+            <span class="opt-radio__dot"></span>
+            <span class="opt-radio__label">有新版本提醒我</span>
+          </label>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-group__label">仓库选择</label>
+        <div class="opt-row opt-row--spaced" title="更新源：发现新版本时从所选仓库检查并下载更新">
           <label class="opt-radio">
             <input type="radio" name="updateSource" value="gitee">
             <span class="opt-radio__dot"></span>
             <span class="opt-radio__label">码云（Gitee）<span class="opt-path">gitee.com/hirannu/video-lab</span></span>
           </label>
-        </div>
-        <div class="opt-row">
           <label class="opt-radio">
             <input type="radio" name="updateSource" value="github">
             <span class="opt-radio__dot"></span>

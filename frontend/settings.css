@@ -294,6 +294,8 @@ body {
 
 /* ─── 更新 / 配置保存位置（勾选与单选） ─── */
 .opt-row { display: flex; align-items: center; padding: 4px 0; gap: 8px; }
+/* 并排单选组（更新方式 / 仓库选择）：加大行内间距与行距，避免拥挤 */
+.opt-row--spaced { padding: 8px 0; gap: 24px; }
 /* 每日定时检查更新下拉框：紧凑宽度，与左侧勾选间隔 8px */
 .opt-time-select { width: 80px; flex-shrink: 0; height: 30px; padding: 0 6px; cursor: pointer; }
 .opt-check,

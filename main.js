@@ -586,9 +586,19 @@ async function checkForUpdate(opts) {
     writeUpdateLog('检查成功：current=' + APP_VERSION + ' latest=v' + tag + ' hasUpdate=' + hasUpdate + ' (' + (Date.now() - t0) + 'ms)');
     if (hasUpdate) {
       if (!silent) sendToSettings('check_update_result', info);
-      if ((asset || parts.length) && notifyMain) sendToMain('update_available', info);
-      else if (!silent && notifyMain) sendToMain('update_none', Object.assign({}, info, { message: '发现新版本，但 Release 缺少便携包' }));
-      else if (!silent && notifyMain) sendToMain('update_none', Object.assign({}, info, { message: '发现新版本，但 Release 缺少便携包' }));
+      if (asset || parts.length) {
+        // 更新方式=自动检查并下载：发现新版本立即自动下载，不弹「发现新版本」提示条；
+        // 进度直接走主窗口状态栏，下载完成后再弹「更新并重启」操作条；启动/定时/手动检查均生效
+        if (loadConfig().update_mode === 'auto') {
+          info.autoDownload = true;
+          writeUpdateLog('更新方式=自动下载，发现 v' + tag + ' 开始自动下载');
+          startUpdate().catch((e) => writeUpdateLog('自动下载异常：' + ((e && e.message) || e)));
+          return info;
+        }
+        if (notifyMain) sendToMain('update_available', info);
+      } else if (!silent && notifyMain) {
+        sendToMain('update_none', Object.assign({}, info, { message: '发现新版本，但 Release 缺少便携包' }));
+      }
     } else {
       if (!silent) sendToSettings('check_update_result', info);
       if (!silent && notifyMain) sendToMain('update_none', info);
@@ -1039,6 +1049,7 @@ function registerIpc() {
       check_update_daily: c.check_update_daily === true,
       check_update_hour: (() => { const h = parseInt(c.check_update_hour, 10); return (h >= 0 && h <= 23) ? h : 9; })(),
       update_source: c.update_source === 'github' ? 'github' : 'gitee',
+      update_mode: c.update_mode === 'auto' ? 'auto' : 'notify',
       config_storage: c.config_storage === 'appdata' ? 'appdata' : 'program',
       config_path: configFilePath(),
       config_path_program: path.dirname(programConfigPath()),   // 显示目录（含配置与 Cache）
@@ -1063,6 +1074,7 @@ function registerIpc() {
       if (typeof s.autostart === 'boolean') cfg.autostart = s.autostart;
       if (s.close_behavior === 'exit' || s.close_behavior === 'tray') cfg.close_behavior = s.close_behavior;
       if (s.update_source === 'github' || s.update_source === 'gitee') cfg.update_source = s.update_source;
+      if (s.update_mode === 'auto' || s.update_mode === 'notify') cfg.update_mode = s.update_mode;
       if (s.batch && typeof s.batch === 'object') cfg.batch = Object.assign({}, DEFAULT_CONFIG.batch, s.batch);
       if (s.replica && typeof s.replica === 'object') cfg.replica = Object.assign({}, DEFAULT_CONFIG.replica, s.replica);
     }

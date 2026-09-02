@@ -29,6 +29,7 @@ const DEFAULT_CONFIG = {
   check_update_daily: false,  // 每日定时检查更新（整点触发，需 app 保持运行）
   check_update_hour: 9,       // 每日定时检查更新时间（24 小时制整点 0-23，默认 9）
   update_source: 'gitee',     // 更新源：gitee=码云 release / github=GitHub release，默认码云
+  update_mode: 'notify',      // 更新方式：notify=有新版本仅提醒（默认）/ auto=自动检查并下载
   config_storage: 'program',  // 配置文件保存位置：program=程序所在目录 / appdata=%APPDATA%\Video Lab
   // video_batch.ps1 顶部全局参数（文件内同名常量被顶部读环境变量 BATCH_* 覆盖）
   batch: {

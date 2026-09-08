@@ -77,12 +77,25 @@ function moveConfigFile(target) {
     fs.mkdirSync(path.dirname(target), { recursive: true });
     if (fs.existsSync(src)) fs.copyFileSync(src, target);
     try { if (fs.existsSync(src) && path.resolve(target) !== path.resolve(src)) fs.unlinkSync(src); } catch (e) {}
+    // 水印设置文件（设置数据）跟随 config 一并迁移，避免切保存位置后丢失设置
+    migrateWatermarkToDir(path.dirname(target));
     configFile = target;
     pruneEmptyDirs();
     return { ok: true, moved: true };
   } catch (e) {
     return { ok: false, error: e.message };
   }
+}
+// 把水印设置文件（config 同级）搬到指定目录；目标已有则不覆盖，新旧同路径则跳过
+function migrateWatermarkToDir(dir) {
+  try {
+    const name = watermarkCacheName;
+    const from = path.join(path.dirname(configFile), name);
+    const to = path.join(dir, name);
+    if (path.resolve(from) === path.resolve(to)) return;
+    if (fs.existsSync(from) && !fs.existsSync(to)) fs.copyFileSync(from, to);
+    if (fs.existsSync(to) && path.resolve(from) !== path.resolve(to)) { try { fs.unlinkSync(from); } catch (e) {} }
+  } catch (e) {}
 }
 // 迁移 Cache：随「配置和数据保存位置」切换一并移动 Cache 文件夹，并同步缓存路径与 Api 引用
 function moveCaches() {
@@ -101,7 +114,14 @@ function moveCaches() {
   logCachePath = path.join(cacheDir, app.isPackaged ? 'log_cache.json' : 'video_lab_log_cache.json');
   clipCachePath = path.join(cacheDir, app.isPackaged ? 'clip_cache.json' : 'video_lab_clip_cache.json');
   taskStatePath = path.join(cacheDir, app.isPackaged ? 'task_cache.json' : 'video_lab_task_cache.json');
-  watermarkCachePath = path.join(cacheDir, app.isPackaged ? 'watermark_cache.json' : 'video_lab_watermark_cache.json');
+  // 水印设置跟随 config 同级存放（不进 Cache）：Cache 整体复制时会把旧 Cache 版一并带过来，这里将其搬到设置侧并清理 Cache 副本
+  const wmTarget = path.join(path.dirname(configFilePath()), watermarkCacheName);
+  try {
+    const wmInNewCache = path.join(newCache, watermarkCacheName);
+    if (fs.existsSync(wmInNewCache) && !fs.existsSync(wmTarget)) fs.copyFileSync(wmInNewCache, wmTarget);
+    if (fs.existsSync(wmInNewCache)) fs.unlinkSync(wmInNewCache);
+  } catch (e) {}
+  watermarkCachePath = wmTarget;
   api.cachePath = scanCachePath;
   api.videoCachePath = videoCachePath;
   api.logCachePath = logCachePath;
@@ -171,6 +191,7 @@ function scheduleDailyUpdateCheck() {
     scheduleDailyUpdateCheck();
   }, Math.min(next.getTime() - now.getTime(), 24 * 3600 * 1000));
 }
+
 const root = resolveRoot(config);
 // 缓存统一放「配置和数据的保存位置」下 Cache 子文件夹（打包版）；开发版放临时目录避免污染源码：
 //   配置在程序目录 → Cache 在程序目录；配置在 AppData → Cache 也在 AppData（切换存储位置时一并迁移）
@@ -214,12 +235,23 @@ alignCacheToConfig();
 //   video_cache.json  —— 预检测(ffprobe)缓存
 //   log_cache.json    —— 日志 txt 缓存（刷新配置时一并收集）
 let scanCachePath = path.join(cacheDir, app.isPackaged ? 'scan_cache.json' : 'video_lab_scan_cache.json');
-let videoCachePath = path.join(cacheDir, 'video_cache.json');
+let videoCachePath = path.join(cacheDir, app.isPackaged ? 'video_cache.json' : 'video_lab_video_cache.json');
 let logCachePath = path.join(cacheDir, app.isPackaged ? 'log_cache.json' : 'video_lab_log_cache.json');
 // 成片名搜索缓存（仅存成片条目精简字段，目录 mtime 变化自动失效重建）
 let clipCachePath = path.join(cacheDir, app.isPackaged ? 'clip_cache.json' : 'video_lab_clip_cache.json');
 let taskStatePath = path.join(cacheDir, app.isPackaged ? 'task_cache.json' : 'video_lab_task_cache.json');
-let watermarkCachePath = path.join(cacheDir, app.isPackaged ? 'watermark_cache.json' : 'video_lab_watermark_cache.json');
+// 水印项目设置缓存：项目默认分组数和主流水印启用/选择结果，属于设置而非缓存，放在 config.json 同级，不随 Cache 清空
+const watermarkCacheName = app.isPackaged ? 'watermark_cache.json' : 'video_lab_watermark_cache.json';
+let watermarkCachePath = path.join(path.dirname(configFilePath()), watermarkCacheName);
+// 迁移旧版本存放在 Cache 目录下的水印设置文件到设置侧（config.json 同级）；仅当设置侧无文件且 Cache 侧有时才搬运
+(function migrateWatermarkFromCache() {
+  try {
+    const old = path.join(cacheDir, watermarkCacheName);
+    if (old === watermarkCachePath || !fs.existsSync(old) || fs.existsSync(watermarkCachePath)) return;
+    fs.copyFileSync(old, watermarkCachePath);
+    fs.unlinkSync(old);
+  } catch (e) {}
+})();
 // 迁移旧任务快照命名（task_snapshot.json → task_cache.json）
 (function migrateTaskCache() {
   const old = path.join(cacheDir, app.isPackaged ? 'task_snapshot.json' : 'video_lab_task_snapshot.json');
@@ -272,10 +304,9 @@ function createTray() {
     tray = new Tray(trayIcon());
     tray.setToolTip('Video Lab');
   }
-  // 托盘菜单为自绘 HTML 窗口（跟随皮肤），左/右键均唤出；双击恢复主窗口
-  tray.on('click', () => showTrayMenu());
+  // 左键直接唤起主窗口；右键唤出自绘托盘菜单
+  tray.on('click', () => { hideTrayMenu(); showMainWindow(); });
   tray.on('right-click', () => showTrayMenu());
-  tray.on('double-click', () => { hideTrayMenu(); showMainWindow(); });
 }
 // 自绘托盘菜单窗口：皮肤变量从主窗口实时读取注入（单一来源，避免皮肤定义重复漂移）；
 // 高度按内容自适应，锚定托盘图标上方弹出，失去焦点自动收起
@@ -453,14 +484,8 @@ function sendToMain(channel, payload) {
 function sendToSettings(channel, payload) {
   try { if (settingsWin && !settingsWin.isDestroyed()) settingsWin.webContents.send(channel, payload); } catch (e) {}
 }
-// 更新链路日志（Cache/update.log），便于排查检查/下载问题
-function writeUpdateLog(line) {
-  try {
-    const dir = path.join(cacheDir, 'update');
-    fs.mkdirSync(dir, { recursive: true });
-    fs.appendFileSync(path.join(dir, 'update.log'), '[' + new Date().toISOString() + '] ' + line + '\r\n', 'utf-8');
-  } catch (e) {}
-}
+// 更新链路日志：按用户要求不再写入 Cache/update/update.log 缓存，保留调用点为 no-op
+function writeUpdateLog(line) {}
 // Electron net 请求：走 Chromium 网络栈（跟随系统代理），自动跟随重定向
 function netGet(url, timeoutMs) {
   return new Promise((resolve, reject) => {
@@ -978,10 +1003,19 @@ function registerIpc() {
   ipcMain.handle('check_watermark_project', (e, project, wm) => api.checkWatermarkProject(project, wm));
   ipcMain.handle('find_watermark_project', (e, project, wm) => api.findWatermarkProject(project, wm));
   ipcMain.handle('get_project_watermark', (e, project) => api.getProjectWatermark(project));
-  ipcMain.handle('set_project_watermark', (e, project, wm, enabled, applyToAll) => api.setProjectWatermark(project, wm, enabled, applyToAll));
+  ipcMain.handle('set_project_watermark', (e, project, wm, enabled, applyToAll, group, groupEnabled) => api.setProjectWatermark(project, wm, enabled, applyToAll, group, groupEnabled));
   ipcMain.handle('run_batch', (e, p, count, group) => api.runBatch(p, count, group));
   ipcMain.handle('run_replica', (e, logPath, mode, entryVideo) => api.runReplica(logPath, mode, entryVideo));
+  ipcMain.handle('continue_replica', (e, taskId) => api.continueReplica(taskId));
   ipcMain.handle('list_tasks', () => api.snapshotTasks());
+  ipcMain.handle('locate_task', (e, taskId, target) => {
+    const info = api.taskLocate(taskId);
+    if (!info || !info.ok) return info;
+    showMainWindow();
+    const payload = Object.assign({}, info, { target: target === 'log' ? 'log' : 'config', taskId });
+    try { if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('locate_request', payload); } catch (err) {}
+    return info;
+  });
   ipcMain.handle('stop_task', (e, id) => api.stopTask(id));
   ipcMain.handle('rerun_task', (e, id) => api.rerunTask(id));
   ipcMain.handle('pin_task', (e, id) => api.pinTask(id));
@@ -1024,6 +1058,30 @@ function registerIpc() {
     return { ok: true };
   });
   ipcMain.handle('open_task_window', () => { createTaskWindow(); return { ok: true }; });
+  // 遮罩叠加（复用主窗口）：任务提交 / 断点续跑 / 项目与素材只读扫描 / 水印文件选择
+  ipcMain.handle('run_mask', (e, payload) => api.runMask(payload));
+  ipcMain.handle('continue_mask', (e, taskId) => api.continueMask(taskId));
+  ipcMain.handle('list_mask_projects', () => api.listMaskProjects());
+  ipcMain.handle('list_mask_videos', (e, dir) => api.listMaskVideos(dir));
+  ipcMain.handle('list_mask_masks', (e, dir) => api.listMaskMasks(dir));
+  ipcMain.handle('scan_mask_raw_dirs', (e, dir) => api.scanMaskRawDirs(dir));
+  ipcMain.handle('scan_mask_theme_sig', (e, dir) => api.maskThemeSig(dir));
+  ipcMain.handle('list_mask_logs', (e, projectPath) => api.listMaskLogs(projectPath));
+  ipcMain.handle('get_mask_session', (e, name) => api.getMaskSession(name));
+  ipcMain.handle('save_mask_session', (e, name, data) => api.saveMaskSession(name, data));
+  ipcMain.handle('clear_mask_session', (e, name) => api.clearMaskSession(name));
+  ipcMain.handle('get_mask_default_dir', (e, name) => api.getMaskDefaultDir(name));
+  ipcMain.handle('set_mask_default_dir', (e, name, dir) => api.setMaskDefaultDir(name, dir));
+  ipcMain.handle('delete_mask_related', (e, projectPath, targets) => api.deleteMaskRelated(projectPath, targets));
+  ipcMain.handle('delete_mask_videos', (e, projectPath, names) => api.deleteMaskVideos(projectPath, names));
+  ipcMain.handle('move_mask_out', (e, projectPath, videoName, newDir) => api.moveMaskOut(projectPath, videoName, newDir));
+  ipcMain.handle('delete_secondary_products', (e, projectPath, maskOutPaths) => api.deleteSecondaryProducts(projectPath, maskOutPaths));
+  ipcMain.handle('choose_mask_file', async (e, prev) => {
+    const win = mainWin && !mainWin.isDestroyed() ? mainWin : null;
+    const r = await dialog.showOpenDialog(win, { title: '选择水印文件', defaultPath: prev || (api.getRoot() || os.homedir()), properties: ['openFile'], filters: [{ name: '视频水印', extensions: ['mov', 'mp4'] }] });
+    if (r.canceled || !r.filePaths || !r.filePaths.length) return { ok: false };
+    return { ok: true, path: r.filePaths[0] };
+  });
   ipcMain.handle('clean_duplicate_star', (e, commit) => api.cleanDuplicateStar(!!commit));
   ipcMain.handle('open_external', async (e, url) => { if (typeof url === 'string' && /^https?:\/\//.test(url)) { const err = await shell.openExternal(url); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '无效链接' }; });
   ipcMain.handle('open_settings_window', () => { openSettingsWindow(); return { ok: true }; });
@@ -1045,6 +1103,7 @@ function registerIpc() {
       root: c.root || '',
       batch: Object.assign({}, DEFAULT_CONFIG.batch, c.batch),
       replica: Object.assign({}, DEFAULT_CONFIG.replica, c.replica),
+      mask: Object.assign({}, DEFAULT_CONFIG.mask, c.mask),
       auto_check_update: c.auto_check_update !== false,
       check_update_daily: c.check_update_daily === true,
       check_update_hour: (() => { const h = parseInt(c.check_update_hour, 10); return (h >= 0 && h <= 23) ? h : 9; })(),
@@ -1077,6 +1136,7 @@ function registerIpc() {
       if (s.update_mode === 'auto' || s.update_mode === 'notify') cfg.update_mode = s.update_mode;
       if (s.batch && typeof s.batch === 'object') cfg.batch = Object.assign({}, DEFAULT_CONFIG.batch, s.batch);
       if (s.replica && typeof s.replica === 'object') cfg.replica = Object.assign({}, DEFAULT_CONFIG.replica, s.replica);
+      if (s.mask && typeof s.mask === 'object') cfg.mask = Object.assign({}, DEFAULT_CONFIG.mask, s.mask);
     }
     // 配置保存位置切换：迁移并删除旧位置文件（迁移式，防止两处配置不一致）
     const target = cfg.config_storage === 'appdata' ? appdataConfigPath() : programConfigPath();
@@ -1164,6 +1224,12 @@ function registerIpc() {
   ipcMain.handle('set_skin', (e, skin) => { const v = String(skin || '').trim(); config.skin = v || 'white_blue'; saveConfig(config); return config.skin; });
   ipcMain.handle('open_path', async (e, p) => { const target = path.resolve(p); if (fs.existsSync(target)) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '路径不存在' }; });
   ipcMain.handle('open_parent', async (e, p) => { const target = path.dirname(path.resolve(p)); if (fs.existsSync(target)) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '路径不存在' }; });
+  // 打开单个文件所在的文件夹并在资源管理器中选中该文件（项目所有「打开文件夹」类操作统一走此逻辑）
+  ipcMain.handle('open_folder_select', async (e, p) => {
+    const target = path.resolve(String(p || '').replace(/^"|"$/g, ''));
+    if (target && fs.existsSync(target)) { shell.showItemInFolder(target); return { ok: true }; }
+    return { ok: false, error: '路径不存在' };
+  });
   ipcMain.handle('open_project_dir', async (e, project) => {
     const root = api.getRoot();
     const target = path.resolve(root || '', String(project || ''));
@@ -1262,8 +1328,10 @@ function handleMainWindowClose() {
 }
 
 function createWindow() {
-  mainWin = new BrowserWindow({ title: 'Video Lab', width: 1360, height: 860, minWidth: 1120, minHeight: 700, frame: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
+  mainWin = new BrowserWindow({ title: 'Video Lab', width: 1360, height: 860, minWidth: 1120, minHeight: 700, frame: false, show: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
   mainWin.loadFile(path.join(__dirname, 'frontend', 'index.html'));
+  // 普通启动：页面就绪后显示；开机自启（--autostart）保持隐藏，仅托盘常驻
+  mainWin.once('ready-to-show', () => { if (!IS_AUTOSTART) mainWin.show(); });
   mainWin.on('close', (e) => {
     if (!isQuitting) { e.preventDefault(); handleMainWindowClose(); }
   });
@@ -1284,7 +1352,8 @@ function openGuideWindow() {
 // 跳过（root 仍无效）时保持 root 为空：主窗口进入「空项目列表 + 居中选择路径」引导态
 async function ensureConfig() {
     const isDir = (p) => { try { return p && fs.existsSync(p) && fs.statSync(p).isDirectory(); } catch (e) { return false; } };
-    if (!isDir(config.root)) {
+    // 开机自启为静默后台启动：配置缺失也不弹首次引导窗，保持无打扰（用户稍后手动打开时再引导）
+    if (!IS_AUTOSTART && !isDir(config.root)) {
       await openGuideWindow(); // 保存或右上角关闭（跳过）都会关闭该窗口
     }
     api.setRoot(isDir(config.root) ? config.root : '');
@@ -1300,11 +1369,9 @@ app.whenReady().then(async () => {
   await ensureConfig();
   createTray();
   createWindow();
-  // 开机自启（--autostart）：静默到托盘常驻；延迟避开开机 IO 高峰后后台预热工作目录（扫描+索引+日志），不打扰用户；
-  // 用户随后打开软件时由单实例锁唤起现有实例（秒开）
+  // 开机自启（--autostart）：窗口已通过 show:false + ready-to-show 保持隐藏，进程静默常驻托盘
   if (IS_AUTOSTART && mainWin && !mainWin.isDestroyed()) {
     mainWin.hide();
-    setTimeout(() => { try { api.listProjects(true); } catch (e) {} }, 30000);
   }
   // 启动自动检查更新（仅检查；UPDATE_ENABLED=false 时便携版静默停用）
   if (UPDATE_ENABLED && mainWin && !mainWin.isDestroyed()) {
@@ -1327,7 +1394,7 @@ app.on('before-quit', (e) => {
     askDiscardConfig();
     return;
   }
-  if (api.hasRunningTask() && !quitConfirmed) {
+  if ((api.hasRunningTask() || api.hasQueuedTask()) && !quitConfirmed) {
     e.preventDefault();
     showMainWindow();
     if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('confirm_quit_request');

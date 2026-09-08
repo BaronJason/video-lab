@@ -47,6 +47,11 @@
       if (bcloseBtn(e.target)) return;
       if (window.txapi && txapi.window_toggle_maximize) txapi.window_toggle_maximize();
     });
+    // 主窗口模式切换按钮：仅主窗口标题栏有（其他窗口无此元素，跳过即可）
+    var modeBtn = $('winModeToggle');
+    if (modeBtn) modeBtn.addEventListener('click', function () {
+      try { document.dispatchEvent(new CustomEvent('vl:toggle-mask')); } catch (e) {}
+    });
     function bcloseBtn(el) { return !!(el && el.closest && el.closest('[data-wctl]')); }
     if (window.txapi && txapi.on_window_max_changed) {
       txapi.on_window_max_changed(function (m) {

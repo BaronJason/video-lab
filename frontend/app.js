@@ -96,23 +96,30 @@
   // 主流水印设置弹窗：启用判定复选框 + 主流水印行（样式照搬水印 PNG 行）+ 保存/保存并更改/取消
   function openProjectWatermarkDialog(project) {
     call('get_project_watermark', project).then(function (r) {
-      if (!r || !r.ok) { alertDialog('读取主流水印失败：' + ((r && r.error) || '未知错误')); return; }
-      var curWm = String(r.main || '').trim();
+      if (!r || !r.ok) { alertDialog('读取项目设置失败：' + ((r && r.error) || '未知错误')); return; }
+      var curWm0 = String(r.main || '').trim();
+      var curWm = curWm0;
+      var wmEn0 = r.enabled === true;
+      var curGroup = parseInt(r.group, 10) || 0;
+      var curGroupEn = r.groupEnabled === true;
       var overlay = document.createElement('div');
       overlay.className = 'modal-overlay';
       var card = document.createElement('div');
       card.className = 'modal-card modal-card--wm';
       card.innerHTML =
         '<button type="button" class="modal-close" title="关闭">✕</button>' +
-        '<div class="modal__title">主流水印设置</div>' +
+        '<div class="modal__title">项目设置</div>' +
         '<div class="modal__wm-body">' +
-        '<div class="wm-row"><span class="wm-row__label">启用主流水印判定</span><div class="wm-row__ops"><label class="wm-check"><input type="checkbox" id="wmToggle"' + (r.enabled ? ' checked' : '') + '><span class="wm-check__box"></span></label></div></div>' +
-        '<div class="wm-row"><span class="wm-row__label">主流水印设置</span><div class="wm-row__ops"><div class="config-watermark__row config-watermark__row--inline" id="wmMainRow"></div></div></div>' +
+        '<div class="wm-section-title">默认分组数</div>' +
+        '<div class="wm-row"><span class="wm-row__label">启用默认分组数</span><div class="wm-row__ops"><label class="wm-check"><input type="checkbox" id="groupToggle"' + (curGroupEn ? ' checked' : '') + '><span class="wm-check__box"></span></label></div></div>' +
+        '<div class="wm-row"><span class="wm-row__label">默认分组数</span><div class="wm-row__ops"><input type="number" class="wm-row__input" id="groupInput" min="1" max="99" placeholder="不分组" value="' + (curGroup > 0 ? curGroup : '') + '"></div></div>' +
+        '<div class="wm-section-title">主流水印</div>' +
+        '<div class="wm-row"><span class="wm-row__label">启用主流水印判定</span><div class="wm-row__ops"><label class="wm-check"><input type="checkbox" id="wmToggle"' + (wmEn0 ? ' checked' : '') + '><span class="wm-check__box"></span></label></div></div>' +
+        '<div class="wm-row"><span class="wm-row__label">主流水印</span><div class="wm-row__ops"><div class="config-watermark__row config-watermark__row--inline" id="wmMainRow"></div></div></div>' +
         '</div>' +
         '<div class="modal__actions">' +
         '<button type="button" class="modal-btn" data-wm-act="cancel">取消</button>' +
-        '<button type="button" class="modal-btn modal-btn--primary" data-wm-act="save">仅保存</button>' +
-        '<button type="button" class="modal-btn modal-btn--primary" data-wm-act="saveAll">保存并替换</button>' +
+        '<button type="button" class="modal-btn modal-btn--primary" data-wm-act="save">保存</button>' +
         '</div>';
       overlay.appendChild(card);
       document.body.appendChild(overlay);
@@ -125,45 +132,62 @@
         var bOpen = root.querySelector('[data-wm="open"]');
         if (bOpen) bOpen.addEventListener('click', function () { if (curWm) call('open_path', curWm); });
         var bFold = root.querySelector('[data-wm="folder"]');
-        if (bFold) bFold.addEventListener('click', function () { if (curWm) call('open_parent', curWm); });
+        if (bFold) bFold.addEventListener('click', function () { if (curWm) call('open_folder_select', curWm); });
       }
       function renderRow() { row.innerHTML = wmRowHtml(curWm, false); bindWmRow(row); }
       renderRow();
       var closed = false;
       function closeDialog() { overlay.remove(); closed = true; }
       function afterSave() { closeDialog(); if (state.activeProject === project) assertWatermark(); }
+      function collectGroup() {
+        var en = card.querySelector('#groupToggle').checked;
+        var v = parseInt(card.querySelector('#groupInput').value, 10) || 0;
+        return { group: v, groupEnabled: en };
+      }
+      function doSave(applyToAll) {
+        var g = collectGroup();
+        var en = card.querySelector('#wmToggle').checked;
+        call('set_project_watermark', project, curWm, en, applyToAll, g.group, g.groupEnabled).then(function (res) {
+          if (res && res.ok) {
+            setStatus(applyToAll ? ('已保存项目设置，并将 ' + (res.replaced || 0) + ' 个 TXT 的水印行更改为新水印') : '已保存项目设置');
+            if (applyToAll) refreshData();
+            afterSave();
+          }
+          else alertDialog('保存失败：' + ((res && res.error) || '未知错误'));
+        }).catch(function (err) { alertDialog('保存失败：' + err.message); });
+      }
       overlay.addEventListener('click', function (e) { if (e.target === overlay) closeDialog(); });
       card.querySelector('.modal-close').addEventListener('click', closeDialog);
       card.querySelector('[data-wm-act="cancel"]').addEventListener('click', closeDialog);
+      // 启用默认分组数开关：随勾选联动输入框可编辑状态
+      card.querySelector('#groupToggle').addEventListener('change', function () {
+        card.querySelector('#groupInput').disabled = !this.checked;
+      });
+      card.querySelector('#groupInput').disabled = !curGroupEn;
+      // 保存：主流水印未更改则仅保存；已更改则二次确认“仅保存 / 保存并替换”
       card.querySelector('[data-wm-act="save"]').addEventListener('click', function () {
         var en = card.querySelector('#wmToggle').checked;
-        call('set_project_watermark', project, curWm, en, false).then(function (res) {
-          if (res && res.ok) { setStatus('已保存项目主流水印设置'); afterSave(); }
-          else alertDialog('保存失败：' + ((res && res.error) || '未知错误'));
-        }).catch(function (err) { alertDialog('保存失败：' + err.message); });
-      });
-      card.querySelector('[data-wm-act="saveAll"]').addEventListener('click', function () {
-        var en = card.querySelector('#wmToggle').checked;
+        var wmChanged = (en !== wmEn0) || (curWm !== curWm0);
+        if (!wmChanged) { doSave(false); return; }
         showDialog({
-          title: '确认批量更改水印',
-          message: '将把本项目全部 TXT（含日志）中的水印行更换为：\n' + curWm + '\n\n确定继续吗？',
-          buttons: [ { label: '取消', value: false }, { label: '确认更改', value: true, danger: true, primary: true } ]
-        }).then(function (ok) {
-          if (!ok) return;
-          // 预检测式遮罩：滤镜模糊 + 可缩小至状态栏
-          showBusyProgress('正在更改本项目全部 TXT 的水印行…');
-          var cb = $('busyCancelBtn'); if (cb) cb.style.display = 'none'; // 此过程无需取消
-          call('set_project_watermark', project, curWm, en, true).then(function (res) {
-            hideBusy(); hideProbeMini();
-            if (res && res.ok) {
-              setStatus('已保存主流水印，并将 ' + (res.replaced || 0) + ' 个 TXT 的水印行更改为新水印');
-              refreshData();
-              afterSave();
-            } else alertDialog('保存失败：' + ((res && res.error) || '未知错误'));
-          }).catch(function (err) { hideBusy(); hideProbeMini(); alertDialog('保存失败：' + err.message); });
+          title: '水印设置已更改',
+          message: '主流水印设置已发生更改，请选择保存方式：\n\n· 仅保存：只保存本次设置，不改动已有文件\n· 保存并替换：同时将本项目全部 TXT（含日志）的水印行改为新水印',
+          buttons: [
+            { label: '仅保存', value: 'save', primary: true },
+            { label: '保存并替换', value: 'all', danger: true }
+          ]
+        }).then(function (v) {
+          if (!v) return;
+          if (v === 'all') {
+            showDialog({
+              title: '确认批量替换水印',
+              message: '将把本项目全部 TXT（含日志）中的水印行更换为：\n' + curWm + '\n\n删除后无法按原样恢复，是否继续？',
+              buttons: [ { label: '取消', value: false }, { label: '确认替换', value: true, danger: true, primary: true } ]
+            }).then(function (ok) { if (ok) doSave(true); });
+          } else doSave(false);
         });
       });
-    }).catch(function (err) { alertDialog('读取主流水印失败：' + err.message); });
+    }).catch(function (err) { alertDialog('读取项目设置失败：' + err.message); });
   }
   function showMenu(x, y, items) {
     var old = document.getElementById('ctxMenu');
@@ -199,10 +223,12 @@
     if (!api || typeof api[method] !== 'function') return Promise.reject(new Error('后端接口不可用: ' + method));
     return Promise.resolve().then(function () { return api[method].apply(api, args); });
   }
+  // 左下角菜单关闭（全局可用，供 initMaskMode 等独立函数调用）
+  function closeMenu() { var m = $('sidebarMenu'); if (m) m.style.display = 'none'; }
   var state = {
     projects: [], activeProject: null, activeTxt: null, versions: [], activeVersion: null,
     configData: null, mode: 'filelist', highlightDup: false, searchQuery: '', logSearchQuery: '',
-    expandedProject: null, sortMode: 'name', sortAsc: true, sortTimeDesc: true, rightPreview: true, precheckInvalid: false, logContent: null,
+    expandedProject: null, sortMode: 'name', sortAsc: true, sortTimeDesc: true, rightPreview: true, precheckInvalid: false, watermarkMissing: false, logContent: null,
     logFiles: [], activeLogDate: null, activeLogPath: null, selectMode: false, selectedLogPaths: {},
     logViewMode: 'simple', // 日志预览模式：simple=简化（片段仅显示最后一段文件名）/ raw=完整原始
     focusVideo: null, _searchTimer: null, _fromConfig: false, envMissing: [],
@@ -274,6 +300,7 @@
     return m ? parseInt(m[1], 10) : 0;
   }
   function buildSidebar(forceAz, noBadgeAnim) {
+    if (maskOn()) return; // 遮罩模式：批量侧栏渲染一律拒绝，防模式污染
     var tree = $('sidebarTree');
     var html = '';
     sortedProjects().forEach(function (proj) {
@@ -490,6 +517,7 @@
     return azInitial(first.getAttribute('data-name') || '');
   }
   function syncAzHighlight() {
+    if (maskOn()) return;
     var cur = currentAzLetter();
     setAzActive(cur);
   }
@@ -581,7 +609,9 @@
     }
   }
   function buildDateBranches(silent) {
+    if (maskOn()) return; // 遮罩模式：批量日期分支渲染拒绝
     var c = $('dateBranches');
+    if (!c) return; // 遮罩等模式重写 centerTop 后容器可能不存在：安全忽略
     if (state.activeProject === REPLICA_PROJECT) {
       // 复刻项目按日志日期分支展示（每个日期=一份复刻日志），便于按天定位成片来源
       buildLogDateBranches(c, silent);
@@ -618,6 +648,12 @@
       var active = fromConfig ? logTargetForVersion(files) : null;
       if (!active && state.activeLogPath) { var hit = files.find(function (f) { return f.path === state.activeLogPath; }); if (hit) active = hit; }
       if (!active && state.activeLogDate) { var hit2 = files.find(function (f) { return f.date === state.activeLogDate; }); if (hit2) active = hit2; }
+      // 任务列表「定位至日志」：pending 指定的日志文件（含版本序号 -1/-2 按实际文件精确匹配）
+      if (!active && state._locateLogPath) {
+        var lh = files.find(function (f) { return f.path === state._locateLogPath; });
+        if (lh) active = lh;
+        state._locateLogPath = null;
+      }
       // 复刻项目无配置可定位：默认选中最新一天的日志；其余场景回退首个
       if (!active) active = (state.activeProject === REPLICA_PROJECT && files.length) ? files[files.length - 1] : files[0];
       var had = state.activeLogPath === active.path;
@@ -635,12 +671,15 @@
     }).catch(function () { c.innerHTML = '<span class="date-branch-btn">无日志</span>'; updateModeToggle(); });
   }
   function buildCenterBottom(silent) {
+    if (maskOn()) return; // 遮罩模式：批量中心内容渲染拒绝
+    var cb = $('centerBottom');
+    if (!cb) return; // 容器缺失时安全忽略（遮罩/恢复切换的窗口期）
     if (!state.activeTxt || !state.activeVersion) {
-      $('centerBottom').innerHTML = '<div class="center-empty">' + icon('file-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">请选择一个日期分支查看内容</span></div>';
+      cb.innerHTML = '<div class="center-empty">' + icon('file-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">请选择一个日期分支查看内容</span></div>';
       return;
     }
     if (state.mode === 'log') { buildLogConfigBar(); buildLogList(); return; }
-    var container = $('centerBottom');
+    var container = cb;
     var data = state.configData;
     if (!data) { container.innerHTML = '<div class="center-empty">' + icon('file-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">正在加载配置…</span></div>'; return; }
     var folders = data.folders || [];
@@ -699,6 +738,7 @@
     refreshConfigModified();
   }
   function buildConfigBar() {
+    if (maskOn()) return; // 遮罩模式：批量底栏渲染拒绝
     var bar = $('configBar');
     if (!bar) return;
     var data = state.configData;
@@ -720,10 +760,28 @@
     $('btnSaveToday').addEventListener('click', saveConfigToday);
     $('btnRunScript').addEventListener('click', runScript);
     $('inputFilmCount').addEventListener('input', function () { var errEl = $('filmCountError'); if (errEl) errEl.style.display = 'none'; });
+    // 分组数：项目默认值以占位符展示（不污染实际值），用户直接输入即用自己的分组数
+    var grpInp = $('inputGroupCount');
+    if (grpInp) {
+      grpInp.addEventListener('input', function () { applyDefaultGroupInput(); });
+    }
+    applyDefaultGroupInput();
     bindModifiedWatchers(bar);
     applyPrecheckValidity();
     refreshConfigModified();
     applyEnvDisabled();
+  }
+  // 项目设置了「默认分组数」时：以占位符提示默认值（输入框 value 保持为空，
+  // 用户不输入分组数时自动使用该默认值；一旦输入即用自己的分组数）
+  function applyDefaultGroupInput() {
+    var inp = $('inputGroupCount');
+    if (!inp || !state.activeProject) return;
+    call('get_project_watermark', state.activeProject).then(function (r) {
+      if (!r || !r.ok) return;
+      var d = (r.groupEnabled && r.group > 0) ? String(r.group) : '';
+      inp.placeholder = d || '不分组';
+      inp.title = d ? '项目默认分组数 ' + d + '，留空则使用默认值' : '不分组';
+    }).catch(function () {});
   }
   // ── 配置修改检测：未修改时两个保存按钮禁用；修改时编辑区红框 + 配置名左侧红字提示 ──
   function configSnapshot() {
@@ -796,14 +854,14 @@
     });
   }
   function applyPrecheckValidity() {
-    var invalid = state.precheckInvalid;
+    var invalid = state.precheckInvalid || state.watermarkMissing;
     var run = $('btnRunScript');
     if (run) {
       run.disabled = invalid || _envBad();
-      setBtnHint(run, _envBad() ? '运行环境缺失' : (invalid ? '存在不合格路径，无法启动脚本' : null));
+      setBtnHint(run, _envBad() ? '运行环境缺失' : (state.watermarkMissing ? '水印文件不存在，无法启动脚本' : (invalid ? '存在不合格路径，无法启动脚本' : null)));
     }
     var warn = $('configWarnMark');
-    if (warn) warn.style.display = invalid ? '' : 'none';
+    if (warn) warn.style.display = state.precheckInvalid ? '' : 'none';
     refreshConfigModified();
   }
   // ── 日志模式：底部批量复刻成片配置栏 ──
@@ -824,6 +882,7 @@
     return n;
   }
   function buildLogConfigBar() {
+    if (maskOn()) return;
     var bar = $('configBar');
     if (!bar) return;
     var sel = !!state.selectMode;
@@ -848,6 +907,7 @@
   }
   // 仅刷新批量栏的状态（计数/按钮可用性/全选框）而不重建
   function refreshLogConfigBar() {
+    if (maskOn()) return;
     var n = selectedLogCount();
     var cnt = $('logSelCount');
     if (cnt) cnt.textContent = '已选 ' + n;
@@ -1207,12 +1267,15 @@
   var _wmCheckToken = 0;
   function assertWatermark(wm) {
     var w = (wm !== undefined) ? wm : (state.configData ? (state.configData.watermark || '') : '');
-    if (!state.activeProject || !w) { setWatermarkError(false); return; }
+    if (!state.activeProject || !w) { state.watermarkMissing = false; setWatermarkError(false); applyPrecheckValidity(); return; }
     var token = ++_wmCheckToken;
     call('check_watermark_project', state.activeProject, w).then(function (res) {
       if (token !== _wmCheckToken) return;
+      // 水印文件缺失：阻断启动；归属不一致：仅红字提示不阻断
+      state.watermarkMissing = !!(res && res.fileMissing);
       setWatermarkError(res && res.inProject === false);
-    }).catch(function () { if (token === _wmCheckToken) setWatermarkError(false); });
+      applyPrecheckValidity();
+    }).catch(function () { if (token === _wmCheckToken) { state.watermarkMissing = false; setWatermarkError(false); applyPrecheckValidity(); } });
   }
   function changeWatermark() {
       // 选择框默认定位到上一个水印所在位置，便于就近选新水印
@@ -1325,6 +1388,34 @@
       if (state.activeVersion) loadConfig(state.activeVersion.path); else { state.configData = null; buildCenterBottom(); buildRightPanel(); }
     }).catch(function (e) { setStatus('刷新版本失败：' + e.message); });
   }
+  // 任务列表「定位至配置/日志」：主窗口打开并定位到对应配置/日志分支（版本 -1/-2 按实际文件精确匹配）
+  function handleLocateRequest(info) {
+    info = info || {};
+    var ml = $('modeLog'), mf = $('modeFilelist');
+    if (info.target === 'log') {
+      if (!info.logPath) { setStatus('该任务暂无日志可定位'); return; }
+      if (!info.txtPath) {
+        // 复刻：源即日志、无配置 TXT → 打开日志所在文件夹并选中日志文件
+        call('open_folder_select', info.logPath).then(function (r) { if (!(r && r.ok)) setStatus('打开日志文件夹失败'); });
+        return;
+      }
+      state._locateLogPath = info.logPath;
+      state.activeLogPath = null; state.activeLogDate = null;
+      state.mode = 'log';
+      if (ml) ml.classList.add('mode-toggle--active');
+      if (mf) mf.classList.remove('mode-toggle--active');
+      jumpToVersionPath(info.txtPath, info.project || state.activeProject);
+      return;
+    }
+    // 定位至配置：切回配置模式并选中该配置（含匹配的版本分支）
+    if (!info.txtPath) { setStatus('该任务无对应配置'); return; }
+    state._locateLogPath = null;
+    state.activeLogPath = null; state.activeLogDate = null;
+    state.mode = 'filelist';
+    if (ml) ml.classList.remove('mode-toggle--active');
+    if (mf) mf.classList.add('mode-toggle--active');
+    jumpToVersionPath(info.txtPath, info.project || state.activeProject);
+  }
   // 侧栏「新增配置」：在当前选定项目下新建空白配置（今日目录），完成后定位并打开
   function createNewConfig() {
     var pr = state.expandedProject || state.activeProject;
@@ -1337,25 +1428,35 @@
   }
   function runScript() {
     if (_envBad()) { setStatus('运行环境缺失'); return; }
+    if (state.watermarkMissing) { setStatus('水印文件不存在，无法启动脚本'); return; }
     if (!state.activeVersion) return;
     var count = $('inputFilmCount').value.trim();
-    var group = $('inputGroupCount').value.trim();
-    var errEl = $('filmCountError');
-    if (!count || !/^\d+$/.test(count) || parseInt(count, 10) < 1) { if (errEl) errEl.style.display = ''; $('inputFilmCount').focus(); return; }
-    if (errEl) errEl.style.display = 'none';
+    if (!count || !/^\d+$/.test(count) || parseInt(count, 10) < 1) { var errEl2 = $('filmCountError'); if (errEl2) errEl2.style.display = ''; $('inputFilmCount').focus(); return; }
+    var errEl = $('filmCountError'); if (errEl) errEl.style.display = 'none';
     if (!state.activeProject || !state.activeTxt) return;
     var ed = getEditorState();
     var configName = $('inputConfigName').value.trim() || state.activeTxt;
-    resolveDestProject().then(function (dest) {
-      if (dest === null) { setStatus('已取消启动'); return; }
-      call('save_config_today', dest, state.activeTxt, configName, ed.folders, ed.excludes, ed.watermark).then(function (saved) {
-        if (!saved || !saved.ok) { setStatus('保存失败：' + ((saved && saved.error) || '未知错误')); return; }
-        setStatus('已保存并启动脚本：' + saved.path);
-        // 水印归属在选中配置预检测时已判定并提示，此处不再阻断启动
-        call('run_batch', saved.path, count, group).then(function (r) { if (!(r && r.ok)) setStatus('启动失败：' + ((r && r.error) || '未知错误')); });
-        jumpToVersionPath(saved.path, dest);
-      }).catch(function (e) { setStatus('启动失败：' + e.message); });
+    getEffectiveGroup().then(function (group) {
+      resolveDestProject().then(function (dest) {
+        if (dest === null) { setStatus('已取消启动'); return; }
+        call('save_config_today', dest, state.activeTxt, configName, ed.folders, ed.excludes, ed.watermark).then(function (saved) {
+          if (!saved || !saved.ok) { setStatus('保存失败：' + ((saved && saved.error) || '未知错误')); return; }
+          setStatus('已保存并启动脚本：' + saved.path);
+          // 水印归属在选中配置预检测时已判定并提示，此处不再阻断启动
+          call('run_batch', saved.path, count, group).then(function (r) { if (!(r && r.ok)) setStatus('启动失败：' + ((r && r.error) || '未知错误')); });
+          jumpToVersionPath(saved.path, dest);
+        }).catch(function (e) { setStatus('启动失败：' + e.message); });
+      });
     });
+  }
+  // 实际使用的分组数：输入框显式填写优先；留空则使用项目「默认分组数」
+  function getEffectiveGroup() {
+    var raw = $('inputGroupCount').value.trim();
+    if (/^\d+$/.test(raw)) return Promise.resolve(raw);
+    if (!state.activeProject) return Promise.resolve('');
+    return call('get_project_watermark', state.activeProject).then(function (r) {
+      return (r && r.ok && r.groupEnabled && r.group > 0) ? String(r.group) : '';
+    }).catch(function () { return ''; });
   }
   // 展开成片时对其片段列表做一次存在性预检测，不存在的片段标记变红
   function precheckClips(entry) {
@@ -1460,7 +1561,7 @@
         var missing = clip.getAttribute('data-exists') === '0';
         var items = [
           { label: '打开文件', disableIfMissing: true, title: missing ? '文件不存在' : '', action: function () { call('open_path', p); } },
-          { label: '打开路径', disableIfMissing: true, title: missing ? '文件不存在' : '', action: function () { call('open_parent', p); } }
+          { label: '打开路径', disableIfMissing: true, title: missing ? '文件不存在' : '', action: function () { call('open_folder_select', p); } }
         ];
         if (missing) items.forEach(function (it) { if (it.disableIfMissing) it.disabled = true; });
         showMenu(e.clientX, e.clientY, items);
@@ -1604,6 +1705,7 @@
     }, 0);
   }
   function onProjectSearchInput() {
+    if (maskOn()) return;
     var input = $('searchInput');
     var q = input ? input.value.trim() : '';
     if (!q) {
@@ -1666,6 +1768,18 @@
       document.addEventListener('mousedown', outside);
       document.addEventListener('keydown', esc);
     }, 0);
+  }
+  // 批量模式成片搜索绑定（可重复调用：遮罩模式 clone 输入框后由 exit 强制重绑）
+  function bindBatchLogSearch(force) {
+    var input = $('logSearchInput');
+    if (!input) return;
+    if (!force && input.dataset.boundBatch === '1') return;
+    input.dataset.boundBatch = '1';
+    input.addEventListener('input', function () {
+      state.logSearchQuery = this.value.trim();
+      if (state.mode === 'log') buildCenterBottom();
+      onLogSearchInput();
+    });
   }
   function onLogSearchInput() {
     var input = $('logSearchInput');
@@ -1736,9 +1850,11 @@
     var rb = $('previewCollapseRound'); if (rb) rb.setAttribute('title', '展开预览面板');
   }
   function buildRightPanel() {
+    if (maskOn()) return; // 遮罩模式：批量右侧预览渲染拒绝
     var lineNumbers = $('rightLineNumbers');
     var code = $('rightCode');
     var subtitle = $('rightPanelSubtitle');
+    if (!lineNumbers || !code || !subtitle) return; // 容器缺失时安全忽略（遮罩切换窗口期）
     syncRightToggle();
     // 进入日志模式自动展开右侧预览面板；退出日志模式恢复到进入前状态
     if (state.mode === 'log') {
@@ -1776,6 +1892,7 @@
   }
   // 日志模式：右侧显示当前配置目录下所有日志 txt 的内容，并支持定位到成片所在行
   function buildLogRightPanel() {
+    if (maskOn()) return;
     var subtitle = $('rightPanelSubtitle');
     if (state.logContent) { renderLogRightPanel(); return; }
     subtitle.textContent = '正在加载日志…';
@@ -1790,6 +1907,7 @@
     if (nums) nums.innerHTML = ''; if (code) code.innerHTML = '';
   }
   function renderLogRightPanel() {
+    if (maskOn()) return;
     var nums = $('rightLineNumbers'); var code = $('rightCode'); var subtitle = $('rightPanelSubtitle');
     var d = state.logContent; var files = (d && d.files) || [];
     syncRightToggle();
@@ -2285,6 +2403,7 @@
   // 归一比较无变化时不重渲染，避免打断编辑与日志跟随；有变化才同步视图。
   function refreshActiveVersions() {
     if (!getApi()) return;
+    if (maskState.on) return; // 遮罩叠加模式：暂停批量配置自愈轮询，避免重画侧栏/中心区覆盖遮罩界面
     if (!state.activeProject || !state.activeTxt || state.activeProject === REPLICA_PROJECT) return; // 复刻为虚拟项目，不走配置自愈
     call('list_projects', false).then(function (projects) {
       state.projects = projects || [];
@@ -2336,7 +2455,10 @@
       state._configOrig = null; // 新配置加载：重建修改基线
       buildCenterBottom(silent); buildRightPanel();
       setStatus('已选择:"' + (state.activeVersion && state.activeVersion.path || path) + '"');
-    }).catch(function (e) { setStatus('读取配置失败：' + e.message); });
+    }).catch(function (e) {
+      var where = (e && e.stack) ? String(e.stack).split('\n')[1] || '' : '';
+      setStatus('读取配置失败：' + (e && e.message) + (where ? ' @' + where.trim() : ''));
+    });
   }
   // ── 中间配置栏复位到"刚启动"样式 ──
   // 触发点：点击侧栏品牌名片、或选中配置后收回项目名；无选中时调用为无害空操作。
@@ -2364,9 +2486,19 @@
     var busyCancel = $('busyCancelBtn');
     if (busyCancel) busyCancel.addEventListener('click', cancelProbeFlow);
     if (probeCancel) probeCancel.addEventListener('click', function () { setStatus('正在取消后台预检测…'); call('cancel_precheck'); });
-    document.addEventListener('vl:reset-center', function () { collapsePreviewPanel(); checkConfigModifiedBeforeLeave(resetCenterToLaunch); });
+    document.addEventListener('vl:reset-center', function () {
+      if (maskState.on) {
+        // 遮罩叠加模式：名片点击退出当前项目选择，回到「请选择项目」初始态（不退出模式）。
+        // 不重建中间顶部栏：data-maid-chat-active 移除后 header/装饰的退场入场动画自然播放
+        maskResetSession();
+        buildMaskSidebar(); buildMaskCenter(); buildMaskConfigBar();
+        setStatus('已返回遮罩叠加项目列表');
+        return;
+      }
+      collapsePreviewPanel(); checkConfigModifiedBeforeLeave(resetCenterToLaunch);
+    });
     $('sidebarTree').addEventListener('scroll', syncAzHighlight);
-    // 右键项目名：打开项目位置 / 主流水印设置（复刻虚拟项目无配置水印，不提供）
+    // 右键项目名：打开项目位置 / 项目设置（复刻虚拟项目无配置水印，不提供）
     $('sidebarTree').addEventListener('contextmenu', function (e) {
       var ph = e.target.closest('.tree-project__name');
       if (!ph) return;
@@ -2375,7 +2507,7 @@
       e.preventDefault();
       showMenu(e.clientX, e.clientY, [
         { label: '打开项目位置', action: function () { call('open_project_dir', pname).then(function (r) { if (!(r && r.ok)) setStatus('打开项目失败：' + ((r && r.error) || '未知错误')); }).catch(function (err) { setStatus('打开项目失败：' + err.message); }); } },
-        { label: '主流水印设置', action: function () { openProjectWatermarkDialog(pname); } }
+        { label: '项目设置', action: function () { openProjectWatermarkDialog(pname); } }
       ]);
     });
     $('sidebarTree').addEventListener('click', function (e) {
@@ -2466,7 +2598,7 @@
     var btnNewCfg = $('btnNewConfig');
     if (btnNewCfg) btnNewCfg.addEventListener('click', createNewConfig);
     $('dateBranches').addEventListener('click', function (e) { var btn = e.target.closest('.date-branch-btn'); if (!btn) return; if (btn.getAttribute('data-date') != null) { var switching = state.activeLogPath != null; state.activeLogDate = btn.getAttribute('data-date'); state.activeLogPath = btn.getAttribute('data-file') || null; buildDateBranches(switching); buildCenterBottom(); return; } selectVersion(btn.getAttribute('data-label')); });
-    $('dateBranches').addEventListener('dblclick', function (e) { var btn = e.target.closest('.date-branch-btn'); if (!btn) return; var fp = btn.getAttribute('data-file'); if (fp) { call('open_parent', fp); return; } var label = btn.getAttribute('data-label'); var v = state.versions.find(function (x) { return x.label === label; }); if (v) call('open_parent', v.path); });
+    $('dateBranches').addEventListener('dblclick', function (e) { var btn = e.target.closest('.date-branch-btn'); if (!btn) return; var fp = btn.getAttribute('data-file'); if (fp) { call('open_folder_select', fp).catch(function () {}); return; } var label = btn.getAttribute('data-label'); var v = state.versions.find(function (x) { return x.label === label; }); if (v) call('open_folder_select', v.path); });
     $('dateBranches').addEventListener('contextmenu', function (e) {
       var btn = e.target.closest('.date-branch-btn');
       if (!btn) return;
@@ -2479,7 +2611,7 @@
         modeName = '日志';
         showMenu(e.clientX, e.clientY, [
           { label: '打开文件', action: function () { call('open_path', fp); } },
-          { label: '打开路径', action: function () { call('open_parent', fp); } },
+          { label: '打开路径', action: function () { call('open_folder_select', fp); } },
           { label: '移除', action: function () { confirmRemoveBranch(target, modeName); } }
         ]);
         return;
@@ -2491,7 +2623,7 @@
       modeName = '配置';
       showMenu(e.clientX, e.clientY, [
         { label: '打开文件', action: function () { call('open_path', v.path); } },
-        { label: '打开路径', action: function () { call('open_parent', v.path); } },
+        { label: '打开路径', action: function () { call('open_folder_select', v.path); } },
         { label: '移除', action: function () { confirmRemoveBranch(target, modeName); } }
       ]);
     });
@@ -2553,7 +2685,7 @@
     });
     $('modeLog').addEventListener('click', function () { state.mode = 'log'; state._fromConfig = true; $('modeLog').classList.add('mode-toggle--active'); $('modeFilelist').classList.remove('mode-toggle--active'); buildDateBranches(); buildCenterBottom(); buildRightPanel(); });
     $('searchInput').addEventListener('input', onProjectSearchInput);
-    $('logSearchInput').addEventListener('input', function () { state.logSearchQuery = this.value.trim(); if (state.mode === 'log') buildCenterBottom(); onLogSearchInput(); });
+    bindBatchLogSearch(); // 批量模式成片搜索（遮罩模式 clone 输入框后由 exit 强制重绑）
     // ── 左下角菜单按钮：刷新配置列表 / 选择路径 / 重置预检测缓存 / 设置 ──
     var menuBtn = $('sidebarMenuBtn');
     var menu = $('sidebarMenu');
@@ -2564,7 +2696,6 @@
       if (!tree) return;
       tree.scrollTo({ top: 0, behavior: 'smooth' });
     });
-    function closeMenu() { if (menu) menu.style.display = 'none'; }
     if (menuBtn && menu) {
       menuBtn.addEventListener('click', function (e) {
         e.stopPropagation();
@@ -2978,7 +3109,13 @@
     }
   }
   function init() {
-    hydrateIcons(document); bindStaticEvents(); initSkin(); buildAzIndex();
+    // 任务列表「定位」监听：异常隔离，不影响主界面初始化
+    try { if (getApi() && getApi().on_locate) getApi().on_locate(handleLocateRequest); } catch (e) {}
+    hydrateIcons(document);
+    bindStaticEvents();
+    initSkin();
+    initMaskMode();
+    buildAzIndex();
     updateSortButtons();
     initUpdateBanner();
     // 启动弹更新日志（当前每次启动弹出以确认样式，后续改为更新后首次弹出）
@@ -3060,7 +3197,7 @@
   // 环境硬拦截：缺 pwsh/ffmpeg/ffprobe 时禁用所有调用脚本的入口，悬浮提示「运行环境缺失」
   function applyEnvDisabled() {
     var bad = _envBad();
-    var targets = document.querySelectorAll('#btnRunScript, #btnBatchReplica1, #btnBatchReplica2, .log-entry__replica');
+    var targets = document.querySelectorAll('#btnRunScript, #btnBatchReplica1, #btnBatchReplica2, .log-entry__replica, #btnMaskStart');
     Array.prototype.forEach.call(targets, function (b) {
       if (b.disabled === undefined) return;
       if (bad) {
@@ -3073,6 +3210,1351 @@
     // 环境完整时按各自禁用条件重算提示
     if (!bad) { if (typeof refreshLogConfigBar === 'function') refreshLogConfigBar(); applyPrecheckValidity(); refreshConfigModified(); }
   }
+  // ════════════ 遮罩叠加模式（复用主窗口：左侧项目 / 右侧配置 / 底部输出+启动） ════════════
+  var maskState = {
+    on: false, projects: [], project: null, mode: 1, view: 'config', search: '',
+    maskLogBranch: '', // 日志视图当前选中的日期分支（对应某日志文件路径，空=自动最新）
+    rawDirs: [],      // 原片文件夹列表 [{ path, name, files }]
+    rawSel: {},       // { path: [视频名] } 缺省=全选
+    themes: [],       // 可用遮罩主题 [{ path, name }]（项目主题 + 额外目录）
+    maskSel: {},      // { mov完整路径: true } 勾选的遮罩（按组勾选）
+    watermark: '',    // 水印文件
+    outputDir: '',    // 成片输出目录（空 = 用占位符默认目录）
+    defaultOutDir: '',// 项目设置的默认输出目录（占位符显示）
+    suffix: ''        // 成片名序号前的后缀（独立于批量模式，可空）
+  };
+  // 两模式隔离统一守卫：批量渲染/交互在遮罩模式下必须拒绝执行（反之亦然），
+  // 今后新增的批量/遮罩渲染函数同样在入口调用 maskOn()/!maskOn() 守卫
+  function maskOn() { return maskState.on === true; }
+  var MASK_MODES = { 1: '遮罩+水印', 2: '仅水印', 3: '仅遮罩' };
+  function maskNeedMask() { return maskState.mode === 1 || maskState.mode === 3; }
+  function maskNeedWm() { return maskState.mode === 1 || maskState.mode === 2; }
+  // 遮罩组前缀：名字去掉尾部序号（如 国庆节-1.mov / 国庆节_2.mov / 国庆节 3.mov → 国庆节）
+  function maskGroupPrefix(name) {
+    var s = String(name || '').replace(/\.[^.]+$/, '');
+    s = s.replace(/[-_ ]+\d+$/, '').replace(/\d+$/, '');
+    return s;
+  }
+  // 遮罩主题显示去重：主题名/文件名已含项目名前缀时，界面只显示去掉前缀的短名
+  // （如 项目A\项目A-主题B\项目A-主题B-1.mov → 显示 主题B / 主题B-1，hover 有完整路径）
+  function maskDisplayName(s) {
+    var proj = maskState.project && maskState.project.name;
+    if (proj && typeof s === 'string') {
+      if (s.indexOf(proj + '-') === 0) return s.slice(proj.length + 1);
+      if (s.indexOf(proj + '_') === 0) return s.slice(proj.length + 1);
+      if (s.indexOf(proj + ' ') === 0) return s.slice(proj.length + 1);
+      if (s.indexOf(proj) === 0) { var r = s.slice(proj.length).replace(/^[-_ ]+/, ''); if (r) return r; }
+    }
+    return s;
+  }
+  // 已选原片文件数：未加载素材的文件夹按 0 计（加载完成后会重建底栏）；全选未记录时按该文件夹全部文件计
+  function maskRawSelCount() {
+    var c = 0;
+    maskState.rawDirs.forEach(function (d) {
+      var set = maskState.rawSel[d.path];
+      if (set) c += set.length;
+    });
+    return c;
+  }
+  // 底部配置栏已选文本：区分遮罩与原片
+  function maskSelTotalText() {
+    var maskC = Object.keys(maskState.maskSel).length;
+    var rawC = maskRawSelCount();
+    return maskNeedMask() ? '已选遮罩 ' + maskC + ' · 原片 ' + rawC : '已选原片 ' + rawC;
+  }
+  // 原片/遮罩会话持久化：勾选、分组、外部目录、模式、输出目录等写物理缓存，不手动删就一直在
+  var _maskPersistTimer = null;
+  function maskPersist() {
+    if (!maskOn() || !maskState.project) return;
+    if (_maskPersistTimer) clearTimeout(_maskPersistTimer);
+    _maskPersistTimer = setTimeout(function () {
+      call('save_mask_session', maskState.project.name, {
+        rawDirs: (maskState.rawDirs || []).map(function (d) { return { path: d.path, name: d.name }; }),
+        themes: (maskState.themes || []).map(function (t) { return { path: t.path, name: t.name }; }),
+        mode: maskState.mode || 1,
+        outputDir: maskState.outputDir || '',
+        suffix: maskState.suffix || ''
+      }).catch(function () {});
+    }, 300);
+  }
+  // 恢复持久化会话时校验目录有效性：原片文件夹不存在或为空（无视频）→ 从列表去除并落盘；
+  // 外部遮罩目录不存在 → 同样去除；项目根扫描源仅校验目录存在
+  function validateMaskDirs() {
+    if (!maskOn() || !maskState.project) return;
+    var p = maskState.project;
+    var rawDirs = (maskState.rawDirs || []).slice();
+    var themes = (maskState.themes || []).slice();
+    if (!rawDirs.length && !themes.length) return;
+    var rawKeep = rawDirs.map(function (d) {
+      return call('list_mask_videos', d.path).then(function (f) {
+        return (Array.isArray(f) && f.length) ? d : null;
+      }).catch(function () { return null; });
+    });
+    var themeKeep = themes.map(function (t) {
+      // 项目根扫描源只看目录是否还在；外部添加目录同此判定（其下有无素材由后续加载体现）
+      if (t.path && String(t.path).replace(/[\\/]+$/, '').toLowerCase() === String(p.path).replace(/[\\/]+$/, '').toLowerCase()) {
+        return call('check_exists', [t.path]).then(function (m) { return (m && m[t.path] === true) ? t : null; }).catch(function () { return t; });
+      }
+      return call('check_exists', [t.path]).then(function (m) { return (m && m[t.path] === true) ? t : null; }).catch(function () { return null; });
+    });
+    Promise.all(rawKeep.concat(themeKeep)).then(function (kept) {
+      if (!maskOn() || !maskState.project || maskState.project.name !== p.name) return;
+      var nRaw = rawDirs.length;
+      var rawArr = kept.slice(0, nRaw).filter(Boolean);
+      var themeArr = kept.slice(nRaw).filter(Boolean);
+      var changed = rawArr.length !== maskState.rawDirs.length || themeArr.length !== maskState.themes.length;
+      if (!changed) { // 数组长度相同也要看内容（顺序一致时可直接判定，此处保守按路径对比）
+        var sameA = rawArr.length === maskState.rawDirs.length && rawArr.every(function (d, i) { return maskState.rawDirs[i] && d.path === maskState.rawDirs[i].path; });
+        var sameB = themeArr.length === maskState.themes.length && themeArr.every(function (t, i) { return maskState.themes[i] && t.path === maskState.themes[i].path; });
+        changed = !(sameA && sameB);
+      }
+      if (!changed) return;
+      maskState.rawDirs = rawArr;
+      maskState.themes = themeArr.length ? themeArr : [{ path: p.path, name: p.name }];
+      // 清理已失效原片目录对应的勾选
+      var paths = {};
+      maskState.rawDirs.forEach(function (d) { paths[d.path] = 1; });
+      var sel = maskState.rawSel || {};
+      var keepSel = {};
+      Object.keys(sel).forEach(function (k) { if (paths[k]) keepSel[k] = sel[k]; });
+      maskState.rawSel = keepSel;
+      buildMaskCenter(); maskPersist();
+    }).catch(function () {});
+  }
+  // 左下角菜单「刷新列表」：重扫当前项目原片分组（保留仍存在的勾选）+ 重载遮罩主题
+  function maskRescanCurrent() {
+    if (!maskOn() || !maskState.project) { setStatus('未选择遮罩叠加项目'); return; }
+    var p = maskState.project;
+    setStatus('正在重新扫描原片分组…');
+    call('scan_mask_raw_dirs', p.path).then(function (dirs) {
+      if (!maskOn() || !maskState.project || maskState.project.name !== p.name) return;
+      maskState.rawDirs = Array.isArray(dirs) ? dirs : [];
+      var keep = {};
+      (maskState.rawDirs || []).forEach(function (d) { if (maskState.rawSel[d.path]) keep[d.path] = maskState.rawSel[d.path]; });
+      maskState.rawSel = keep;
+      buildMaskCenter(); buildMaskConfigBar(); refreshMaskStartHint();
+      if (maskNeedMask()) loadAllMaskGroups();
+      maskPersist();
+      setStatusDone('列表已刷新');
+    }).catch(function () { setStatus('刷新失败'); });
+  }
+  // 左下角菜单「重建缓存」：清空本项目持久化缓存并全量重建扫描（已选状态重置）
+  function maskRebuildCache() {
+    if (!maskOn() || !maskState.project) { setStatus('未选择遮罩叠加项目'); return; }
+    var p = maskState.project;
+    showDialog({ title: '重建缓存', message: '将清空本项目的原片/遮罩持久化缓存并全量重建扫描（已选状态将重置）。继续？', buttons: [ { label: '取消', value: 0 }, { label: '重建', value: 1, primary: true } ] }).then(function (v) {
+      if (v !== 1) return;
+      setStatus('正在重建遮罩缓存…');
+      call('clear_mask_session', p.name).then(function () {
+        if (!maskOn() || !maskState.project || maskState.project.name !== p.name) return;
+        maskState.rawDirs = []; maskState.rawSel = {}; maskState.maskSel = {}; maskState.themes = [{ path: p.path, name: p.name }];
+        return call('scan_mask_raw_dirs', p.path);
+      }).then(function (dirs) {
+        if (!maskOn() || !maskState.project || maskState.project.name !== p.name) return;
+        maskState.rawDirs = Array.isArray(dirs) ? dirs : [];
+        buildMaskCenter(); buildMaskConfigBar(); refreshMaskStartHint();
+        if (maskNeedMask()) loadAllMaskGroups();
+        setStatusDone('缓存已重建');
+      }).catch(function () { setStatus('重建失败'); });
+    });
+  }
+  // 删除/操作结果弹窗告知（列入本次删除事件的要求：完成后弹窗显示结果）
+  function maskTellResult(title, msg) {
+    showDialog({ title: title || '提示', message: String(msg == null ? '' : msg), buttons: [ { label: '知道了', value: 0, primary: true } ] });
+  }
+  // 删除所有使用该原片素材产生的遮罩叠加成片（按本遮罩日志精确匹配）
+  function maskDeleteByRaw(full) {
+    showDialog({ title: '删除素材成片', message: '确定删除所有使用该素材产生的遮罩叠加成片吗？\n' + full + '\n（按本遮罩叠加日志精确匹配）', buttons: [ { label: '取消', value: 0 }, { label: '删除', value: 1, danger: true } ] }).then(function (v) {
+      if (v !== 1) return;
+      call('delete_mask_related', maskState.project.path, [full]).then(function (r) {
+        if (!r || !r.ok) { maskTellResult('删除失败', ((r && r.error) || '未知错误')); return; }
+        maskTellResult('删除结果', '已删除 ' + ((r.deleted || []).length) + ' 个成片');
+        if (maskState.view === 'log') buildMaskLogView();
+      }).catch(function (err) { maskTellResult('删除失败', err.message); });
+    });
+  }
+  function maskResetSession() {
+    maskState.project = null; maskState.rawDirs = []; maskState.rawSel = {};
+    maskState.themes = []; maskState.maskSel = {}; maskState.watermark = ''; maskState.outputDir = '';
+    maskState.suffix = ''; maskState.maskLogBranch = '';
+  }
+  function maskFmtDur(sec) {
+    var s = Math.max(0, Math.round(sec || 0));
+    var m = Math.floor(s / 60), r = s % 60;
+    // 统一 0m0s 格式：秒数始终带上（1 分钟整写 1m0s），不加前导 0
+    if (m <= 0) return r + 's';
+    return m + 'm' + r + 's';
+  }
+  // 女仆皮肤角色舞台（主舞台）随遮罩模式迁移：遮罩模式下挂到右侧配置区作背景，退出还原到中间区
+  function maskRelocateStage(host) {
+    var stage = document.querySelector('[data-skin-chrome="character-stage"]');
+    if (!stage) return;
+    if (host) {
+      if (stage.parentNode !== host) host.appendChild(stage);
+    } else {
+      var cp = document.querySelector('.center-panel');
+      if (cp && stage.parentNode !== cp) cp.prepend(stage);
+    }
+  }
+  function enterMaskMode() {
+    maskState.on = true; maskResetSession(); maskState.view = 'config';
+    document.body.classList.add('mask-mode');
+    updateWinModeLabel(); // 标题栏模式按钮 → 遮罩叠加
+    // 遮罩模式不使用右侧预览栏：记录进入前展开状态，进入即强制折叠
+    maskState._sideBefore = !document.body.hasAttribute('data-preview-collapsed');
+    document.body.setAttribute('data-preview-collapsed', '');
+    state.previewCollapsed = true;
+    var cc = $('previewCollapseRound'); if (cc) cc.style.display = 'none';
+    var az = $('azIndexBar'); if (az) az.style.display = 'none';
+    var mmb = $('menuMask'); if (mmb) mmb.innerHTML = icon('layers', 14) + '配置管理';
+    maskSidebarExitBtn(true);
+    buildMaskSidebar();
+    buildMaskCenterHeader();
+    buildMaskCenter();
+    buildMaskConfigBar();
+    refreshMaskProjects();
+    // 读取设置里的固定水印作为默认水印（界面不提供临时更换；读取后同步刷新底栏提示）
+    call('get_settings').then(function (cfg) {
+      if (cfg && cfg.mask && cfg.mask.watermark_mov) {
+        maskState.watermark = cfg.mask.watermark_mov;
+        if (maskState.on) {
+          if (maskState.view === 'config') buildMaskCenter();
+          buildMaskConfigBar(); // 刷新「未选水印」等提示
+        }
+      }
+    }).catch(function () {});
+    // 首次进入弹出引导（可关闭跳过，记一次）
+    try {
+      if (!localStorage.getItem('mask_guide_shown')) {
+        localStorage.setItem('mask_guide_shown', '1');
+        showMaskGuide();
+      }
+    } catch (e) {}
+    setStatus('遮罩叠加模式：左侧选项目，中间配置素材/查看日志，底部设模式与输出后开始制作');
+  }
+  // 侧栏「项目列表」标题行右侧的退出按钮（遮罩模式挂载，退出移除）
+  function maskSidebarExitBtn(add) {
+    var h = document.querySelector('.sidebar__header');
+    if (!h) return;
+    if (add) {
+      if (h.querySelector('#btnMaskExitSide')) return;
+      var b = document.createElement('button');
+      b.id = 'btnMaskExitSide';
+      b.className = 'mask-bar__exit mask-proj-head__exit';
+      b.title = '退出遮罩叠加，返回配置管理';
+      b.innerHTML = icon('log-in', 13) + '退出';
+      b.addEventListener('click', exitMaskMode);
+      h.appendChild(b);
+    } else {
+      var old = h.querySelector('#btnMaskExitSide');
+      if (old) old.remove();
+    }
+  }
+  // 中间区顶部：标题 + 配置/日志模式切换（遮罩模式隐藏全局成片搜索栏，退出时恢复批量）
+  function buildMaskCenterHeader() {
+    if (!maskOn()) return; // 仅遮罩模式渲染
+    var gs = $('centerGlobalSearch');
+    if (gs) gs.style.display = 'none'; // 遮罩模式不使用全局成片搜索栏
+    var top = $('centerTop');
+    if (top) {
+      top.innerHTML = '<div class="center-top__header">' +
+        '<span class="center-top__title">遮罩叠加</span>' +
+        '<div class="center-top__toggles">' +
+        '<button class="mode-toggle' + (maskState.view === 'config' ? ' mode-toggle--active' : '') + '" data-maskview="config" id="maskViewConfig">' + icon('list', 12) + '配置</button>' +
+        '<button class="mode-toggle' + (maskState.view === 'log' ? ' mode-toggle--active' : '') + '" data-maskview="log" id="maskViewLog">' + icon('scroll-text', 12) + '日志</button>' +
+        '</div></div>' +
+        '<div class="center-top__dates" id="maskDateBranches"></div>' +
+        '<div class="center-top__ornament-host" id="maskOrnamentHost" aria-hidden="true"></div>';
+      // 日期分支栏仅在日志视图显示（配置视图不占位）
+      var mb = $('maskDateBranches');
+      if (mb) mb.style.display = (maskState.view === 'log') ? '' : 'none';
+      // 日志分支点击切换（委托绑定一次，容器内容由 buildMaskLogView 重建）
+      if (mb) mb.addEventListener('click', function (e) {
+        var btn = e.target.closest('.date-branch-btn');
+        if (!btn) return;
+        var fp = btn.getAttribute('data-masklog');
+        if (!fp || maskState.maskLogBranch === fp) return;
+        maskState.maskLogBranch = fp;
+        if (maskOn() && maskState.view === 'log') buildMaskLogView();
+      });
+      // 双击分支按钮：打开日志所在文件夹并选中日志文件（与批量日志分支一致）
+      if (mb) mb.addEventListener('dblclick', function (e) {
+        var btn = e.target.closest('.date-branch-btn');
+        if (!btn) return;
+        var fp = btn.getAttribute('data-masklog');
+        if (fp) call('open_folder_select', fp).catch(function (err) { setStatus('打开失败：' + err.message); });
+      });
+      // 分支右键菜单（原文件头菜单整体迁入）：打开日志文件夹 / 迁移该日志全部成片
+      if (mb) mb.addEventListener('contextmenu', function (e) {
+        var btn = e.target.closest('.date-branch-btn');
+        if (!btn) return;
+        e.preventDefault();
+        var fp = btn.getAttribute('data-masklog');
+        if (!fp) return;
+        showMenu(e.clientX, e.clientY, [
+          { label: '打开日志文件夹', action: function () { call('open_folder_select', fp).catch(function (err) { setStatus('打开失败：' + err.message); }); } },
+          { label: '迁移该日志全部成片', action: function () { doMoveLogAll(fp); } }
+        ]);
+      });
+      top.querySelector('[data-maskview="config"]').addEventListener('click', function () { maskState.view = 'config'; buildMaskCenterHeader(); buildMaskCenter(); });
+      top.querySelector('[data-maskview="log"]').addEventListener('click', function () { maskState.view = 'log'; buildMaskCenterHeader(); buildMaskCenter(); });
+    }
+    // 遮罩模式无「日期分支」栏（避免空栏占位），但保留皮肤装饰宿主恢复蝴蝶结装饰；
+    // 装饰栏含动画：选中项目后 body[data-maid-chat-active] 驱动其自行动画退出（与批量一致）
+    dispatchSkinRefresh();
+  }
+  // 皮肤行为层需要在新 DOM 结构上重建装饰（如日期分支蝴蝶结）时主动触发
+  function dispatchSkinRefresh() {
+    try { document.dispatchEvent(new CustomEvent('vl:skin-refresh')); } catch (e) {}
+  }
+  // 退出遮罩模式：恢复批量模式的中间区头部（标题 + 配置列表/日志切换 + 日期分支），
+  // 并重建批量事件绑定与皮肤装饰
+  function restoreBatchCenterTop() {
+    var top = $('centerTop');
+    if (!top) return;
+    top.innerHTML = '<div class="center-top__header">' +
+      '<span class="center-top__title">日期分支</span>' +
+      '<div class="center-top__toggles">' +
+      '<button class="mode-toggle mode-toggle--active" data-mode="filelist" id="modeFilelist">' + icon('list', 12) + '配置列表</button>' +
+      '<button class="mode-toggle" data-mode="log" id="modeLog">' + icon('scroll-text', 12) + '日志</button>' +
+      '</div></div>' +
+      '<div class="center-top__dates" id="dateBranches"></div>';
+    // 恢复右侧预览结构（遮罩模式重写过 rightPanelContent，行号/代码容器需重建）
+    var rc = $('rightPanelContent');
+    if (rc && !$('rightLineNumbers')) {
+      rc.innerHTML = '<div class="right-panel__line-numbers" id="rightLineNumbers"></div><div class="right-panel__code" id="rightCode"></div>';
+    }
+    // 底栏留给批量流程填充：退出时清空遮罩残留
+    var bar = $('configBar'); if (bar) bar.innerHTML = '';
+    var mf2 = $('modeFilelist'), ml2 = $('modeLog');
+    if (mf2) mf2.addEventListener('click', function () {
+      state.mode = 'filelist'; mf2.classList.add('mode-toggle--active'); if (ml2) ml2.classList.remove('mode-toggle--active');
+      buildDateBranches(); buildCenterBottom(); buildRightPanel();
+    });
+    if (ml2) ml2.addEventListener('click', function () {
+      state.mode = 'log'; ml2.classList.add('mode-toggle--active'); if (mf2) mf2.classList.remove('mode-toggle--active');
+      buildDateBranches(); buildCenterBottom(); buildRightPanel();
+    });
+    updateModeToggle();
+    buildDateBranches();
+    dispatchSkinRefresh();
+  }
+  // 中间区内容：按视图渲染 配置（素材）或 日志（遮罩日志）
+  function buildMaskCenter() {
+    if (!maskOn()) return;
+    if (maskState.view === 'log') buildMaskLogView();
+    else buildMaskCenterConfig();
+  }
+  function buildMaskCenterConfig() {
+    buildMaskRight(true);
+  }
+  function showMaskGuide() {
+    showDialog({
+      title: '遮罩叠加模式',
+      message: '使用方式：\n1. 左侧选择遮罩叠加项目（项目下的遮罩主题文件夹/外部遮罩目录均可）；\n2. 中间「配置」页勾选原片与遮罩（遮罩按前缀+时长分组，可整组或部分勾选）；\n3. 底部选择模式（遮罩+水印/仅水印/仅遮罩）、输出目录，点击「开始制作」；\n4. 任务在任务窗口查看，失败可「继续制作」续跑；\n5. 中间「日志」页可查看遮罩日志，删除/迁移成片、删除二次拼接产物。\n\n固定水印与遮罩工作路径可在 菜单-设置-遮罩叠加 配置。',
+      buttons: [ { label: '知道了', value: 0, primary: true } ]
+    });
+  }
+  function exitMaskMode() {
+    maskState.on = false; maskResetSession();
+    document.body.classList.remove('mask-mode');
+    updateWinModeLabel(); // 标题栏模式按钮 → 配置管理
+    maskSidebarExitBtn(false);
+    // 还原进入遮罩前右栏的展开状态（遮罩模式强制折叠，退出恢复）
+    if (maskState._sideBefore) {
+      var rp0 = $('rightPanel');
+      document.body.removeAttribute('data-preview-collapsed');
+      state.previewCollapsed = false;
+      if (rp0) { rp0.style.display = ''; rp0.style.width = Math.max(240, state.previewLastWidth || 320) + 'px'; }
+    }
+    maskState._sideBefore = false;
+    var cc = $('previewCollapseRound'); if (cc) cc.style.display = '';
+    var gs0 = $('centerGlobalSearch'); if (gs0) gs0.style.display = ''; // 恢复批量全局成片搜索栏
+    restoreBatchCenterTop();
+    refreshData(true, '正在恢复视图…', function () {
+      var az = $('azIndexBar'); if (az) az.style.display = '';
+      var mmb = $('menuMask'); if (mmb) mmb.innerHTML = icon('layers', 14) + '遮罩叠加';
+      var si = $('logSearchInput'); if (si) si.value = '';
+      bindBatchLogSearch(true); // 搜索框曾被遮罩 clone：强制恢复批量成片搜索监听
+      // 对称还原：批量模式原本未选中配置时（refreshData 不会自动重绘中心区），
+      // 需显式重建批量空视图，避免残留遮罩的中间内容
+      if (!state.activeTxt) {
+        buildDateBranches();
+        buildCenterBottom();
+        buildRightPanel();
+      }
+      setStatus('已退出遮罩叠加模式');
+    });
+  }
+  function refreshMaskProjects() {
+    call('list_mask_projects').then(function (list) {
+      maskState.projects = Array.isArray(list) ? list : [];
+      buildMaskSidebar();
+    }).catch(function (e) { setStatus('加载遮罩叠加项目失败：' + e.message); });
+  }
+  function buildMaskSidebar() {
+    if (!maskOn()) return;
+    var tree = $('sidebarTree');
+    if (!tree) return;
+    var html = '';
+    if (!maskState.projects.length) {
+      html += '<div class="mask-proj-empty">工作路径下暂无遮罩叠加项目<br>请在 菜单-设置-遮罩叠加 配置工作路径</div>';
+    }
+    maskState.projects.forEach(function (p) {
+      var active = maskState.project && maskState.project.name === p.name;
+      html += '<div class="mask-proj-item' + (active ? ' mask-proj-item--active' : '') + '" data-maskproj="' + escapeHtml(p.name) + '">' +
+        icon('folder', 16, 'mask-proj-item__icon') +
+        '<span class="mask-proj-item__name">' + escapeHtml(p.name) + '</span>' +
+        '<span class="mask-proj-item__badge">' + (p.themeCount != null ? p.themeCount : (p.themes ? p.themes.length : 0)) + '主题</span></div>';
+    });
+    tree.innerHTML = html;
+    tree.querySelectorAll('.mask-proj-item').forEach(function (el) {
+      el.addEventListener('click', function () { selectMaskProject(el.getAttribute('data-maskproj')); });
+      // 项目行右键：打开项目位置 / 项目设置（样式参考批量模式）
+      el.addEventListener('contextmenu', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var pName = el.getAttribute('data-maskproj');
+        var pItem = maskState.projects.find(function (x) { return x.name === pName; });
+        showMenu(e.clientX, e.clientY, [
+          { label: '打开项目位置', action: function () { if (pItem) call('open_path', pItem.path).catch(function (err) { setStatus('打开失败：' + err.message); }); } },
+          { label: '项目设置', action: function () { if (pName) openMaskProjectSettings(pName, pItem ? pItem.path : ''); } }
+        ]);
+      });
+    });
+  }
+  // 遮罩项目设置弹窗（样式参考批量模式的 wm 弹窗）：默认输出目录，供底栏占位符与选择初始路径
+  function openMaskProjectSettings(projectName, projPath) {
+    call('get_mask_default_dir', projectName).then(function (curDir) {
+      curDir = String(curDir || '').trim();
+      var overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      var card = document.createElement('div');
+      card.className = 'modal-card modal-card--wm';
+      card.innerHTML =
+        '<button type="button" class="modal-close" title="关闭">✕</button>' +
+        '<div class="modal__title">项目设置</div>' +
+        '<div class="modal__wm-body">' +
+        '<div class="wm-section-title">默认输出目录</div>' +
+        '<div class="wm-row"><span class="wm-row__label">输出路径</span><div class="wm-row__ops">' +
+        '<input type="text" class="wm-row__input" id="maskDefaultOutInput" style="flex:1; min-width:0" placeholder="' + escapeHtml(projPath) + '" value="' + escapeHtml(curDir) + '" spellcheck="false">' +
+        '<button type="button" class="modal-btn" id="maskDefaultOutPick">选择目录</button>' +
+        '</div></div>' +
+        '</div>' +
+        '<div class="modal__actions">' +
+        '<button type="button" class="modal-btn" data-mp2-act="cancel">取消</button>' +
+        '<button type="button" class="modal-btn modal-btn--primary" data-mp2-act="save">保存</button>' +
+        '</div>';
+      overlay.appendChild(card);
+      document.body.appendChild(overlay);
+      var inp = card.querySelector('#maskDefaultOutInput');
+      function closeDlg() { overlay.remove(); }
+      card.querySelector('#maskDefaultOutPick').addEventListener('click', function () {
+        var cur = inp.value.trim() || curDir || projPath || '';
+        call('pick_directory', '选择默认输出目录', cur).then(function (np) { if (np) inp.value = np; }).catch(function () {});
+      });
+      overlay.addEventListener('click', function (e) { if (e.target === overlay) closeDlg(); });
+      card.querySelector('.modal-close').addEventListener('click', closeDlg);
+      card.querySelector('[data-mp2-act="cancel"]').addEventListener('click', closeDlg);
+      card.querySelector('[data-mp2-act="save"]').addEventListener('click', function () {
+        var v = inp.value.trim();
+        call('set_mask_default_dir', projectName, v).then(function (r) {
+          if (!r || !r.ok) { alertDialog('保存失败：' + ((r && r.error) || '未知错误')); return; }
+          setStatusDone('已保存项目设置');
+          closeDlg();
+          // 正在编辑该项目时刷新底栏占位符
+          if (maskState.project && maskState.project.name === projectName) {
+            maskState.defaultOutDir = v;
+            buildMaskConfigBar();
+          }
+        }).catch(function (err) { alertDialog('保存失败：' + err.message); });
+      });
+    }).catch(function (err) { alertDialog('读取项目设置失败：' + err.message); });
+  }
+  function selectMaskProject(name) {
+    var p = maskState.projects.find(function (x) { return x.name === name; });
+    if (!p) return;
+    // 重复点击当前已选中的项目：不触发任何重载/动画
+    if (maskState.project && maskState.project.name === name) return;
+    maskState.project = p;
+    // 缺省值：先按无缓存状态初始化，随后按持久化会话恢复或自动扫描
+    maskState.rawDirs = [];
+    maskState.rawSel = {};
+    maskState.themes = [{ path: p.path, name: p.name }];
+    maskState.maskSel = {};
+    maskState.maskLogBranch = ''; // 切换项目：日志分支回退到最新
+    // 水印沿用设置页固定水印（enterMaskMode 已读入），切换项目不清空，避免误报「未选水印」
+    maskState.outputDir = '';      // 空值走占位符默认目录（项目设置 - 默认输出目录）
+    maskState.defaultOutDir = '';
+    // 异步加载项目默认输出目录，用于底栏占位符与「选择目录」对话框初始路径
+    call('get_mask_default_dir', p.name).then(function (d) {
+      if (!maskOn() || !maskState.project || maskState.project.name !== p.name) return;
+      maskState.defaultOutDir = String(d || '').trim();
+      buildMaskConfigBar();
+    }).catch(function () {});
+    // 切换项目：仅更新侧栏 active 高亮（不整树重建，列表已渲染），
+    // 保证缎带展开/收回的 scaleX 过渡动画完整播放；不重建顶部栏，header/装饰由 data 切换驱动
+    document.querySelectorAll('.mask-proj-item').forEach(function (el) {
+      el.classList.toggle('mask-proj-item--active', el.getAttribute('data-maskproj') === name);
+    });
+    // 切换项目不立即渲染中间区：先用加载占位，等会话恢复/自动扫描完成后一次性渲染，
+    // 避免「立即渲染 + 恢复后重绘」造成配置/日志视图各刷新两次
+    buildMaskConfigBar();
+    var cb0 = $('centerBottom');
+    if (cb0) cb0.innerHTML = maskState.view === 'log'
+      ? '<div class="mask-config__hint">正在加载日志…</div>'
+      : '<div class="mask-config__hint">正在加载项目「' + escapeHtml(p.name) + '」…</div>';
+    setStatus('已选择遮罩叠加项目：' + p.name);
+    // 会话恢复/扫描完成后统一渲染一次（配置视图依赖恢复数据，日志视图此时初始化）
+    function maskRerenderAfterRestore() {
+      buildMaskCenter(); buildMaskConfigBar(); refreshMaskStartHint();
+    }
+    // 恢复持久化会话：有缓存（含外部添加目录/模式/输出目录；勾选不持久化）则原样恢复；
+    // 无缓存 → 自动扫描项目下所有 mp4 所在文件夹分组并落盘
+    call('get_mask_session', p.name).then(function (sess) {
+      if (!maskOn() || !maskState.project || maskState.project.name !== p.name) return;
+      if (sess && Array.isArray(sess.rawDirs)) {
+        maskState.rawDirs = sess.rawDirs.map(function (d) { return { path: d.path, name: d.name }; });
+        // 勾选不持久化记忆：一律从空开始（提交任务后已清空，此处忽略历史勾选）
+        maskState.rawSel = {};
+        maskState.maskSel = {};
+        if (Array.isArray(sess.themes) && sess.themes.length) maskState.themes = sess.themes.map(function (t) { return { path: t.path, name: t.name }; });
+        if (sess.mode) maskState.mode = sess.mode;
+        if (sess.outputDir) maskState.outputDir = sess.outputDir;
+        if (typeof sess.suffix === 'string') maskState.suffix = sess.suffix;
+        maskRerenderAfterRestore();
+        // 校验持久化目录有效性：不存在/为空的原片文件夹与失效外部遮罩目录从列表去除
+        validateMaskDirs();
+      } else {
+        call('scan_mask_raw_dirs', p.path).then(function (dirs) {
+          if (!maskOn() || !maskState.project || maskState.project.name !== p.name) return;
+          maskState.rawDirs = Array.isArray(dirs) ? dirs : [];
+          maskRerenderAfterRestore();
+          maskPersist();
+        }).catch(function () {});
+      }
+    }).catch(function () {
+      if (!maskOn() || !maskState.project || maskState.project.name !== p.name) return;
+      call('scan_mask_raw_dirs', p.path).then(function (dirs) {
+        if (!maskOn() || !maskState.project || maskState.project.name !== p.name) return;
+        maskState.rawDirs = Array.isArray(dirs) ? dirs : [];
+        maskRerenderAfterRestore();
+      }).catch(function () {});
+    });
+    // 兜底：进入模式即选项目时默认水印可能尚未读入，补一次
+    if (!maskState.watermark) {
+      call('get_settings').then(function (cfg) {
+        if (cfg && cfg.mask && cfg.mask.watermark_mov) {
+          maskState.watermark = cfg.mask.watermark_mov;
+          if (maskState.on) buildMaskConfigBar();
+        }
+      }).catch(function () {});
+    }
+  }
+  function pathJoin(a, b) { return String(a).replace(/[\\/]+$/, '') + '\\' + String(b).replace(/^[\\/]+/, ''); }
+  function buildMaskRight(isCenter) {
+    if (!maskOn()) return;
+    var panel = isCenter ? $('centerBottom') : $('rightPanelContent');
+    if (!panel) return;
+    if (!maskState.project) {
+      if (!maskState.projects.length) {
+        panel.innerHTML = '<div class="center-empty">' + icon('layers', 24, 'center-empty__icon') +
+          '<span style="font-size:var(--body-sm-font-size)">暂无遮罩叠加项目<br>请在 菜单-设置-遮罩叠加 配置工作路径后重试</span></div>';
+      } else {
+        panel.innerHTML = '<div class="center-empty">' + icon('layers', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">请在左侧选择一个遮罩叠加项目</span></div>';
+      }
+      return;
+    }
+    var p = maskState.project;
+    var html = '<div class="mask-config">';
+    html += '<div class="mask-config__cols">';
+    // ── 左栏：遮罩主题（标题固定，列表独立滚动） ──
+    if (maskNeedMask()) {
+      html += '<div class="mask-config__col mask-config__col--mask"><div class="mask-config__section-title"><span class="mask-config__title">遮罩主题</span>' +
+        '<button type="button" class="mask-config__addbtn" id="maskAddThemeDir" title="添加项目外遮罩目录">' + icon('plus', 12) + '添加遮罩目录</button></div><div class="mask-config__list">';
+      if (!maskState.themes.length) {
+        html += '<div class="mask-config__hint">项目下没有遮罩主题文件夹，请放入含 mov 的主题文件夹后刷新</div>';
+      } else {
+        html += '<div id="maskAllGroups"><div class="mask-files__loading">正在扫描…</div></div>';
+      }
+      html += '</div></div>';
+    }
+    // ── 右栏：原片选择（标题固定，列表独立滚动） ──
+    html += '<div class="mask-config__col mask-config__col--raw"><div class="mask-config__section-title"><span class="mask-config__title">原片素材</span>' +
+      '<button type="button" class="mask-config__addbtn" id="maskAddRawDir" title="添加原片文件夹">' + icon('plus', 12) + '添加文件夹</button></div><div class="mask-config__list">';
+    if (!maskState.rawDirs.length) {
+      html += '<div class="mask-config__hint">尚未选择原片文件夹</div>';
+    } else {
+      maskState.rawDirs.forEach(function (rd, i) {
+        if (rd.files && rd.files.length === 0) return; // 已扫描且 0 素材：该原片文件夹不显示
+        html += '<div class="mask-folder-row" data-rawfold="' + i + '" title="点击展开/收起文件列表">' +
+          '<label class="mask-folder-row__check" title="全选/取消该文件夹全部素材"><input type="checkbox" data-rawall="' + i + '"><span class="mask-folder-row__box"></span></label>' +
+          '<span class="mask-folder-row__name" title="' + escapeHtml(rd.path) + '">' + escapeHtml(rd.name) + '</span>' +
+          '<span class="mask-folder-row__count" id="maskRawCount_' + i + '"></span>' +
+          '<button type="button" class="mask-folder-row__del" data-rawdel="' + i + '" title="移除该文件夹">' + icon('x', 13) + '</button>' +
+          '<span class="mask-folder-row__arrow"></span></div>';
+        html += '<div class="mask-files" id="maskRawFiles_' + i + '" data-rawfiles="' + i + '"' + ((maskState.rawSel[rd.path] || []).length ? '' : ' style="display:none"') + '><div class="mask-files__loading">正在扫描…</div></div>';
+      });
+    }
+    html += '</div></div>';
+    html += '</div></div>';
+    panel.innerHTML = html;
+    // 绑定事件
+    var po = $('maskOpenProj');
+    if (po) po.addEventListener('click', function () { call('open_path', p.path); });
+    var ar = $('maskAddRawDir');
+    if (ar) ar.addEventListener('click', function () {
+      call('pick_single_folder').then(function (np) {
+        if (!np) return;
+        if (maskState.rawDirs.some(function (d) { return pathResolveEq(d.path, np); })) { setStatus('该原片文件夹已添加'); return; }
+        maskState.rawDirs.push({ path: np, name: baseNameNoExt(np) || np });
+        buildMaskCenter(); maskPersist();
+      }).catch(function () {});
+    });
+    var at = $('maskAddThemeDir');
+    if (at) at.addEventListener('click', function () {
+      call('pick_single_folder').then(function (np) {
+        if (!np) return;
+        if (maskState.themes.some(function (t) { return pathResolveEq(t.path, np); })) { setStatus('该遮罩目录已添加'); return; }
+        maskState.themes.push({ path: np, name: baseNameNoExt(np) || np });
+        buildMaskCenter(); maskPersist();
+      }).catch(function () {});
+    });
+    // 两栏素材右键菜单：遮罩主题组/文件、原片文件 → 打开文件/打开路径/删除素材成片；原片文件夹行 → 打开路径
+    panel.addEventListener('contextmenu', function (e) {
+      var mkOpen = function (full) {
+        showMenu(e.clientX, e.clientY, [
+          { label: '打开文件', action: function () { call('open_path', full); } },
+          { label: '打开路径', action: function () { call('open_folder_select', full); } }
+        ]);
+      };
+      var gf = e.target.closest('.mask-group-file');
+      if (gf) { var gFull = gf.getAttribute('data-full'); if (gFull) { e.preventDefault(); mkOpen(gFull); } return; }
+      var gh = e.target.closest('.mask-group-head');
+      if (gh) { var hFull = gh.getAttribute('data-full'); if (hFull) { e.preventDefault(); mkOpen(hFull); } return; }
+      var fi = e.target.closest('.mask-file-item');
+      if (fi) {
+        var fFull = fi.getAttribute('data-full');
+        if (fFull) {
+          e.preventDefault();
+          showMenu(e.clientX, e.clientY, [
+            { label: '打开文件', action: function () { call('open_path', fFull); } },
+            { label: '打开路径', action: function () { call('open_folder_select', fFull); } },
+            { label: '删除该素材产生的成片', action: function () { maskDeleteByRaw(fFull); } }
+          ]);
+        }
+        return;
+      }
+      var fr = e.target.closest('.mask-folder-row');
+      if (fr) {
+        var rd = maskState.rawDirs[parseInt(fr.getAttribute('data-rawfold'), 10)];
+        if (rd && rd.path) { e.preventDefault(); showMenu(e.clientX, e.clientY, [{ label: '打开路径', action: function () { call('open_path', rd.path); } }]); }
+        return;
+      }
+    });
+    // 遮罩主题：跨文件夹按 mov 名称前缀聚合分组，构建后直接加载展示
+    if (maskNeedMask() && maskState.themes.length) loadAllMaskGroups();
+    // 原片文件夹行：点击展开/收起文件列表（箭头旋转动画）；复选框/删除按钮区域不触发折叠
+    panel.querySelectorAll('[data-rawfold]').forEach(function (row) {
+      row.addEventListener('click', function (e) {
+        if (e.target.closest('[data-rawdel]') || e.target.closest('.mask-folder-row__check')) return;
+        var i = parseInt(row.getAttribute('data-rawfold'), 10);
+        var box = document.getElementById('maskRawFiles_' + i);
+        if (!box) return;
+        var open = box.style.display === 'none';
+        box.style.display = open ? '' : 'none';
+        row.classList.toggle('mask-folder-row--open', open);
+      });
+    });
+    // 原片文件夹移除
+    panel.querySelectorAll('[data-rawdel]').forEach(function (b) {
+      b.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var i = parseInt(b.getAttribute('data-rawdel'), 10);
+        var rd = maskState.rawDirs[i];
+        if (!rd) return;
+        maskState.rawDirs.splice(i, 1);
+        delete maskState.rawSel[rd.path];
+        buildMaskCenter(); maskPersist();
+      });
+    });
+    // 原片文件列表懒加载
+    maskState.rawDirs.forEach(function (rd, i) {
+      loadMaskRawFiles(rd, i);
+    });
+  }
+  function pathResolveEq(a, b) {
+    var x = String(a).replace(/[\\/]+$/, '').toLowerCase();
+    var y = String(b).replace(/[\\/]+$/, '').toLowerCase();
+    return x === y;
+  }
+  function loadMaskRawFiles(rd, i) {
+    if (!maskOn()) return;
+    var box = document.getElementById('maskRawFiles_' + i);
+    if (!box) return;
+    var projName = maskState.project ? maskState.project.name : '';
+    var rdPath = rd.path;
+    call('list_mask_videos', rdPath).then(function (files) {
+      // 过期校验：异步探测期间切换了项目、或该目录已不在当前项目列表 → 丢弃本次结果，
+      // 防止旧项目（如大目录慢扫描）的回调把计数/列表写到新项目同名索引的行上（数字串号）
+      if (!maskOn() || !maskState.project || maskState.project.name !== projName) return;
+      if (!(maskState.rawDirs || []).some(function (d) { return String(d.path) === rdPath; })) return;
+      if (!box) return;
+      files = Array.isArray(files) ? files : [];
+      rd.files = files;
+      var countEl = document.getElementById('maskRawCount_' + i);
+      if (countEl) countEl.textContent = files.length + ' 个';
+      if (!files.length) {
+        // 0 素材：移除该原片文件夹行与占位列表，避免空文件夹留白
+        var row = document.querySelector('[data-rawfold="' + i + '"]');
+        if (row) row.remove();
+        if (box) box.remove();
+        refreshMaskStartHint();
+        return;
+      }
+      var html = '';
+      files.forEach(function (f) {
+        var full = maskFullPath(rd.path, f.sub, f.name);
+        var sel = (maskState.rawSel[rd.path] || []).indexOf(f.name) >= 0; // 缺省 = 未勾选任何原片
+        html += '<label class="mask-file-item" data-full="' + escapeHtml(full) + '"><input type="checkbox" data-vid="' + escapeHtml(f.name) + '"' + (sel ? ' checked' : '') + '>' +
+          '<span class="mask-file-item__box"></span>' +
+          '<span class="mask-file-item__name" title="' + escapeHtml(full) + '">' + (f.sub ? escapeHtml(f.sub) + '/' : '') + escapeHtml(f.name) + '</span>' +
+          '<span class="mask-file-item__dur">' + maskFmtDur(f.dur) + '</span></label>';
+      });
+      box.innerHTML = html;
+      // 组头全选框：按当前勾选状态设置 checked/半选，并绑定全选/取消全选联动
+      var allCb = document.querySelector('.mask-folder-row [data-rawall="' + i + '"]');
+      function syncRawHead() {
+        if (!allCb) return;
+        var set = maskState.rawSel[rd.path] || [];
+        var all = set.length === files.length;
+        var any = set.length > 0;
+        allCb.checked = all;
+        allCb.indeterminate = any && !all;
+        return { all: all, any: any };
+      }
+      syncRawHead();
+      if (allCb) allCb.addEventListener('change', function () {
+        if (allCb.checked) maskState.rawSel[rd.path] = files.map(function (f) { return f.name; });
+        else maskState.rawSel[rd.path] = [];
+        box.querySelectorAll('input[data-vid]').forEach(function (fc) { fc.checked = allCb.checked; });
+        allCb.indeterminate = false;
+        refreshMaskStartHint();
+        var selEl = document.getElementById('maskSelTotal');
+        if (selEl) selEl.textContent = maskSelTotalText();
+        maskPersist();
+      });
+      box.querySelectorAll('input[data-vid]').forEach(function (cb) {
+        cb.addEventListener('change', function () {
+          var name = cb.getAttribute('data-vid');
+          var cur = maskState.rawSel[rd.path] || [];
+          var set = cur.slice();
+          var k = set.indexOf(name);
+          if (cb.checked && k < 0) set.push(name);
+          if (!cb.checked && k >= 0) set.splice(k, 1);
+          maskState.rawSel[rd.path] = set;
+          syncRawHead();
+          refreshMaskStartHint();
+          var selEl = document.getElementById('maskSelTotal');
+          if (selEl) selEl.textContent = maskSelTotalText();
+          maskPersist();
+        });
+      });
+      // 文件加载完成：有勾选的文件夹保持展开箭头态；同时刷新底部提示与计数
+      var rowEl = document.querySelector('[data-rawfold="' + i + '"]');
+      if (rowEl && (maskState.rawSel[rd.path] || []).length > 0) rowEl.classList.add('mask-folder-row--open');
+      refreshMaskStartHint();
+      var selEl2 = document.getElementById('maskSelTotal');
+      if (selEl2) selEl2.textContent = maskSelTotalText();
+    }).catch(function () {
+      if (box) box.innerHTML = '<div class="mask-config__hint">扫描失败</div>';
+    });
+  }
+  // 主题完整路径（sub 含子文件夹，用 '/' 分隔）
+  function maskFullPath(themePath, sub, name) {
+    var p = themePath;
+    if (sub) p = String(p).replace(/[\\/]+$/, '') + '\\' + String(sub).replace(/\//g, '\\');
+    return String(p).replace(/[\\/]+$/, '') + '\\' + name;
+  }
+  // 加载全部主题的遮罩并跨文件夹按 mov 名称前缀+时长聚合分组展示：
+  // 组为折叠容器（组头全选/取消全选），组内 mov 可单独勾选
+  function loadAllMaskGroups() {
+    if (!maskOn()) return;
+    var box = $('maskAllGroups');
+    if (!box) return;
+    var projName = maskState.project ? maskState.project.name : '';
+    var themeSnap = (maskState.themes || []).slice();
+    Promise.all(themeSnap.map(function (t) {
+      return call('list_mask_masks', t.path).catch(function () { return []; });
+    })).then(function (results) {
+      // 过期校验：异步扫描期间切换了项目 → 丢弃旧项目主题结果（防与新项目主题错配串号）；
+      // 主题列表用请求时的快照，避免回调读取已被新项目替换的 maskState.themes[i] 错位
+      if (!maskOn() || !maskState.project || maskState.project.name !== projName) return;
+      var files = [];
+      results.forEach(function (list, i) {
+        var t = themeSnap[i];
+        (Array.isArray(list) ? list : []).forEach(function (f) {
+          files.push({ full: maskFullPath(t.path, f.sub, f.name), name: f.name, sub: f.sub || '', dur: f.dur || 0 });
+        });
+      });
+      if (!files.length) { box.innerHTML = '<div class="mask-config__hint">无遮罩文件</div>'; return; }
+      var groups = {};
+      var order = [];
+      files.forEach(function (f) {
+        var prefix = maskGroupPrefix(f.name);
+        // 分组仅以 mov 名称前缀为准（不计时长）：前缀相同即一组，避免同主题按时长被拆开
+        if (!groups[prefix]) { groups[prefix] = { prefix: prefix, dur: f.dur || 0, files: [] }; order.push(prefix); }
+        groups[prefix].files.push(f);
+      });
+      // 徽章同步：右栏实际主题组数（含「添加遮罩目录」等外部目录），与左侧当前项目徽章对齐
+      var badge = document.querySelector('.mask-proj-item--active .mask-proj-item__badge');
+      if (badge) badge.textContent = order.length + '主题';
+      var html = '';
+      var groupsArr = [];
+      var gid = 0;
+      // 按 mov 名称前缀的拼音首字母聚合分组（参考配置管理模式配置列表），字母升序 + 分组头
+      var letterMap = {};
+      order.forEach(function (key) {
+        var g = groups[key];
+        // 分组头以去重后的显示名为准（如「项目A-中秋节」按「中秋节」参与字母分组）
+        var L = azInitial(maskDisplayName(g.prefix));
+        if (!letterMap[L]) letterMap[L] = [];
+        letterMap[L].push(g);
+      });
+      var azOrder = AZ_KEYS.concat('#');
+      Object.keys(letterMap).sort(function (a, b) { return azOrder.indexOf(a) - azOrder.indexOf(b); }).forEach(function (L) {
+        html += '<div class="mask-letter-head"><span class="mask-letter-head__label">' + escapeHtml(L) + '</span><span class="mask-letter-head__line"></span></div>';
+        letterMap[L].forEach(function (g) {
+          var allSel = g.files.every(function (f) { return maskState.maskSel[f.full] === true; });
+          var anySel = g.files.some(function (f) { return maskState.maskSel[f.full] === true; });
+          var single = g.files.length <= 1;
+          var gi = gid++;
+          groupsArr.push(g);
+          if (single) {
+            // 单文件主题：渲染为与多文件主题组头同级的单个主题行（checkbox+主题名+时长），
+            // 不缩进、不出现「组头+子项」两行，与其他主题并排左对齐
+            var f0 = g.files[0];
+            var s0 = maskState.maskSel[f0.full] === true;
+            html += '<div class="mask-group mask-group--single">' +
+              '<div class="mask-group-head mask-group-head--single" data-full="' + escapeHtml(f0.full) + '">' +
+              '<label class="mask-group-head__check"><input type="checkbox" data-grpall="' + gi + '"' + (s0 ? ' checked' : '') + '><span class="mask-group-head__box"></span></label>' +
+              '<span class="mask-group-head__name" title="' + escapeHtml(f0.full) + '">' + escapeHtml(maskDisplayName(g.prefix)) + '</span>' +
+              '<span class="mask-group-head__meta">' + maskFmtDur(f0.dur) + '</span></div></div>';
+          } else {
+            var gHeadTip = g.files[0].full + (g.files.length > 1 ? '\n（共 ' + g.files.length + ' 个文件）' : '');
+            html += '<div class="mask-group">' +
+              '<div class="mask-group-head' + (anySel ? ' mask-group-head--open' : '') + '" data-full="' + escapeHtml(g.files[0].full) + '">' +
+              '<label class="mask-group-head__check"><input type="checkbox" data-grpall="' + gi + '"' + (allSel ? ' checked' : '') + '><span class="mask-group-head__box"></span></label>' +
+              '<span class="mask-group-head__name" title="' + escapeHtml(gHeadTip) + '">' + escapeHtml(maskDisplayName(g.prefix)) + '</span>' +
+              '<span class="mask-group-head__meta">' + g.files.length + ' 个' + '</span>' +
+              '<span class="mask-group-head__arrow"></span></div>' +
+              '<div class="mask-group-files"' + (anySel ? '' : ' style="display:none"') + '>';
+            g.files.forEach(function (f, fi) {
+              var sel = maskState.maskSel[f.full] === true;
+              html += '<label class="mask-group-file" data-full="' + escapeHtml(f.full) + '"><input type="checkbox" data-grpfile="' + gi + '_' + fi + '"' + (sel ? ' checked' : '') + '>' +
+                '<span class="mask-group-file__box"></span>' +
+                '<span class="mask-group-file__name" title="' + escapeHtml(f.full) + '">' + (f.sub ? escapeHtml(maskDisplayName(f.sub)) + '/' : '') + escapeHtml(maskDisplayName(f.name)) + '</span>' +
+                '<span class="mask-group-file__meta">' + maskFmtDur(f.dur) + '</span></label>';
+            });
+            html += '</div></div>';
+          }
+        });
+      });
+      box.innerHTML = html;
+      // 组头半选态（indeterminate）：部分勾选时显示短横（常规复选框组联动的标准形态）
+      box.querySelectorAll('input[data-grpall]').forEach(function (cb) {
+        var g = groupsArr[parseInt(cb.getAttribute('data-grpall'), 10)];
+        if (g) { var st0 = refreshHead(g); cb.indeterminate = st0.any && !st0.all; }
+      });
+      function refreshHead(g) {
+        return { all: g.files.every(function (f) { return maskState.maskSel[f.full] === true; }), any: g.files.some(function (f) { return maskState.maskSel[f.full] === true; }) };
+      }
+      function updateSelCount() {
+        var el = document.getElementById('maskSelTotal');
+        if (el) el.textContent = maskSelTotalText();
+      }
+      updateSelCount();
+      // 组头：全选 / 取消全选（联动组内复选框，避免「组头勾选、组内为空」的误会）
+      box.querySelectorAll('input[data-grpall]').forEach(function (cb) {
+        cb.addEventListener('change', function () {
+          var g = groupsArr[parseInt(cb.getAttribute('data-grpall'), 10)];
+          if (!g) return;
+          g.files.forEach(function (f) {
+            if (cb.checked) maskState.maskSel[f.full] = true;
+            else delete maskState.maskSel[f.full];
+          });
+          var grp = cb.closest('.mask-group');
+          grp.querySelectorAll('input[data-grpfile]').forEach(function (fc) { fc.checked = cb.checked; });
+          cb.indeterminate = false;
+          var filesBox = grp.querySelector('.mask-group-files');
+          if (filesBox && !grp.classList.contains('mask-group--single')) filesBox.style.display = cb.checked ? '' : 'none';
+          buildMaskConfigBar();
+          updateSelCount();
+          maskPersist();
+        });
+      });
+      // 组内单个 mov：同步组头全选/半选；无勾选时隐藏组内列表
+      box.querySelectorAll('input[data-grpfile]').forEach(function (cb) {
+        cb.addEventListener('change', function () {
+          var part = String(cb.getAttribute('data-grpfile')).split('_');
+          var g = groupsArr[parseInt(part[0], 10)];
+          var f = g && g.files[parseInt(part[1], 10)];
+          if (!g || !f) return;
+          if (cb.checked) maskState.maskSel[f.full] = true;
+          else delete maskState.maskSel[f.full];
+          var st = refreshHead(g);
+          var headCb = cb.closest('.mask-group').querySelector('input[data-grpall]');
+          if (headCb) { headCb.checked = st.all; headCb.indeterminate = st.any && !st.all; }
+          var filesBox = cb.closest('.mask-group').querySelector('.mask-group-files');
+          if (filesBox && !cb.closest('.mask-group').classList.contains('mask-group--single')) filesBox.style.display = st.any ? '' : 'none';
+          buildMaskConfigBar();
+          updateSelCount();
+          maskPersist();
+        });
+      });
+      // 组头点击展开/折叠组内列表（单文件组恒展开，点击无折叠）；复选框区域只勾选不折叠
+      box.querySelectorAll('.mask-group-head').forEach(function (hd) {
+        hd.addEventListener('click', function (e) {
+          if (e.target.closest('.mask-group-head__check')) return;
+          if (hd.classList.contains('mask-group-head--single')) return;
+          var filesBox = hd.parentNode.querySelector('.mask-group-files');
+          if (!filesBox) return;
+          filesBox.style.display = filesBox.style.display === 'none' ? '' : 'none';
+          hd.classList.toggle('mask-group-head--open', filesBox.style.display !== 'none');
+        });
+      });
+    }).catch(function () { box.innerHTML = '<div class="mask-config__hint">扫描失败</div>'; });
+  }
+  // 日志视图：加载遮罩叠加日志并渲染到中间区（搜索过滤 / 删除 / 迁移 / 素材删除 / 二次产物）
+  function buildMaskLogView() {
+    if (!maskOn()) return;
+    var box = $('centerBottom');
+    if (!box) return;
+    if (!maskState.project) {
+      box.innerHTML = '<div class="center-empty">' + icon('layers', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">请在左侧选择一个遮罩叠加项目</span></div>';
+      return;
+    }
+    var q = (maskState.search || '').toLowerCase();
+    call('list_mask_logs', maskState.project.path).then(function (logs) {
+      var allLogs = Array.isArray(logs) ? logs : [];
+      // 分支按钮先定（含默认选中最新），随后判断渲染幂等
+      buildMaskLogBranches(allLogs);
+      // 渲染幂等：同一项目+分支+搜索词 且 日志文件(mtime)未变化时跳过重复渲染，
+      // 避免切换项目/会话恢复/自愈轮询等入口对同一份日志反复重绘
+      var sig = maskState.project.path + '\u0000' + (maskState.maskLogBranch || '') + '\u0000' + q + '\u0000' +
+        allLogs.map(function (l) { return l.path + '@' + Math.round(l.mtime || 0); }).join(',');
+      if (maskState._logRenderSig === sig) return;
+      maskState._logRenderSig = sig;
+      if (!allLogs.length) {
+        box.innerHTML = '<div class="mask-config__hint">暂无遮罩日志（任务完成后生成）</div>';
+        return;
+      }
+      // 过滤到当前选中的日期分支；分支失效则回退最新
+      var branchLogs = allLogs.filter(function (l) { return l.path === (maskState.maskLogBranch || ''); });
+      if (!branchLogs.length) {
+        maskState.maskLogBranch = '';
+        buildMaskLogBranches(allLogs);
+        branchLogs = allLogs.filter(function (l) { return l.path === (maskState.maskLogBranch || ''); });
+      }
+      // 渲染对齐批量日志：所选日期分支下直接列出成片条目（文件头角色已由顶部日期分支按钮承担）
+      var html = '';
+      var showed = 0;
+      branchLogs.forEach(function (log) {
+        var entries = (log.entries || []).filter(function (e) { return !q || String(e.video || '').toLowerCase().indexOf(q) >= 0; });
+        entries.forEach(function (e) {
+          showed++;
+          var clips = e.clips || [];
+          html += '<div class="log-entry" data-log-path="' + escapeHtml(log.path) + '" data-video="' + escapeHtml(e.video || '') + '" data-out="' + escapeHtml(e.outPath || '') + '">' +
+            '<div class="log-entry__header">' +
+            '<span class="log-entry__arrow">' + icon('chevron-right', 14) + '</span>' + icon('video', 14) +
+            '<span class="log-entry__video-name" title="' + escapeHtml(e.outPath || e.video) + '">' + escapeHtml(e.video || '（未命名成片）') + '</span>' +
+            '<span class="log-entry__clip-count">' + clips.length + ' 素材</span>' +
+            '<button type="button" class="mask-log-entry__del" data-delone="' + escapeHtml(e.video) + '" title="删除该成片">' + icon('x', 12) + '</button></div>';
+          html += '<div class="log-entry__clips" style="display:none">';
+          clips.forEach(function (c) {
+            html += '<div class="log-entry__clip" data-clip="' + escapeHtml(c) + '" title="删除所有使用该素材的成片：' + escapeHtml(baseNameNoExt(c)) + '">' + icon('layers', 12) + '<span class="log-entry__clip-path" title="' + escapeHtml(c) + '">' + escapeHtml(baseNameNoExt(c)) + '</span></div>';
+          });
+          html += '</div></div>';
+        });
+      });
+      if (!showed) {
+        box.innerHTML = '<div class="mask-config__hint">' + (q ? '未找到匹配日志' : '暂无遮罩日志（任务完成后生成）') + '</div>';
+        return;
+      }
+      box.innerHTML = '<div class="log-list">' + html + '</div>';
+      // 个人操作：迁移单成片 / 删除单成片 / 删除相关成片（按钮与右键菜单共用）
+      function doMoveOne(vn) {
+        call('pick_single_folder').then(function (nd) {
+          if (!nd) return;
+          call('move_mask_out', maskState.project.path, vn, nd).then(function (r) {
+            if (!r || !r.ok) { setStatus('迁移失败：' + ((r && r.error) || '未知错误')); return; }
+            setStatusDone('已迁移成片：' + baseNameNoExt(r.to || vn));
+            buildMaskLogView();
+          }).catch(function (err) { setStatus('迁移失败：' + err.message); });
+        }).catch(function () {});
+      }
+      function doDeleteOne(vn) {
+        showDialog({ title: '删除成片', message: '确定删除成片「' + vn + '」？日志中将同步移除该条目。', buttons: [ { label: '取消', value: 0 }, { label: '删除', value: 1, danger: true } ] }).then(function (v) {
+          if (v !== 1) return;
+          call('delete_mask_videos', maskState.project.path, [vn]).then(function (r) {
+            if (!r || !r.ok) { maskTellResult('删除失败', ((r && r.error) || '未知错误')); return; }
+            maskTellResult('删除结果', '已删除 ' + ((r.deleted || []).length) + ' 个成片');
+            buildMaskLogView();
+          }).catch(function (err) { maskTellResult('删除失败', err.message); });
+        });
+      }
+      function doDeleteRelated(clip) {
+        var base = baseNameNoExt(clip);
+        showDialog({ title: '删除相关成片', message: '确定删除所有使用素材「' + base + '」的遮罩叠加成片吗？', buttons: [ { label: '取消', value: 0 }, { label: '删除', value: 1, danger: true } ] }).then(function (v) {
+          if (v !== 1) return;
+          call('delete_mask_related', maskState.project.path, [clip]).then(function (r) {
+            if (!r || !r.ok) { maskTellResult('删除失败', ((r && r.error) || '未知错误')); return; }
+            maskTellResult('删除结果', '已删除 ' + ((r.deleted || []).length) + ' 个相关成片');
+            buildMaskLogView();
+          }).catch(function (err) { maskTellResult('删除失败', err.message); });
+        });
+      }
+      // 条目标题点击：展开/收起素材列表（箭头随状态旋转）；删除按钮区域不触发
+      box.querySelectorAll('.log-entry').forEach(function (row) {
+        var head = row.querySelector('.log-entry__header');
+        if (!head) return;
+        head.addEventListener('click', function (e) {
+          if (e.target.closest('[data-delone]')) return;
+          var clips = row.querySelector('.log-entry__clips');
+          if (!clips) return;
+          var open = clips.style.display !== 'none';
+          clips.style.display = open ? 'none' : '';
+          row.classList.toggle('log-entry--open', !open);
+        });
+      });
+      // 单成片删除按钮
+      box.querySelectorAll('[data-delone]').forEach(function (b) {
+        b.addEventListener('click', function (e) { e.stopPropagation(); doDeleteOne(b.getAttribute('data-delone')); });
+      });
+      // 片段行左键仅展开/收起素材所属成片条目，不绑定删除（删除该素材产生的成片在右键菜单）
+      // 右键菜单：片段行（打开片段/片段文件夹/删除该素材产生的成片）在前，
+      // 成片条目在后——片段位于条目内部，先判片段避免被成片菜单拦截
+      box.oncontextmenu = function (e) {
+        var cp = e.target.closest('.log-entry__clip');
+        if (cp) {
+          e.preventDefault();
+          var clip = cp.getAttribute('data-clip');
+          if (!clip) return;
+          showMenu(e.clientX, e.clientY, [
+            { label: '打开片段', action: function () { call('open_path', clip).catch(function (err) { setStatus('打开失败：' + err.message); }); } },
+            { label: '片段文件夹', action: function () { call('open_folder_select', clip).catch(function (err) { setStatus('打开失败：' + err.message); }); } },
+            { label: '删除该素材产生的成片', action: function () { doDeleteRelated(clip); } }
+          ]);
+          return;
+        }
+        var ent = e.target.closest('.log-entry');
+        if (ent) {
+          e.preventDefault();
+          var video = ent.getAttribute('data-video') || '';
+          var out = ent.getAttribute('data-out') || '';
+          var lp = ent.getAttribute('data-log-path') || '';
+          // 成片定位参考批量日志：优先日志 @out 路径；缺失则日志目录 + 成片名（补 .mp4）兜底
+          var fname = video.trim();
+          if (fname && !/\.mp4$/i.test(fname)) fname += '.mp4';
+          var logDir = String(lp).replace(/[\\/]+/g, '\\').replace(/\\[^\\]*$/, '');
+          var openPath = out || ((fname && logDir) ? logDir + '\\' + fname : '');
+          var outDir = out ? String(out).replace(/[\\/]+/g, '\\').replace(/\\[^\\]*$/, '') : '';
+          var items3 = [
+            { label: '打开成片', disableIfMissing: true, action: function () { call('open_path', openPath); } },
+            { label: '打开成片文件夹', action: function () {
+                if (openPath) call('open_folder_select', openPath).catch(function () { call('open_path', outDir || logDir); });
+                else if (outDir || logDir) call('open_path', outDir || logDir);
+              } }
+          ];
+          var finish3 = function () {
+            items3.push({ label: '迁移该成片', action: function () { if (video) doMoveOne(video); } });
+            items3.push({ label: '删除该成片', action: function () { if (video) doDeleteOne(video); } });
+            showMenu(e.clientX, e.clientY, items3);
+          };
+          if (openPath) {
+            call('check_exists', [openPath]).then(function (map) {
+              map = map || {};
+              if (map[openPath] === false) { items3[0].disabled = true; items3[0].title = '成片文件不存在'; }
+              finish3();
+            }).catch(finish3);
+          } else {
+            items3[0].disabled = true; items3[0].title = '无法定位成片文件';
+            finish3();
+          }
+          return;
+        }
+      };
+    }).catch(function () { box.innerHTML = '<div class="mask-config__hint">加载日志失败</div>'; });
+  }
+  // 遮罩日志顶部日期分支：每个日志文件一个按钮，标签 MMDD-遮罩短名；
+  // 同 日期+短名 多次生成时按时间旧=1 新=2 递增序号，当日单次无序号
+  function maskLogBranchList(allLogs) {
+    var proj = maskState.project && maskState.project.name;
+    var items = (allLogs || []).map(function (log) {
+      var base = String(log.path || '').replace(/[\\/]+/g, '\\').split('\\').pop() || '';
+      var m = /^(\d{4})-(\d+时\d+分)-(.*)-遮罩日志\.txt$/i.exec(base);
+      var date = m ? m[1] : '';
+      var raw = (m ? m[3] : base.replace(/\.txt$/i, '')).trim();
+      var short = raw;
+      if (proj && short.indexOf(proj + '-') === 0) short = short.slice(proj.length + 1);
+      return { path: log.path, date: date, short: short, timeKey: (m ? String(m[2]).replace(/时/, '').replace(/分/, '') : '') };
+    });
+    var groups = {};
+    items.forEach(function (it) {
+      var key = it.date + '|' + it.short;
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(it);
+    });
+    var out = [];
+    if (items.length) {
+      Object.keys(groups).forEach(function (key) {
+        var arr = groups[key].slice().sort(function (a, b) { return (a.timeKey || '').localeCompare(b.timeKey || ''); });
+        arr.forEach(function (it, i) {
+          out.push({ path: it.path, date: it.date, label: it.date + '-' + it.short + (arr.length > 1 ? '-' + (i + 1) : '') });
+        });
+      });
+      // 日期倒序（新在前），同日期按标签升序
+      out.sort(function (a, b) { return b.date.localeCompare(a.date) || a.label.localeCompare(b.label); });
+    } else {
+      out.push({ path: '', date: '', label: '无日志' });
+    }
+    return out;
+  }
+  function buildMaskLogBranches(allLogs) {
+    var c = $('maskDateBranches');
+    if (!c) return;
+    var branches = maskLogBranchList(allLogs);
+    if (!(allLogs || []).length) {
+      c.innerHTML = '<span class="date-branch-btn">无日志</span>';
+      maskState.maskLogBranch = '';
+      maskState._branchSetSig = '';
+      return;
+    }
+    if (!maskState.maskLogBranch || !branches.some(function (b) { return b.path === maskState.maskLogBranch; })) {
+      maskState.maskLogBranch = branches[0].path; // 默认最新分支（排序后首位）
+    }
+    // 加载动画控制：仅在「分支集合变化」（初次进入/切换项目/日志增删）时触发；
+    // 同项目内切换日期分支或重复渲染时静止（--static），避免每次点击分支都重演进场
+    var setSig = branches.map(function (b) { return b.path; }).join('|');
+    var silent = maskState._branchSetSig != null && maskState._branchSetSig === setSig;
+    maskState._branchSetSig = setSig;
+    var html = '';
+    branches.forEach(function (b) {
+      var active = b.path === maskState.maskLogBranch;
+      html += '<button class="date-branch-btn' + (active ? ' date-branch-btn--active' : '') + (silent ? ' date-branch-btn--static' : '') + '" data-masklog="' + escapeHtml(b.path) + '" title="' + escapeHtml(b.path) + '">' + escapeHtml(b.label) + '</button>';
+    });
+    c.innerHTML = html;
+  }
+  // 迁移某日期分支（日志文件）下全部成片到同一新文件夹（逐个迁移，同步更新日志 @out）；
+  // 由日期分支按钮右键菜单触发，每次按最新日志数据执行
+  function doMoveLogAll(lp) {
+    if (!maskOn() || !maskState.project) return;
+    call('list_mask_logs', maskState.project.path).then(function (logs) {
+      var allLogs = Array.isArray(logs) ? logs : [];
+      var lg = allLogs.find(function (x) { return x.path === lp; });
+      var names = ((lg && lg.entries) || []).map(function (en) { return en.video; }).filter(Boolean);
+      if (!names.length) { setStatus('该日志无成片可迁移'); return; }
+      call('pick_single_folder').then(function (nd) {
+        if (!nd) return;
+        var k = 0;
+        (function next() {
+          if (k >= names.length) { setStatusDone('已迁移 ' + names.length + ' 个成片'); buildMaskLogView(); return; }
+          var vn2 = names[k++];
+          call('move_mask_out', maskState.project.path, vn2, nd).then(function (r) {
+            if (!r || !r.ok) { setStatus('迁移失败：' + ((r && r.error) || '未知错误')); return; }
+            next();
+          }).catch(function (err) { setStatus('迁移失败：' + err.message); });
+        })();
+      }).catch(function () {});
+    }).catch(function () {});
+  }
+  // 生效的输出目录：显式输入 > 项目默认 > 项目路径
+  function maskEffectiveOutDir() {
+    var v = (maskState.outputDir || '').trim();
+    if (v) return v;
+    if ((maskState.defaultOutDir || '').trim()) return maskState.defaultOutDir.trim();
+    return maskState.project ? maskState.project.path : '';
+  }
+  function buildMaskConfigBar() {
+    if (!maskOn()) return;
+    var bar = $('configBar');
+    if (!bar) return;
+    // 排版：左 输出目录（路径栏拉长；空值以占位符显示默认目录）；右 后缀/模式（开始制作左侧）→ 开始制作
+    var projPath = maskState.project ? maskState.project.path : '';
+    var outPlaceholder = maskState.defaultOutDir || projPath || '必填，可直接输入或点击右侧选择';
+    var html = '<div class="config-bar__left">' +
+      '<label class="config-bottombar__label">输出目录</label>' +
+      '<input type="text" class="config-bottombar__input mask-bar__outdir" id="maskOutDir" value="' + escapeHtml(maskState.outputDir || '') + '" placeholder="' + escapeHtml(outPlaceholder) + '" spellcheck="false">' +
+      '<button type="button" class="mask-bar__pick" id="maskPickOutDir" title="选择成片输出目录">' + icon('folder', 14) + '</button>' +
+      '</div>';
+    html += '<div class="config-bar__right">' +
+      '<span class="config-bottombar__warn mask-bar__hint" id="maskStartHint" style="display:none"></span>' +
+      '<span class="mask-config__seltotal" id="maskSelTotal">' + maskSelTotalText() + '</span>' +
+      '<label class="config-bottombar__label">后缀</label>' +
+      '<input type="text" class="config-bottombar__input mask-bar__suffix" id="maskSuffixInput" value="' + escapeHtml(maskState.suffix || '') + '" placeholder="" spellcheck="false" maxlength="20">' +
+      '<label class="config-bottombar__label">模式</label>' +
+      '<select class="mask-bar__mode" id="maskModeSel">' +
+      '<option value="1"' + (maskState.mode === 1 ? ' selected' : '') + '>遮罩+水印</option>' +
+      '<option value="2"' + (maskState.mode === 2 ? ' selected' : '') + '>仅水印</option>' +
+      '<option value="3"' + (maskState.mode === 3 ? ' selected' : '') + '>仅遮罩</option></select>' +
+      '<button type="button" class="config-btn config-btn--run" id="btnMaskStart">' + icon('play', 14) + '开始制作</button></div>';
+    bar.innerHTML = html;
+    $('maskModeSel').addEventListener('change', function () {
+      maskState.mode = parseInt(this.value, 10) || 1;
+      buildMaskCenter(); buildMaskConfigBar(); maskPersist();
+    });
+    $('maskPickOutDir').addEventListener('click', function () {
+      // 从占位符/默认目录路径打开选择对话框
+      call('pick_directory', '选择成片输出目录', maskEffectiveOutDir() || projPath).then(function (np) {
+        if (np) { maskState.outputDir = np; buildMaskConfigBar(); maskPersist(); }
+      }).catch(function () {});
+    });
+    var sfInp = $('maskSuffixInput');
+    if (sfInp) sfInp.addEventListener('input', function () {
+      maskState.suffix = this.value.trim();
+      refreshMaskStartHint();
+      maskPersist();
+    });
+    var outInp = $('maskOutDir');
+    if (outInp) outInp.addEventListener('input', function () {
+      maskState.outputDir = this.value.trim();
+      refreshMaskStartHint();
+      maskPersist();
+    });
+    $('btnMaskStart').addEventListener('click', startMaskTask);
+    refreshMaskStartHint();
+  }
+  function refreshMaskStartHint() {
+    if (!maskOn()) return;
+    var hint = $('maskStartHint');
+    if (!hint) return;
+    var errs = [];
+    if (!maskState.project) errs.push('未选项目');
+    else {
+      if (!maskState.rawDirs.length) errs.push('未选中成片');
+      else if (!(maskState.rawDirs.some(function (d) { return (d.files || []).length > 0; }))) errs.push('未选中成片');
+      if (maskNeedMask() && !Object.keys(maskState.maskSel).length) errs.push('未选中遮罩');
+      if (maskNeedWm() && !maskState.watermark) errs.push('未选水印');
+      if (!maskEffectiveOutDir()) errs.push('无输出目录');
+    }
+    hint.style.display = errs.length ? '' : 'none';
+    hint.textContent = errs.join('、');
+    // 有未满足项时禁止「开始制作」（按钮变灰），避免直接点击触发不完整任务
+    var st = $('btnMaskStart');
+    if (st) st.disabled = errs.length > 0;
+  }
+  function startMaskTask() {
+    if (!maskOn()) return;
+    refreshMaskStartHint();
+    var hint = $('maskStartHint');
+    if (hint && hint.style.display !== 'none') { setStatus('请先完善遮罩叠加配置：' + hint.textContent); return; }
+    var vids = {};
+    for (var d in maskState.rawSel) {
+      if (Object.prototype.hasOwnProperty.call(maskState.rawSel, d) && maskState.rawSel[d].length) vids[d] = maskState.rawSel[d];
+    }
+    // 勾选遮罩（跨文件夹按 mov 名称前缀分组选择）：完整路径交给脚本精筛，
+    // 所在目录去重后作为遮罩目录；修复此前 themeSel 未定义导致任务参数缺失的问题
+    var selMaskFull = Object.keys(maskState.maskSel);
+    var maskDirsSet = {};
+    selMaskFull.forEach(function (fp) { maskDirsSet[String(fp).replace(/[\\/][^\\/]+$/, '')] = true; });
+    var payload = {
+      mode: maskState.mode,
+      rawDirs: maskState.rawDirs.map(function (d) { return d.path; }),
+      videos: vids,
+      maskDirs: Object.keys(maskDirsSet),
+      masks: selMaskFull.join(';'),
+      projectName: maskState.project ? maskState.project.name : '',
+      watermark: maskState.watermark,
+      outputDir: maskEffectiveOutDir(),
+      suffix: maskState.suffix || '',
+      logDir: pathJoin(maskState.project.path, '遮罩日志')
+    };
+    call('run_mask', payload).then(function (r) {
+      if (!r || !r.ok) { setStatus('启动失败：' + ((r && r.error) || '未知错误')); return; }
+      // 提交成功不弹窗，仅状态栏提示（任务窗口可随时打开查看）
+      setStatusDone('遮罩叠加任务已提交，可打开任务窗口查看进度');
+      // 开始任务后取消所有勾选（勾选不持久化记忆，下次从空开始）
+      maskState.rawSel = {};
+      maskState.maskSel = {};
+      maskPersist();
+      buildMaskCenter(); buildMaskConfigBar();
+    }).catch(function (e) { setStatus('启动失败：' + e.message); });
+  }
+  function updateWinModeLabel() {
+    var wm = $('winModeLabel');
+    if (wm) wm.textContent = maskState.on ? '遮罩叠加' : '配置管理';
+  }
+  function toggleMaskMode() {
+    var mm = $('sidebarMenu'); if (mm) mm.style.display = 'none';
+    if (maskState.on) exitMaskMode(); else enterMaskMode();
+  }
+  function initMaskMode() {
+    var m = $('menuMask');
+    if (m) m.addEventListener('click', toggleMaskMode);
+    // 标题栏模式切换按钮：事件由 titlebar.js 派发
+    document.addEventListener('vl:toggle-mask', toggleMaskMode);
+    // 遮罩模式菜单「刷新」：刷新项目列表 + 重扫当前项目原片分组/遮罩主题（保留仍存在的勾选），
+    // 两刷新合一：项目列表重扫覆盖新增/删除项目，素材重扫覆盖素材增减
+    var mrs = $('menuMaskRescan');
+    if (mrs) mrs.addEventListener('click', function () {
+      closeMenu();
+      if (!maskOn()) return;
+      maskRescanCurrent();
+      refreshMaskProjects();
+    });
+    // 遮罩模式菜单「重建缓存」：清空持久化缓存并全量重建
+    var mrb = $('menuMaskRebuild');
+    if (mrb) mrb.addEventListener('click', function () { closeMenu(); if (maskOn()) maskRebuildCache(); });
+    // 遮罩模式自愈：低频对比项目列表签名，外部增删主题/项目时自动刷新（对应批量配置自愈轮询）
+    setInterval(function () { if (maskOn()) pollMaskSelfHeal(); }, 6000);
+  }
+  function pollMaskSelfHeal() {
+    call('list_mask_projects').then(function (list) {
+      var l = Array.isArray(list) ? list : [];
+      var sig = function (arr) {
+        return (arr || []).map(function (p) { return p.name + ':' + (p.themeCount != null ? p.themeCount : ((p.themes || []).length)); }).join('|');
+      };
+      if (sig(l) !== sig(maskState.projects)) {
+        maskState.projects = l;
+        buildMaskSidebar();
+        // 当前选中项目：主题组数/素材变化时同步重扫右栏
+        if (maskState.project && maskOn()) {
+          maskState._themeSig = null; // 主题指纹作废，立即重扫并重建基准
+          loadAllMaskGroups();
+        }
+      }
+      if (maskState.project && maskOn()) maskSelfHealProject();
+    }).catch(function () {});
+  }
+  // 当前项目文件级自愈：原片分组增减/失效目录移除 + 遮罩主题文件增减或文件名变化均自动生效
+  function maskSelfHealProject() {
+    var p = maskState.project;
+    if (!p) return;
+    call('scan_mask_raw_dirs', p.path).then(function (dirs) {
+      if (!maskOn() || !maskState.project || maskState.project.name !== p.name) return;
+      var cur = (maskState.rawDirs || []).map(function (d) { return d.path; }).sort().join('|');
+      var next = (dirs || []).map(function (d) { return d.path; }).sort().join('|');
+      if (cur !== next) {
+        // 分组变化（含目录被删/变空 → 自动去除）
+        maskState.rawDirs = dirs || [];
+        var keep = {};
+        (maskState.rawDirs || []).forEach(function (d) { if (maskState.rawSel[d.path]) keep[d.path] = maskState.rawSel[d.path]; });
+        maskState.rawSel = keep;
+        buildMaskCenter(); maskPersist();
+      }
+    }).catch(function () {});
+    // 遮罩主题文件指纹对比：增减/改名/目录失效时重载主题分组
+    call('scan_mask_theme_sig', p.path).then(function (r) {
+      if (!maskOn() || !maskState.project || maskState.project.name !== p.name) return;
+      var s = (r && r.sig) ? r.sig : '';
+      if (maskState._themeSig != null && s !== maskState._themeSig && maskNeedMask()) loadAllMaskGroups();
+      maskState._themeSig = s;
+    }).catch(function () {});
+    // 日志视图自愈：日志文件增减/内容变化时实时刷新生效（后端按 mtime 签名缓存，
+    // 前端渲染幂等，未变化不重绘；不再需要切换项目才能看到新日志）
+    if (maskState.view === 'log') buildMaskLogView();
+  }
+
   var booted = false;
   function boot() { if (booted) return; booted = true; init(); }
   window.addEventListener('pywebviewready', boot);

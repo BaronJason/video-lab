@@ -37,14 +37,19 @@ const DEFAULT_CONFIG = {
     max_retry: 45,       // MaxRetry 重试次数
     speed_limit: 1.2,    // SpeedThreshold 倍速阈值
     txt_prefix: '',      // TxtNamePrefix 提取前缀，可留空
-    producer: '李佳燊',  // 成片名固定品牌名
-    suffix_mark: 'YX',   // 序号后缀（成片名中的序号标识），可改
+    producer: '',      // 成片名固定品牌名（设置页-批量拼接 配置）
+    suffix_mark: '',     // 序号后缀（成片名中的序号标识），可留空 = 无任何后缀
   },
   // video_replica.ps1 顶部全局参数（文件内同名常量被顶部读环境变量 REPLICA_* 覆盖）
   replica: {
     max_duration: 179,   // MaxTotalDurationSec
     speed_limit: 1.2,    // SpeedThreshold
     dedup_ratio: 0.4,    // DedupRatio 去重阈值
+  },
+  // 遮罩叠加：独立工作路径 + 固定水印（设置页配置，遮罩模式界面默认使用）
+  mask: {
+    root: '',            // 遮罩叠加项目工作路径（不允许复用批量拼接工作路径）
+    watermark_mov: '',   // 固定水印 mov（模式1/2 默认水印，界面可临时更换）
   },
 };
 
@@ -281,9 +286,8 @@ class Api {
       this.root = newRoot || '';
       return;
     }
-    // 更换工作目录（即使重选相同目录）：水印主流缓存物理重置+清内存，
-    // 与全缓存重置同语义——下次判定/刷新按新目录现场重新计算归属
-    if (this.watermarkCachePath) { try { fs.unlinkSync(this.watermarkCachePath); } catch (e) {} }
+    // 更换工作目录（即使重选相同目录）：仅清内存触发重载，不物理删除文件——
+    // 水印/默认分组数按 root+项目 隔离保存，属设置数据，不能被换目录/清缓存抹掉
     this._wmCache = null;
     this._wmCacheLoadedRoot = null;
     this.root = newRoot;
@@ -472,7 +476,9 @@ class Api {
       // 刷新配置时预填充水印缓存：缺失项目归属补算，已有条目不动（后台，不阻塞本次列表返回）
       try { setImmediate(() => { this._emitScan('mark'); this._warmWatermarkCache(); }); } catch (e) {}
     }
-    if (!force && this._projectsCache) return this._projectsCache;
+    if (!force && this._projectsCache) {
+      return this._projectsCache;
+    }
     this._emitScan('walk');
     this._collectLogFiles(); // 刷新配置时一并收集日志 txt 缓存
     this._emitScan('log');
@@ -1573,8 +1579,8 @@ class Api {
     return out;
   }
 
-  _parseLog(logPath) {
-    const text = readText(logPath);
+  _parseLog(logPath, text) {
+    if (text == null) text = readText(logPath);
     const lines = text.split(/\r?\n/).map((l) => l.trim());
     const entries = [];
     let current = { video: '', clips: [], watermark: '', log_path: logPath };
@@ -1601,6 +1607,32 @@ class Api {
   }
 
   // 任务管理 -------------------------------------------------
+  // 任务定位信息：解析任务来源（配置 TXT / 日志 TXT）供主窗口「定位至配置/日志」
+  taskLocate(taskId) {
+    const t = this.tasks.get(taskId);
+    if (!t) return { ok: false, error: '任务不存在' };
+    const info = { ok: true, project: '', name: '', txtPath: '', logPath: '', mode: t.type === 'replica' ? 'log' : '' };
+    const src = String((t.env && t.env.REPLICA_TXT) || '').trim();
+    if (src) {
+      const abs = path.resolve(src);
+      info.name = path.basename(abs, path.extname(abs));
+      if (this.root) {
+        const rel = path.relative(this.root, abs).split(path.sep);
+        if (rel.length && rel[0] !== '..') info.project = rel[0];
+      }
+      if (t.type === 'replica') { info.logPath = abs; }
+      else info.txtPath = abs;
+    }
+    // 批量任务：成片目录内优先匹配当前配置的日志 TXT
+    if (t.type === 'batch' && t.outDir) {
+      try {
+        const hit = fs.readdirSync(t.outDir).find((n) => LOG_NAME_RE.test(n));
+        if (hit) info.logPath = path.join(t.outDir, hit);
+      } catch (e) {}
+    }
+    return info;
+  }
+
   _createTask(type, title, scriptPath, env, srcPath) {
     const id = 'task_' + (++this.taskSeq) + '_' + Date.now().toString(36);
     const task = {
@@ -1620,6 +1652,10 @@ class Api {
   // 任务成片文件夹：批量任务按提交时刻+配置名精确推算（与脚本实际输出目录一致）；
   // 其余类型取源 TXT 所在目录下以「成片」结尾的子目录，找不到则回退源目录
   _taskOutDir(type, srcPath, env) {
+    if (type === 'mask') {
+      const out = String((env && env.MASK_OUTPUT_DIR) || '').trim();
+      return out ? path.resolve(out) : '';
+    }
     if (type === 'batch') {
       const detail = this._batchTaskOutDetail({ env: env || {}, createdAt: Date.now() });
       if (detail && detail.outDir) return detail.outDir;
@@ -1641,8 +1677,8 @@ class Api {
   // 批量任务优先取提交时刻（BATCH_SUBMIT_TS），缺失（旧版本创建的任务）则用创建时刻兜底；
   // 仅用于前端排序，不展示。
   _taskGroupDate(type, env, createdAt) {
-    if (type !== 'batch') return '';
-    const ts = Number(env && env.BATCH_SUBMIT_TS) || Number(env && env.REPLICA_SUBMIT_TS) || Number(createdAt) || Date.now();
+    if (type !== 'batch' && type !== 'mask') return '';
+    const ts = Number(env && env.MASK_SUBMIT_TS) || Number(env && env.BATCH_SUBMIT_TS) || Number(env && env.REPLICA_SUBMIT_TS) || Number(createdAt) || Date.now();
     const d = new Date(ts);
     if (d.getHours() < 4) d.setDate(d.getDate() - 1);
     const p = (n) => (n < 10 ? '0' : '') + n;
@@ -1826,6 +1862,7 @@ class Api {
         resumeIdx: typeof t.resumeIdx === 'number' ? t.resumeIdx : null,
         outDir: t.outDir || '', log: (t.log || []).slice(-500), _stopRequested: !!t._stopRequested,
         groupDate: typeof t.groupDate === 'string' ? t.groupDate : '',
+        failedVideos: Array.isArray(t.failedVideos) ? t.failedVideos.slice(-100) : [],
       })),
     };
     // 原子写：任务列表高频落盘，写坏会导致整批任务记录丢失
@@ -1841,8 +1878,19 @@ class Api {
       for (const t of data.tasks) {
         if (!t || typeof t.id !== 'string') continue;
         if (this.tasks.has(t.id)) continue;
-        if (t.status !== 'paused' && t.status !== 'done' && t.status !== 'stopped' && t.status !== 'error' && t.status !== 'interrupted') continue;
-        const restored = Object.assign({}, t, { env: t.env || {}, pid: null, progress: t.progress || { current: 0, total: 0 }, log: Array.isArray(t.log) ? t.log : [] });
+        if (t.status !== 'paused' && t.status !== 'done' && t.status !== 'stopped' && t.status !== 'error' && t.status !== 'interrupted'
+          && t.status !== 'queued' && t.status !== 'running') continue;
+        const restored = Object.assign({}, t, { env: t.env || {}, pid: null, progress: t.progress || { current: 0, total: 0 }, log: Array.isArray(t.log) ? t.log : [], failedVideos: Array.isArray(t.failedVideos) ? t.failedVideos : [] });
+        // 强杀/异常退出恢复兜底：非终态任务转为可继续状态，避免任务从列表凭空消失
+        // （正常退出走 shutdownTasks 已完成转换，此处仅兜底）
+        if (restored.status === 'queued') {
+          restored.status = 'paused'; restored.paused = true;
+          if (restored.log[restored.log.length - 1] !== '[上次异常退出，排队任务已转为暂停]') { restored.log.push('[上次异常退出，排队任务已转为暂停]'); }
+        } else if (restored.status === 'running') {
+          restored.status = 'interrupted'; restored.paused = false;
+          restored.endedAt = restored.endedAt || Date.now();
+          if (restored.log[restored.log.length - 1] !== '[上次异常退出，任务已中断，可继续制作]') { restored.log.push('[上次异常退出，任务已中断，可继续制作]'); }
+        }
         // 批量任务缺归属日时按提交/创建时刻补算（凌晨0-4点归前一天）
         if (restored.type === 'batch' && typeof restored.groupDate !== 'string') restored.groupDate = this._taskGroupDate(restored.type, restored.env, restored.createdAt);
         // 批量任务的成片文件夹：记录指向有效目录（含人工迁移/手工修正后）则保留；
@@ -1884,6 +1932,10 @@ class Api {
   }
   hasRunningTask() {
     for (const t of this.tasks.values()) if (t.status === 'running') return true;
+    return false;
+  }
+  hasQueuedTask() {
+    for (const t of this.tasks.values()) if (t.status === 'queued') return true;
     return false;
   }
   // 已结束任务单行删除（运行/排队/暂停中的任务不可删；连带删除任务标记文件）
@@ -1984,13 +2036,16 @@ class Api {
     return { ok: true, taskId: task.id };
   }
 
-  // ── 任务标记临时文件：存于任务成片文件夹（含完整 env 与逐成片产出清单）。
+  // ── 任务标记临时文件：存于软件 Cache 目录的 task-marks 子文件夹（不在用户成片文件夹，
+// 避免业务目录里出现引发疑问的隐藏文件），含完整 env 与逐成片产出清单。
   // 任务正常完成时删除；失败/中断/停止时保留，作为「该任务未完成」的标志且供重开精确还原。
+  _markerDir() {
+    const base = this.videoCachePath || this.taskStatePath || '';
+    return base ? path.join(path.dirname(base), 'task-marks') : '';
+  }
   _markerPath(task) {
-    const envTxt = task.env && task.env.REPLICA_TXT ? String(task.env.REPLICA_TXT) : '';
-    const base = task.outDir || (envTxt ? path.dirname(path.resolve(envTxt)) : '');
-    if (!base) return '';
-    return path.join(base, '.video-lab-mark-' + task.id + '.json');
+    const dir = this._markerDir();
+    return dir ? path.join(dir, 'mark-' + task.id + '.json') : '';
   }
   _loadMarker(task) {
     const p = this._markerPath(task);
@@ -2000,7 +2055,7 @@ class Api {
   _saveMarker(task, data) {
     const p = this._markerPath(task);
     if (!p) return;
-    try { atomicWrite(p, JSON.stringify(data)); } catch (e2) {}
+    try { fs.mkdirSync(path.dirname(p), { recursive: true }); atomicWrite(p, JSON.stringify(data)); } catch (e2) {}
   }
   _removeMarker(task) {
     const p = this._markerPath(task);
@@ -2057,6 +2112,70 @@ class Api {
           }
         }
       } catch (e2) {}
+    }
+  }
+
+  // 从任务日志行中解析该任务产出的成片路径（清除/续跑对账用，与标记互为补充）
+  collectDoneFromLog(task) {
+    const out = [];
+    for (const line of ((task && task.log) || [])) {
+      const m = /✅ 成片完成：(.+)$/.exec(String(line));
+      if (m) out.push(String(m[1]).trim());
+    }
+    return out;
+  }
+
+  // 从复刻日志文件中移除指定成片的日志块（按成片文件路径的 basename 精确匹配）
+  // 复刻日志格式：各成片块以「成片文件名.mp4」单行开头，块间以「=×46」分隔，以 EOF 结尾
+  _removeLogEntries(videoPaths) {
+    if (!Array.isArray(videoPaths) || !videoPaths.length) return;
+    // 按目录分组成片路径：日志文件与成片同目录（脚本把日志写在复刻输出目录）
+    const byDir = new Map();
+    for (const v of videoPaths) {
+      let p = v;
+      try { p = path.resolve(String(v)); } catch (e) { continue; }
+      const dir = path.dirname(p);
+      if (!byDir.has(dir)) byDir.set(dir, []);
+      byDir.get(dir).push(path.basename(p));
+    }
+    for (const [dir, bases] of byDir) {
+      try {
+        const files = fs.readdirSync(dir);
+        const logFile = files.find((f) => /^\d{4}-(原片复刻|去重复刻)日志\.txt$/.test(f));
+        if (!logFile) continue;
+        const logPath = path.join(dir, logFile);
+        const lines = fs.readFileSync(logPath, 'utf-8').split('\n');
+        // 收集所有块起点：以成片文件名（不含路径分隔符、.mp4 结尾）开始的行
+        const starts = [];
+        for (let i = 0; i < lines.length; i++) {
+          const ln = (lines[i] || '').trimEnd();
+          if (ln.endsWith('.mp4') && !ln.includes('\\') && !ln.includes('/')) starts.push(i);
+        }
+        // 确定要删除的块起点
+        const delSet = new Set(bases);
+        const delStarts = new Set();
+        for (const si of starts) {
+          if (delSet.has((lines[si] || '').trimEnd())) delStarts.add(si);
+        }
+        if (!delStarts.size) continue;
+        // 标记删除行：被删块内容（起点到下一块起点/EOF）+ 每块紧邻前方的分隔线
+        const delIdx = new Set();
+        for (let k = 0; k < starts.length; k++) {
+          const si = starts[k];
+          if (!delStarts.has(si)) continue;
+          const end = k + 1 < starts.length ? starts[k + 1] : lines.length;
+          for (let i = si; i < end; i++) delIdx.add(i);
+          let p = si - 1;
+          while (p >= 0 && !(lines[p] || '').trim()) p--;
+          if (p >= 0 && /^=+$/.test((lines[p] || '').trimEnd())) delIdx.add(p);
+        }
+        const out = [];
+        for (let i = 0; i < lines.length; i++) if (!delIdx.has(i)) out.push(lines[i]);
+        while (out.length && !(out[out.length - 1] || '').trim()) out.pop();
+        // 日志只剩空行则删除文件，否则重写
+        if (!out.some((l) => (l || '').trim())) { try { fs.unlinkSync(logPath); } catch (e) {} }
+        else fs.writeFileSync(logPath, out.join('\n'), 'utf-8');
+      } catch (e) {}
     }
   }
 
@@ -2165,8 +2284,10 @@ class Api {
     // 指定任务列表时精确按 id 清除（单任务条），否则按状态+日期筛选
     const inIds = Array.isArray(ids) && ids.length ? new Set(ids) : null;
     const targets = [...this.tasks.values()].filter((t) => (inIds ? inIds.has(t.id) : (allow.has(t.status) && (!day || dayOf(t.endedAt) === day))));
-    // 先清任务列表（连带任务标记）
-    for (const t of targets) { this.tasks.delete(t.id); this._removeMarker(t); }
+    // 先缓存每个任务的标记（文件删除用精确产物清单，删除前读取；任务记录清掉后再删标记文件）
+    const marked = targets.map((t) => ({ t, marker: this._loadMarker(t) }));
+    // 先清任务列表（连带任务标记文件）
+    for (const { t } of marked) { this.tasks.delete(t.id); this._removeMarker(t); }
     const errors = [];
     if (scope && scope !== 'list') {
       const { shell } = require('electron');
@@ -2174,29 +2295,15 @@ class Api {
         try { await shell.trashItem(p); }
         catch (e) { if (fs.existsSync(p)) throw e; } // 原路径已不存在视为成功
       };
-      for (const t of targets) {
-        if (!t.outDir) continue;
-        const abs = path.resolve(t.outDir);
-        if (scope === 'video') {
-          // 仅清除 mp4 成片，不影响文件夹内的配置与日志
-          let files = [];
-          try { files = fs.readdirSync(abs).filter((f) => path.extname(f).toLowerCase() === '.mp4'); }
-          catch (e) { errors.push('读取成片目录失败：' + abs); continue; }
-          for (const f of files) {
-            try { await trash(path.join(abs, f)); }
-            catch (e) { errors.push('清除成片失败：' + path.join(abs, f)); }
-          }
-        } else if (scope === 'all') {
-          // 全部清除：整个成片文件夹移入回收站（仅限识别为「成片」的目录，回退目录保守只清 mp4）
-          if (path.basename(abs).endsWith('成片')) {
-            try { await trash(abs); }
-            catch (e) { errors.push('清除成片文件夹失败：' + abs); continue; }
-            const parent = path.dirname(abs);
-            if (parent && parent !== abs) {
-              try { if (fs.readdirSync(parent).length === 0) await trash(parent); }
-              catch (e) { errors.push('清除空上级文件夹失败：' + parent); }
-            }
-          } else {
+      for (const { t, marker } of marked) {
+        // 该任务精确产出的成片清单：优先任务标记（脚本逐条记录 ✅ 成片完成），缺失时回退任务日志行解析
+        const exactVideos = (marker && Array.isArray(marker.videos) ? marker.videos.slice() : [])
+          .concat(this.collectDoneFromLog(t));
+        if (t.type === 'batch') {
+          // 批量任务：成片目录为独立目录（提交时刻+配置名推算），保留「视频→整目录」的目录级语义
+          if (!t.outDir) continue;
+          const abs = path.resolve(t.outDir);
+          if (scope === 'video') {
             let files = [];
             try { files = fs.readdirSync(abs).filter((f) => path.extname(f).toLowerCase() === '.mp4'); }
             catch (e) { errors.push('读取成片目录失败：' + abs); continue; }
@@ -2204,8 +2311,36 @@ class Api {
               try { await trash(path.join(abs, f)); }
               catch (e) { errors.push('清除成片失败：' + path.join(abs, f)); }
             }
+          } else if (scope === 'all') {
+            if (path.basename(abs).endsWith('成片')) {
+              try { await trash(abs); }
+              catch (e) { errors.push('清除成片文件夹失败：' + abs); continue; }
+              const parent = path.dirname(abs);
+              if (parent && parent !== abs) {
+                try { if (fs.readdirSync(parent).length === 0) await trash(parent); }
+                catch (e) { errors.push('清除空上级文件夹失败：' + parent); }
+              }
+            } else {
+              let files = [];
+              try { files = fs.readdirSync(abs).filter((f) => path.extname(f).toLowerCase() === '.mp4'); }
+              catch (e) { errors.push('读取成片目录失败：' + abs); continue; }
+              for (const f of files) {
+                try { await trash(path.join(abs, f)); }
+                catch (e) { errors.push('清除成片失败：' + path.join(abs, f)); }
+              }
+            }
           }
+          continue;
         }
+        // 复刻等非批量任务：只精确删除该任务自己的成片与日志块——
+        // outDir 可能指向源日志目录（复刻历史日志时产物在提交日目录），按目录整删会误伤原始日志旁的产物
+        if (!exactVideos.length) continue;
+        const uniq = [...new Set(exactVideos)];
+        for (const p of uniq) {
+          try { if (p && fs.existsSync(p)) await trash(p); }
+          catch (e) { errors.push('清除成片失败：' + p); }
+        }
+        if (scope === 'all' || scope === 'video') this._removeLogEntries(uniq);
       }
     }
     this._emitTasks();
@@ -2453,6 +2588,14 @@ class Api {
           if (outpM) this._appendMarkerOut(task, 'videos', String(outpM[1]).trim());
           const outdM = s.match(/✅ 创建输出目录：(.+)$/);
           if (outdM) this._appendMarkerOut(task, 'batchOutDir', String(outdM[1]).trim());
+          // 失败成片记录：脚本输出 `❌ 失败成片：<成片名>|<原因>`，供续跑/对账/前端展示
+          const failM = s.match(/❌ 失败成片：(.+)$/);
+          if (failM) {
+            const parts = String(failM[1]).split('|');
+            task.failedVideos = task.failedVideos || [];
+            task.failedVideos.push({ name: (parts[0] || '').trim(), reason: (parts.slice(1).join('|') || '').trim() });
+            task.failReason = '存在失败成片，可点击「继续制作」续跑';
+          }
           this._emitTasks();
         };
         const attach = (stream, ref) => stream.on('data', (chunk) => {
@@ -2467,11 +2610,17 @@ class Api {
           if (out.data.length) pushLine(out.data);
           if (err.data.length) pushLine(err.data);
           task.endedAt = Date.now();
-          task.status = task._stopRequested ? 'stopped' : (code === 0 ? 'done' : 'error');
+          // 结算对账（复刻）：脚本内单条失败会 continue 并置 HasError → 退出码 1；
+          // 若 exit 0 但存在失败记录（异常场景），也归为 error 并提示续跑，避免误判为全部成功
+          let status = task._stopRequested ? 'stopped' : (code === 0 ? 'done' : 'error');
+          if (code === 0 && Array.isArray(task.failedVideos) && task.failedVideos.length && (task.type === 'replica' || task.type === 'mask')) {
+            status = 'error';
+            task.failReason = '存在失败成片，可点击「继续制作」续跑';
+          }
+          task.status = status;
           task.paused = false;
-          if (task.status === 'error') task.failReason = this._deriveFailReason(task);
-          // 任务完整完成：删除任务标记；失败/中断/停止保留（供重开精确还原）
-          if (task.status === 'done') this._removeMarker(task);
+          if (task.status === 'error' && !task.failReason) task.failReason = this._deriveFailReason(task);
+          // 任务标记统一保留：done 也保留供「清除成片/日志」精确删除（不误伤同目录其他任务的产物）
           this._emitTasks();
           // 运行任务结束：清空运行位并启动执行队列中的下一个任务（暂停/继续不影响插入后的推进）
           this._runningTaskId = null;
@@ -2522,6 +2671,7 @@ class Api {
     if (typeof cfg.root === 'string' && cfg.root && cfg.root !== this.root) this.setRoot(cfg.root);
     if (cfg.batch && typeof cfg.batch === 'object') this.config.batch = Object.assign({}, this.config.batch, cfg.batch);
     if (cfg.replica && typeof cfg.replica === 'object') this.config.replica = Object.assign({}, this.config.replica, cfg.replica);
+    if (cfg.mask && typeof cfg.mask === 'object') this.config.mask = Object.assign({}, this.config.mask, cfg.mask);
   }
 
   // 水印归属校验：以本项目「主流水印」为基准做一致性判定；仅在用户启用判定时参与判断。
@@ -2529,51 +2679,91 @@ class Api {
   checkWatermarkProject(project, watermarkPath) {
     const wm = String(watermarkPath || '').trim();
     try {
-      if (!wm) return { inProject: true };
+      if (!wm) return { inProject: true, fileMissing: false };
       const pdir = path.resolve(path.join(this.root, project));
       const wmAbs = path.isAbsolute(wm) ? path.resolve(wm) : path.resolve(pdir, wm);
+      // 水印文件本身不存在 → 返回 fileMissing，前端据此阻断启动（与归属判定分离，两种错误分别提示）
+      if (!fs.existsSync(wmAbs) || !fs.statSync(wmAbs).isFile()) return { inProject: false, fileMissing: true };
       const wmKey = wmAbs.toLowerCase();
       this._loadWatermarkCache();
       const cacheKey = this.root + '\u0000' + project;
       // 未启用判定：直接放行
-      if (!this._wmEnabled[cacheKey]) return { inProject: true };
+      if (!this._wmEnabled[cacheKey]) return { inProject: true, fileMissing: false };
       if (!Object.prototype.hasOwnProperty.call(this._wmCache, cacheKey)) {
         // 本项目主流水印未固化：现场统计一次并落盘（保存前默认取配置主流作为初始值）
         this._wmCache[cacheKey] = this._computeMajorityWatermark(pdir);
         this._saveWatermarkCache();
       }
-      const majorityKey = this._wmCache[cacheKey] || '';
-      // 无主流水印(项目无任何水印)放行；有则当前水印必须与其一致
-      return { inProject: majorityKey === '' || wmKey === majorityKey };
-    } catch (e) { return { inProject: true }; }
+      const majority = this._wmCache[cacheKey] || '';
+      // 无主流水印(项目无任何水印)放行；有则当前水印必须与其一致（路径比较大小写不敏感）
+      return { inProject: !majority || wmKey === String(majority).toLowerCase(), fileMissing: false };
+    } catch (e) { return { inProject: true, fileMissing: false }; }
   }
 
   // 读取项目主流水印设置（弹窗初始化）：main=已保存的设置（无则现场统计主流作为初始默认值）；enabled=是否启用判定
   getProjectWatermark(project) {
     try {
-      if (!this.root || !project) return { ok: true, main: '', enabled: false };
+      if (!this.root || !project) return { ok: true, main: '', enabled: false, group: 0, groupEnabled: false };
       const pdir = path.resolve(path.join(this.root, project));
       this._loadWatermarkCache();
       const cacheKey = this.root + '\u0000' + project;
       let main = this._wmCache[cacheKey] || '';
       if (!main) main = this._computeMajorityWatermark(pdir); // 保留统计主流作初始默认值
-      return { ok: true, main, enabled: !!this._wmEnabled[cacheKey] };
-    } catch (e) { return { ok: false, error: String(e), main: '', enabled: false }; }
+      // 旧版本缓存曾以全小写路径落盘：磁盘上真实存在同名文件时，纠正为原始大小写并回写缓存
+      if (main && main === main.toLowerCase() && fs.existsSync(main)) {
+        const real = this._realCasePath(main);
+        if (real) {
+          main = real;
+          this._wmCache[cacheKey] = real;
+          this._saveWatermarkCache();
+        }
+      }
+      return { ok: true, main, enabled: !!this._wmEnabled[cacheKey], group: parseInt(this._wmGroup[cacheKey], 10) || 0, groupEnabled: !!this._wmGroupEnabled[cacheKey] };
+    } catch (e) { return { ok: false, error: String(e), main: '', enabled: false, group: 0, groupEnabled: false }; }
   }
 
-  // 保存项目主流水印设置：更新判定参照文件与启用标记；applyToAll=true 时把本项目全部 txt（含日志）的水印行改为新水印
-  setProjectWatermark(project, watermark, enabled, applyToAll) {
+  // 将路径各段替换为磁盘上的真实大小写（逐级向上查找同名目录/文件）
+  _realCasePath(p) {
+    try {
+      const abs = path.resolve(p);
+      const parts = abs.split(path.sep);
+      let cur = parts[0] + path.sep; // 盘符保持原样
+      for (let i = 1; i < parts.length; i++) {
+        const seg = parts[i];
+        if (!seg) continue;
+        let found = '';
+        try {
+          const entries = fs.readdirSync(cur, { withFileTypes: true });
+          const lower = seg.toLowerCase();
+          for (const ent of entries) {
+            if (ent.name.toLowerCase() === lower) { found = ent.name; break; }
+          }
+        } catch (e) {}
+        cur = path.join(cur, found || seg);
+      }
+      return cur;
+    } catch (e) { return ''; }
+  }
+
+  // 保存项目设置：更新主流水印（判定参照文件与启用标记）与默认分组数；applyToAll=true 时把本项目全部 txt（含日志）的水印行改为新水印
+  setProjectWatermark(project, watermark, enabled, applyToAll, group, groupEnabled) {
     try {
       const wm = String(watermark || '').trim();
       const pdir = path.resolve(path.join(this.root, project));
-      const wmKey = wm ? (path.isAbsolute(wm) ? path.resolve(wm) : path.resolve(pdir, wm)).toLowerCase() : '';
+      // 存储保留原始大小写的绝对路径（Windows 显示友好）；比较时另做大小写不敏感归一
+      const wmStore = wm ? (path.isAbsolute(wm) ? path.resolve(wm) : path.resolve(pdir, wm)) : '';
       this._loadWatermarkCache();
       const cacheKey = this.root + '\u0000' + project;
-      if (wmKey) { this._wmCache[cacheKey] = wmKey; this._wmEnabled[cacheKey] = !!enabled; }
+      if (wmStore) { this._wmCache[cacheKey] = wmStore; this._wmEnabled[cacheKey] = !!enabled; }
       else {
         delete this._wmCache[cacheKey];
         delete this._wmEnabled[cacheKey]; // 未设置水印时视同不启用
       }
+      // 默认分组数：启用状态 + 数值（0/非数字视为未启用）
+      const g = parseInt(group, 10) || 0;
+      const ge = !!groupEnabled && g > 0;
+      if (ge) { this._wmGroup[cacheKey] = g; this._wmGroupEnabled[cacheKey] = true; }
+      else { delete this._wmGroup[cacheKey]; delete this._wmGroupEnabled[cacheKey]; }
       this._saveWatermarkCache();
       if (applyToAll && wm && fs.existsSync(pdir) && fs.statSync(pdir).isDirectory()) {
         const replaced = this._replaceProjectWatermarks(pdir, wm);
@@ -2662,7 +2852,7 @@ class Api {
       };
       // 当前项目自己就在用该水印：共用场景归属明确，直接放行不弹窗
       const curMk = majorityOf(pdir, project);
-      if (curMk !== '' && curMk === wmKey) {
+      if (curMk !== '' && wmKey === String(curMk).toLowerCase()) {
         if (dirty) this._saveWatermarkCache();
         return { hits: [], inOwn: true };
       }
@@ -2670,27 +2860,31 @@ class Api {
       for (const [pd, proj] of seen) {
         if (proj === REPLICA_PROJECT) continue; // 复刻虚拟项目无配置水印
         const mk = majorityOf(pd, proj);
-        if (mk !== '' && mk === wmKey) hits.push(proj);
+        if (mk !== '' && wmKey === String(mk).toLowerCase()) hits.push(proj);
       }
       if (dirty) this._saveWatermarkCache();
       return { hits };
     } catch (e) { return { hits: [] }; }
   }
 
-  // 统计本项目主流水印：所有配置使用频次最高的水印（小写规范化路径返回）
+  // 统计本项目主流水印：所有配置使用频次最高的水印
+  // 计数用大小写不敏感 key（Windows 路径不区分大小写），但返回保留原始大小写的路径（供前端显示与落盘）
   _computeMajorityWatermark(pdir) {
-    const counts = new Map();
+    const counts = new Map(); // key(lower) -> { n, first 原始路径 }
     for (const t of this._collectAllTxt()) {
       if (path.resolve(t.pdir) !== pdir) continue;
       let cfg;
       try { cfg = this.readConfig(t.full); } catch (e) { continue; }
       const w = String(cfg && cfg.watermark || '').trim();
       if (!w) continue;
-      const k = (path.isAbsolute(w) ? path.resolve(w) : path.resolve(pdir, w)).toLowerCase();
-      counts.set(k, (counts.get(k) || 0) + 1);
+      const absPath = path.isAbsolute(w) ? path.resolve(w) : path.resolve(pdir, w);
+      const k = absPath.toLowerCase();
+      const rec = counts.get(k) || { n: 0, first: absPath };
+      rec.n++;
+      counts.set(k, rec);
     }
     let majorityKey = '', majorityN = 0;
-    for (const [k, n] of counts) { if (n > majorityN) { majorityN = n; majorityKey = k; } }
+    for (const [k, rec] of counts) { if (rec.n > majorityN) { majorityN = rec.n; majorityKey = rec.first; } }
     return majorityKey;
   }
 
@@ -2721,6 +2915,8 @@ class Api {
     this._wmCacheLoadedRoot = this.root;
     this._wmCache = {};
     this._wmEnabled = {};
+    this._wmGroup = {};
+    this._wmGroupEnabled = {};
     const prefix = this.root + '\u0000';
     cleanupTmp(this.watermarkCachePath); // 清理上次中断遗留的未完成临时缓存
     try {
@@ -2736,12 +2932,44 @@ class Api {
           if (Object.prototype.hasOwnProperty.call(data.enabled, k) && k.startsWith(prefix)) this._wmEnabled[k] = !!data.enabled[k];
         }
       }
+      if (data && typeof data.groupCounts === 'object' && data.groupCounts) {
+        for (const k in data.groupCounts) {
+          if (Object.prototype.hasOwnProperty.call(data.groupCounts, k) && k.startsWith(prefix)) this._wmGroup[k] = parseInt(data.groupCounts[k], 10) || 0;
+        }
+      }
+      if (data && typeof data.groupEnabled === 'object' && data.groupEnabled) {
+        for (const k in data.groupEnabled) {
+          if (Object.prototype.hasOwnProperty.call(data.groupEnabled, k) && k.startsWith(prefix)) this._wmGroupEnabled[k] = !!data.groupEnabled[k];
+        }
+      }
     } catch (e) {}
   }
 
   _saveWatermarkCache() {
     if (!this.watermarkCachePath) return;
-    atomicWrite(this.watermarkCachePath, JSON.stringify({ watermarks: this._wmCache || {}, enabled: this._wmEnabled || {} }));
+    // 合并保存：先读文件里其它工作目录（root）的条目，仅覆盖当前 root 的条目，
+    // 避免切换工作目录后旧 root 的设置被覆盖丢失
+    const others = { watermarks: {}, enabled: {}, groupCounts: {}, groupEnabled: {} };
+    const prefix = this.root + '\u0000';
+    try {
+      const data = JSON.parse(fs.readFileSync(this.watermarkCachePath, 'utf-8'));
+      if (data && typeof data === 'object') {
+        for (const c of ['watermarks', 'enabled', 'groupCounts', 'groupEnabled']) {
+          const src = data[c];
+          if (src && typeof src === 'object' && !Array.isArray(src)) {
+            for (const k in src) {
+              if (Object.prototype.hasOwnProperty.call(src, k) && !k.startsWith(prefix)) others[c][k] = src[k];
+            }
+          }
+        }
+      }
+    } catch (e) {}
+    atomicWrite(this.watermarkCachePath, JSON.stringify({
+      watermarks: Object.assign(others.watermarks, this._wmCache || {}),
+      enabled: Object.assign(others.enabled, this._wmEnabled || {}),
+      groupCounts: Object.assign(others.groupCounts, this._wmGroup || {}),
+      groupEnabled: Object.assign(others.groupEnabled, this._wmGroupEnabled || {}),
+    }));
   }
 
   runBatch(filePath, count, group) {
@@ -2757,7 +2985,7 @@ class Api {
       BATCH_SPEED_LIMIT: String(b.speed_limit),
       BATCH_TXT_PREFIX: String(b.txt_prefix == null ? '' : b.txt_prefix).trim(),
       BATCH_PRODUCER: String(b.producer).trim(),
-      BATCH_SUFFIX_MARK: String(b.suffix_mark == null ? 'YX' : b.suffix_mark).trim(),
+      BATCH_SUFFIX_MARK: String(b.suffix_mark == null ? '' : b.suffix_mark).trim(),
     });
     const countStr = String(count).trim();
     if (/^\d+$/.test(countStr) && parseInt(countStr, 10) > 0) env.BATCH_COUNT = countStr;
@@ -2796,6 +3024,619 @@ class Api {
     if (entryVideo) env.REPLICA_ONLY_NAME = String(entryVideo).trim();
     const task = this._enqueueTask(this._createTask('replica', this._taskTitle(logPath) + (String(mode) === '2' ? '（去重）' : ''), script, env, logPath));
     return { ok: true, taskId: task.id };
+  }
+
+  // 断点续跑：失败/中断/停止的复刻任务，仅续跑失败/未完成的成片，不删除已成功产物。
+  // 从 failedVideos 或日志中提取失败成片名，构造 REPLICA_ONLY_NAMES 新任务。
+  continueReplica(id) {
+    const t = this.tasks.get(id);
+    if (!t) return { ok: false, error: '任务不存在' };
+    if (t.status !== 'error' && t.status !== 'interrupted' && t.status !== 'stopped') return { ok: false, error: '仅失败/中断/停止的任务可继续制作' };
+    if (t.type !== 'replica') return { ok: false, error: '仅复刻任务支持继续制作' };
+    // 收集失败成片名：优先 failedVideos（运行时逐条记录），回退日志行解析
+    const failNames = new Set();
+    if (Array.isArray(t.failedVideos)) {
+      for (const f of t.failedVideos) if (f && f.name) failNames.add(f.name);
+    }
+    if (!failNames.size) {
+      for (const ln of (t.log || [])) {
+        const m = /❌ 失败成片：([^|]+)/.exec(String(ln));
+        if (m) failNames.add(String(m[1]).trim());
+      }
+    }
+    // 如果没有失败记录，但已完成条目 < 总数，则尝试从 marker 推断未完成的条目
+    if (!failNames.size) {
+      const marker = this._loadMarker(t);
+      const doneVideos = (marker && Array.isArray(marker.videos) ? marker.videos : []);
+      if (doneVideos.length) {
+        // 有已完成产物但无失败记录 → 可能是中途停止，需从源日志推断剩余条目
+        // 通过 REPLICA_TXT 读取源日志的成片名，减去已完成的，剩余即是未完成的
+        const srcEnv = t.env || {};
+        const srcPath = srcEnv.REPLICA_TXT ? String(srcEnv.REPLICA_TXT).trim() : '';
+        if (srcPath && fs.existsSync(srcPath)) {
+          try {
+            const srcLines = fs.readFileSync(srcPath, 'utf-8').split('\n').filter((l) => (l || '').trim());
+            const doneBases = new Set(doneVideos.map((v) => path.basename(v)));
+            for (const line of srcLines) {
+              const ln = line.trim();
+              if (ln.endsWith('.mp4') && !ln.includes('\\') && !ln.includes('/') && !doneBases.has(ln)) failNames.add(ln);
+            }
+          } catch (e) {}
+        }
+      }
+    }
+    if (!failNames.size) return { ok: false, error: '没有发现需要续跑的成片，请检查任务日志' };
+    const namesArr = [...failNames].filter(Boolean);
+    // 构造续跑环境：复用原任务环境变量，仅追加 REPLICA_ONLY_NAMES 过滤
+    const env = Object.assign({}, t.env || {});
+    env.REPLICA_ONLY_NAMES = namesArr.join(';');
+    env.REPLICA_SUBMIT_TS = String(Date.now()); // 刷新提交时刻，续跑产物按当前日期输出
+    const src = env.REPLICA_TXT ? String(env.REPLICA_TXT) : '';
+    if (!src) return { ok: false, error: '原任务缺少 TXT 配置，无法继续制作' };
+    this.tasks.delete(id);
+    this._removeMarker(t);
+    const task = this._createTask('replica', (t.title || '') + '（续跑）', t.script, env, src);
+    this._enqueueTask(task);
+    return { ok: true, taskId: task.id, count: namesArr.length };
+  }
+
+  // 遮罩叠加任务：payload 来自主窗口遮罩叠加模式（mode/rawDirs/videos/maskDirs/watermark/outputDir），
+  // 经环境变量 MASK_* 驱动 Scripts\video_mask.ps1；无设置页配置组，参数随任务提交
+  runMask(p) {
+    const script = path.join(this.scriptsDir, 'video_mask.ps1');
+    if (!fs.existsSync(script)) return { ok: false, error: '未找到脚本：' + script };
+    const errs = [];
+    const dirs = Array.isArray(p && p.rawDirs) ? p.rawDirs.filter((d) => String(d).trim()) : [];
+    if (!dirs.length) errs.push('原片文件夹');
+    if (!String((p && p.outputDir) || '').trim()) errs.push('输出目录');
+    const mode = parseInt(p && p.mode, 10);
+    const needMask = mode === 1 || mode === 3;
+    const needWm = mode === 1 || mode === 2;
+    const maskDirs = needMask && Array.isArray(p && p.maskDirs) ? p.maskDirs.filter((d) => String(d).trim()) : [];
+    if (needMask && !maskDirs.length) errs.push('遮罩主题');
+    if (needWm && !String((p && p.watermark) || '').trim()) errs.push('水印文件');
+    if (errs.length) return { ok: false, error: '遮罩叠加配置缺失：' + errs.join('、') };
+    // 勾选视频序列化：完整路径分号分隔（空=该文件夹全部）
+    const pickVids = [];
+    const vids = (p && p.videos) || {};
+    for (const dir of Object.keys(vids)) {
+      for (const name of (vids[dir] || [])) { if (String(name).trim()) pickVids.push(path.resolve(dir, name)); }
+    }
+    // 任务列表标题：项目名 / 遮罩名（遮罩名按 mov 前缀去重，与遮罩主题分组口径一致）
+    const maskPfx = (name) => String(name || '').replace(/\.[^.]+$/, '').replace(/[-_ ]+\d+$/, '').replace(/\d+$/, '');
+    const projName = String((p && p.projectName) || '').trim() || (dirs[0] ? path.basename(dirs[0]) : '');
+    const themeNames = [];
+    const themeSeen = new Set();
+    String((p && p.masks) || '').split(';').forEach((s) => {
+      const fp = String(s).trim();
+      if (!fp) return;
+      const pfx = maskPfx(path.basename(fp));
+      if (!themeSeen.has(pfx)) { themeSeen.add(pfx); themeNames.push(pfx); }
+    });
+    const title = projName + (themeNames.length ? ' / ' + themeNames.join('+') : '');
+    const env = {
+      MASK_MODE: String(mode || 1),
+      MASK_RAW_DIRS: dirs.map((d) => path.resolve(d)).join(';'),
+      MASK_VIDEOS: pickVids.join(';'),
+      MASK_MASK_DIRS: maskDirs.map((d) => path.resolve(d)).join(';'),
+      MASK_MASKS: String((p && p.masks) || '').trim(),
+      MASK_WATERMARK: needWm ? path.resolve(p.watermark) : '',
+      MASK_OUTPUT_DIR: path.resolve(p.outputDir),
+      MASK_PROJECT_NAME: String((p && p.projectName) || '').trim(),
+      MASK_SUFFIX_MARK: String((p && p.suffix) || '').trim(),
+      MASK_LOG_DIR: String((p && p.logDir) || '').trim(),
+      MASK_SUBMIT_TS: String(Date.now()),
+      VL_CACHE_DIR: this.videoCachePath ? path.dirname(this.videoCachePath) : '',
+    };
+    const task = this._enqueueTask(this._createTask('mask', title, script, env, dirs[0]));
+    return { ok: true, taskId: task.id };
+  }
+
+  // 断点续跑：失败/中断/停止的遮罩叠加任务，仅续跑失败成片（MASK_ONLY_NAMES 过滤），不删已成功产物
+  continueMask(id) {
+    const t = this.tasks.get(id);
+    if (!t) return { ok: false, error: '任务不存在' };
+    if (t.status !== 'error' && t.status !== 'interrupted' && t.status !== 'stopped') return { ok: false, error: '仅失败/中断/停止的任务可继续制作' };
+    if (t.type !== 'mask') return { ok: false, error: '仅遮罩叠加任务支持继续制作' };
+    const failNames = new Set();
+    if (Array.isArray(t.failedVideos)) {
+      for (const f of t.failedVideos) if (f && f.name) failNames.add(f.name);
+    }
+    if (!failNames.size) {
+      for (const ln of (t.log || [])) {
+        const m = /❌ 失败成片：([^|]+)/.exec(String(ln));
+        if (m) failNames.add(String(m[1]).trim());
+      }
+    }
+    if (!failNames.size) return { ok: false, error: '没有发现需要续跑的成片，请检查任务日志' };
+    const namesArr = [...failNames].filter(Boolean);
+    const env = Object.assign({}, t.env || {});
+    env.MASK_ONLY_NAMES = namesArr.join(';');
+    env.MASK_SUBMIT_TS = String(Date.now());
+    if (!env.MASK_RAW_DIRS) return { ok: false, error: '原任务缺少原片文件夹信息，无法继续制作' };
+    this.tasks.delete(id);
+    this._removeMarker(t);
+    const task = this._createTask('mask', (t.title || '') + '（续跑）', t.script, env, t.srcPath || '');
+    this._enqueueTask(task);
+    return { ok: true, taskId: task.id, count: namesArr.length };
+  }
+
+  // 遮罩叠加项目素材只读扫描：仅扫描遮罩叠加独立工作路径（设置-遮罩叠加 配置）。
+  listMaskProjects() {
+    // 遮罩主题组前缀：与前端 maskGroupPrefix 一致（去扩展名、去尾部序号），徽章与右栏分组口径统一
+    const _maskPrefix = (name) => {
+      let s = String(name || '').replace(/\.[^.]+$/, '');
+      s = s.replace(/[-_ ]+\d+$/, '').replace(/\d+$/, '');
+      return s;
+    };
+    // 仅使用遮罩叠加独立工作路径（不允许复用批量项目管理路径）
+    const root = (this.config && this.config.mask && String(this.config.mask.root || '').trim());
+    if (!root) return [];
+    const out = [];
+    let entries = [];
+    try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch (e) { return []; }
+    for (const en of entries) {
+      if (!en.isDirectory()) continue;
+      const pdir = path.join(root, en.name);
+      // 遮罩主题：项目下直接子文件夹中任一含 mov 视频（遮罩素材仅认 .mov，mp4 不算遮罩主题）
+let themes = [];
+    try {
+    themes = fs.readdirSync(pdir, { withFileTypes: true })
+    .filter((s) => s.isDirectory())
+    .map((s) => s.name)
+    .filter((n) => {
+    try {
+    return fs.readdirSync(path.join(pdir, n)).some((f) => /\.mov$/i.test(f));
+    } catch (e) { return false; }
+    })
+    .sort((a, b) => a.localeCompare(b, 'zh-CN'));
+    } catch (e) {}
+      // 主题组数：项目内全部 mov（根目录+任意子文件夹）按名称前缀去重，与右栏真实分组一致
+      let themeCount = 0;
+      const seenPrefix = new Set();
+      const walkMasks = (d) => {
+        let ents = [];
+        try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return; }
+        for (const s2 of ents) {
+          if (s2.name === '已完成') continue; // 与右栏主题列表同口径：旧脚本产物目录不参与计数
+          const full = path.join(d, s2.name);
+          if (s2.isDirectory()) walkMasks(full);
+          else if (/\.mov$/i.test(s2.name)) seenPrefix.add(_maskPrefix(s2.name));
+        }
+      };
+      walkMasks(pdir);
+      themeCount = seenPrefix.size;
+      // 纳入条件：项目内有遮罩主题子文件夹，或任意位置（含根目录）存在 .mov 主题素材
+      if (themes.length || themeCount > 0) out.push({ name: en.name, path: pdir, themes, themeCount });
+    }
+    out.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+    return out;
+  }
+
+  // 扫描目录下视频/遮罩素材（含子文件夹），返回 { name, sub, dur }；时长异步探测
+  _listMaskMedia(dir, exts) {
+    const abs = path.resolve(dir);
+    if (!fs.existsSync(abs)) return Promise.resolve([]);
+    const items = [];
+    const walk = (d, rel) => {
+      let ents = [];
+      try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return; }
+      for (const en of ents) {
+        if (en.name === '已完成') continue; // 旧脚本妥协产物目录不参与展示
+        const full = path.join(d, en.name);
+        if (en.isDirectory()) walk(full, rel ? rel + '/' + en.name : en.name);
+        else if (exts.has(path.extname(en.name).toLowerCase())) items.push({ full, name: en.name, sub: rel || '' });
+      }
+    };
+    walk(abs, '');
+    items.sort((a, b) => (a.sub === b.sub ? a.name.localeCompare(b.name, 'zh-CN') : a.sub.localeCompare(b.sub, 'zh-CN')));
+    return this._runWithLimit(items, (it) => this._probeVideoAsync(it.full).then((r) => ({ name: it.name, sub: it.sub, dur: r && r.duration > 0 ? r.duration : 0 })), 6);
+  }
+
+  listMaskVideos(dir) { return this._listMaskMedia(dir, new Set(['.mp4', '.mov', '.avi', '.mkv', '.m4v', '.webm', '.flv'])); }
+
+  listMaskMasks(dir) { return this._listMaskMedia(dir, new Set(['.mov'])); }
+
+  // 原片默认扫描：递归收集项目下所有含 mp4 的文件夹（以 mp4 所在文件夹为单位分组，不跳过任何目录；根目录含 mp4 也计入）
+  scanMaskRawDirs(dir) {
+    const abs = path.resolve(dir);
+    const hitDirs = [];
+    const hasMp4 = (d) => {
+      try { return fs.readdirSync(d).some((f) => /\.mp4$/i.test(f)); } catch (e) { return false; }
+    };
+    const walk = (d) => {
+      let ents = [];
+      try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return; }
+      for (const en of ents) {
+        const full = path.join(d, en.name);
+        if (en.isDirectory()) {
+          if (hasMp4(full)) hitDirs.push(full);
+          walk(full);
+        }
+      }
+    };
+    if (!fs.existsSync(abs)) return [];
+    if (hasMp4(abs)) hitDirs.push(abs);
+    walk(abs);
+    const uniq = [...new Set(hitDirs)];
+    return uniq
+      .map((d) => ({ path: d, name: path.basename(d) || String(d) }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+  }
+
+  // 遮罩主题文件指纹（轻量自愈检测用：仅 readdir 收集 .mov 相对路径集，不探测，不落盘）
+  maskThemeSig(dir) {
+    try {
+      if (!dir || !fs.existsSync(dir)) return { count: 0, sig: '' };
+      const names = [];
+      const walk = (d, rel) => {
+        let ents = [];
+        try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return; }
+        for (const en of ents) {
+          if (en.name === '已完成') continue;
+          const full = path.join(d, en.name);
+          if (en.isDirectory()) walk(full, rel ? rel + '/' + en.name : en.name);
+          else if (/\.mov$/i.test(en.name)) names.push(rel ? rel + '/' + en.name : en.name);
+        }
+      };
+      walk(dir, '');
+      names.sort();
+      return { count: names.length, sig: names.join('|') };
+    } catch (e) { return { count: 0, sig: '' }; }
+  }
+
+  // 遮罩叠加日志目录约定：项目\遮罩日志
+  _maskLogDir(projectPath) { return path.join(projectPath, '遮罩日志'); }
+
+  // 按成片名从视频缓存反查实际文件（用户手动迁移后仍可定位；日志 @out 缺失时兜底）
+  _findMaskOut(videoName) {
+    // 缓存反查：本软件视频缓存记录了各视频路径，用户手动迁移后按文件名找回
+    if (this.videoCachePath && fs.existsSync(this.videoCachePath)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(this.videoCachePath, 'utf-8'));
+        if (data && typeof data === 'object') {
+          const target = String(videoName).toLowerCase();
+          for (const p of Object.keys(data)) {
+            if (p && path.basename(p).toLowerCase() === target && fs.existsSync(p)) return p;
+          }
+        }
+      } catch (e) {}
+    }
+    return '';
+  }
+
+  // 从遮罩日志读取成片块中的 @out 路径行（返回候选路径，不要求文件仍存在；
+  // 前端据此打开文件夹，并用 check_exists 判定「打开成片」是否可点）
+  _maskOutFromLog(logPath, videoName) {
+    const text = readText(logPath);
+    const lines = text.split(/\r?\n/).map((l) => l.trim());
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i] !== videoName) continue;
+      // 成片名行向下 8 行内找 @out（块内顺序：成片名/使用片段列表：/素材/@out），
+      // 遇 === 分隔线即止；不能因紧邻的「使用片段列表：」提前退出，否则 @out 永远读不到
+      for (let j = i + 1; j < Math.min(i + 8, lines.length); j++) {
+        const m = /^@out:\s*(.+)$/.exec(lines[j]);
+        if (m) { const p = String(m[1]).trim().replace(/^"|"$/g, ''); return p ? p : ''; }
+        if (lines[j].startsWith('===')) break;
+      }
+      break;
+    }
+    return '';
+  }
+
+  // 列出项目的遮罩叠加日志：每个日志文件只读一次，同步解析成片块与 @out 实际路径；
+  // 按日志目录内文件 名称+mtime 签名缓存，未变化直接复用（切换项目/进出日志视图不再重复解析）
+  listMaskLogs(projectPath) {
+    const pdir = String(projectPath || '').trim();
+    const logDir = this._maskLogDir(pdir);
+    if (!pdir || !fs.existsSync(logDir)) return [];
+    let files = [];
+    try { files = fs.readdirSync(logDir).filter((n) => n.endsWith('.txt')).sort(); } catch (e) { return []; }
+    const sig = logDir + '|' + files.map((n) => { let m = 0; try { m = fs.statSync(path.join(logDir, n)).mtimeMs; } catch (e) {} return n + ':' + m; }).join('|');
+    if (this._maskLogCache && this._maskLogCache.key === sig) return JSON.parse(JSON.stringify(this._maskLogCache.logs));
+    const logs = [];
+    for (const f of files) {
+      const fp = path.join(logDir, f);
+      let text;
+      try { text = readText(fp); } catch (e) { continue; }
+      const lines = text.split(/\r?\n/);
+      // 一次扫描构建 成片名 → @out 映射：成片名行（其下一行为「使用片段列表：」）块内取 @out
+      const outMap = {};
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].trim() !== '使用片段列表：' || i < 1) continue;
+        const name = lines[i - 1].trim();
+        if (!name || /^[A-Za-z]:[\\/]/.test(name)) continue;
+        for (let j = i + 1; j < Math.min(i + 8, lines.length); j++) {
+          const tm = /^@out:\s*(.+)$/.exec(lines[j]);
+          if (tm) { const p = String(tm[1]).trim().replace(/^"|"$/g, ''); if (p) outMap[name] = p; break; }
+          if (lines[j].trim() === '使用片段列表：' || lines[j].trim().startsWith('===')) break;
+        }
+      }
+      const entries = this._parseLog(fp, text).map((e) => Object.assign({}, e, { outPath: outMap[e.video] || this._findMaskOut(e.video) }));
+      logs.push({ file: f, path: fp, name: path.basename(f, '.txt'), entries, mtime: fs.existsSync(fp) ? fs.statSync(fp).mtimeMs : 0 });
+    }
+    logs.sort((a, b) => b.mtime - a.mtime);
+    this._maskLogCache = { key: sig, logs };
+    return JSON.parse(JSON.stringify(logs));
+  }
+
+  // 删除与指定素材（原片/遮罩路径）相关的所有遮罩叠加成片：按日志块片段精确匹配，
+  // 删除成片文件并同步从日志移除对应块；返回删除列表
+
+  // 原片/遮罩相关会话状态持久化（物理缓存文件 mask_session.json，与 video_cache.json 同目录）：
+  // 不手动清除/移除就会一直在列表里；重建缓存菜单项清空后回退自动扫描
+  _maskSessionPath() { return this.videoCachePath ? path.join(path.dirname(this.videoCachePath), 'mask_session.json') : ''; }
+  getMaskSession(projectName) {
+    try {
+      const p = this._maskSessionPath();
+      if (!p || !fs.existsSync(p)) return null;
+      const d = JSON.parse(fs.readFileSync(p, 'utf-8'));
+      return (d && d[String(projectName || '')]) || null;
+    } catch (e) { return null; }
+  }
+  saveMaskSession(projectName, data) {
+    try {
+      const p = this._maskSessionPath();
+      if (!p) return { ok: false };
+      let d = {};
+      if (fs.existsSync(p)) { try { d = JSON.parse(fs.readFileSync(p, 'utf-8')); } catch (e) { d = {}; } }
+      d[String(projectName || '')] = data || {};
+      const tmp = p + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(d), 'utf-8');
+      fs.renameSync(tmp, p);
+      return { ok: true };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  }
+  // projectName 为空 = 清空全部项目会话缓存
+  clearMaskSession(projectName) {
+    try {
+      const p = this._maskSessionPath();
+      if (!p || !fs.existsSync(p)) return { ok: true };
+      if (!projectName) { fs.unlinkSync(p); return { ok: true }; }
+      let d = {};
+      try { d = JSON.parse(fs.readFileSync(p, 'utf-8')); } catch (e) { d = {}; }
+      delete d[String(projectName || '')];
+      const tmp = p + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(d), 'utf-8');
+      fs.renameSync(tmp, p);
+      return { ok: true };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  }
+
+  // ── 项目默认输出目录（项目级设置，独立于会话缓存；供底栏输出目录占位符与选择初始路径） ──
+  _maskDefaultDirPath() { return this.videoCachePath ? path.join(path.dirname(this.videoCachePath), 'mask_default_dir.json') : ''; }
+  getMaskDefaultDir(projectName) {
+    const p = this._maskDefaultDirPath();
+    if (!p || !fs.existsSync(p)) return '';
+    try { const d = JSON.parse(fs.readFileSync(p, 'utf-8')); return String(d[String(projectName || '')] || '').trim(); } catch (e) { return ''; }
+  }
+  setMaskDefaultDir(projectName, dir) {
+    const p = this._maskDefaultDirPath();
+    if (!p) return { ok: false };
+    let d = {};
+    if (fs.existsSync(p)) { try { d = JSON.parse(fs.readFileSync(p, 'utf-8')); } catch (e) { d = {}; } }
+    d[String(projectName || '')] = String(dir || '').trim();
+    atomicWrite(p, JSON.stringify(d));
+    return { ok: true };
+  }
+
+  deleteMaskRelated(projectPath, targetPaths) {
+    const pdir = String(projectPath || '').trim();
+    const logDir = this._maskLogDir(pdir);
+    const targets = Array.isArray(targetPaths) ? targetPaths.map((t) => String(t).replace(/^"|"$/g, '')).filter(Boolean) : [];
+    if (!pdir || !fs.existsSync(logDir)) return { ok: false, error: '项目无遮罩日志' };
+    if (!targets.length) return { ok: false, error: '未指定素材路径' };
+    const tset = new Set(targets.map((t) => t.toLowerCase()));
+    const deleted = [];
+    const removedVideos = [];
+    let files = [];
+    try { files = fs.readdirSync(logDir).filter((n) => n.endsWith('.txt')); } catch (e) { return { ok: false, error: '读取日志失败' }; }
+    for (const f of files) {
+      const fp = path.join(logDir, f);
+      const text = readText(fp);
+      const lines = text.split(/\r?\n/).map((l) => l.replace(/\r$/, ''));
+      const keep = [];
+      let i = 0;
+      let changed = false;
+      // 按块处理：块入口 = 成片名行（其下一行为「使用片段列表：」），
+      // 块范围为 成片名行…到下一个「使用片段列表：」/=== 分隔线止；命中整块移除、未命中整块保留
+      while (i < lines.length) {
+        const line = lines[i];
+        const isBlockHead = i + 1 < lines.length && lines[i + 1].trim() === '使用片段列表：';
+        if (isBlockHead) {
+          let j = i + 2;
+          while (j < lines.length) {
+            const t = lines[j].trim();
+            if (t === '使用片段列表：' || t.startsWith('===')) break;
+            j++;
+          }
+          const block = lines.slice(i, j);
+          const clips = block.slice(2).filter((l) => l.trim() && /^[A-Za-z]:[\\/]|^\\\\/.test(l.trim()));
+          const hit = clips.some((c) => tset.has(c.trim().toLowerCase()));
+          if (hit) {
+            changed = true;
+            const vname = (block[0] || '').trim();
+            if (vname) removedVideos.push(vname);
+            i = j; // 整块移除（分隔线保留给外层）
+            continue;
+          }
+          // 未命中：整块保留（成片名/使用片段列表/素材/@out 原样）
+          for (let k = i; k < j; k++) keep.push(lines[k]);
+          i = j;
+          continue;
+        }
+        keep.push(line);
+        i++;
+      }
+      if (changed) {
+        // 删除对应成片文件（优先日志 @out，其次视频缓存定位）
+        for (const vn of removedVideos) {
+          const op = this._maskOutFromLog(fp, vn) || this._findMaskOut(vn);
+          if (op && fs.existsSync(op)) { try { fs.unlinkSync(op); } catch (e) {} deleted.push(op); }
+        }
+        // 写回日志（原子写）
+        const outText = keep.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+        if (outText.replace(/\s/g, '').length) atomicWrite(fp, outText);
+        else { try { fs.unlinkSync(fp); } catch (e) {} }
+      }
+    }
+    return { ok: true, deleted, videos: removedVideos };
+  }
+
+  // 删除指定遮罩叠加成片（按成片名）：删除文件并同步从日志移除对应块
+  deleteMaskVideos(projectPath, videoNames) {
+    const pdir = String(projectPath || '').trim();
+    const logDir = this._maskLogDir(pdir);
+    const names = Array.isArray(videoNames) ? videoNames.map((n) => String(n).trim()).filter(Boolean) : [];
+    if (!pdir || !fs.existsSync(logDir)) return { ok: false, error: '项目无遮罩日志' };
+    if (!names.length) return { ok: false, error: '未指定成片名' };
+    const nset = new Set(names.map((n) => n.toLowerCase()));
+    const deleted = [];
+    let files = [];
+    try { files = fs.readdirSync(logDir).filter((n) => n.endsWith('.txt')); } catch (e) { return { ok: false, error: '读取日志失败' }; }
+    for (const f of files) {
+      const fp = path.join(logDir, f);
+      const text = readText(fp);
+      const lines = text.split(/\r?\n/).map((l) => l.replace(/\r$/, ''));
+      const keep = [];
+      let i = 0;
+      let changed = false;
+      while (i < lines.length) {
+        const line = lines[i];
+        const isBlockHead = i + 1 < lines.length && lines[i + 1].trim() === '使用片段列表：';
+        if (isBlockHead) {
+          let j = i + 2;
+          while (j < lines.length) {
+            const t = lines[j].trim();
+            if (t === '使用片段列表：' || t.startsWith('===')) break;
+            j++;
+          }
+          const block = lines.slice(i, j);
+          const vname = (block[0] || '').trim();
+          if (vname && nset.has(vname.toLowerCase())) { changed = true; i = j; continue; }
+          // 未命中：整块保留（成片名/使用片段列表/素材/@out 原样）
+          for (let k = i; k < j; k++) keep.push(lines[k]);
+          i = j;
+          continue;
+        }
+        keep.push(line);
+        i++;
+      }
+      if (changed) {
+        for (const vn of names) {
+          const op = this._maskOutFromLog(fp, vn) || this._findMaskOut(vn);
+          if (op && fs.existsSync(op)) { try { fs.unlinkSync(op); } catch (e) {} deleted.push(op); }
+        }
+        const outText = keep.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+        if (outText.replace(/\s/g, '').length) atomicWrite(fp, outText);
+        else { try { fs.unlinkSync(fp); } catch (e) {} }
+      }
+    }
+    return { ok: true, deleted };
+  }
+
+  // 迁移指定遮罩叠加成片到新文件夹：移动文件并同步更新遮罩日志块的 @out 路径
+  moveMaskOut(projectPath, videoName, newDir) {
+    const pdir = String(projectPath || '').trim();
+    const logDir = this._maskLogDir(pdir);
+    const vn = String(videoName || '').trim();
+    const nd = String(newDir || '').trim();
+    if (!pdir || !fs.existsSync(logDir)) return { ok: false, error: '项目无遮罩日志' };
+    if (!vn || !nd) return { ok: false, error: '缺少成片名或目标目录' };
+    if (!fs.existsSync(nd)) { try { fs.mkdirSync(nd, { recursive: true }); } catch (e) { return { ok: false, error: '创建目标目录失败' }; } }
+    let files = [];
+    try { files = fs.readdirSync(logDir).filter((n) => n.endsWith('.txt')); } catch (e) { return { ok: false, error: '读取日志失败' }; }
+    for (const f of files) {
+      const fp = path.join(logDir, f);
+      const src = this._maskOutFromLog(fp, vn) || this._findMaskOut(vn);
+      if (!src || !fs.existsSync(src)) continue;
+      const ext = path.extname(vn) || '.mp4';
+      let dest = path.join(nd, vn);
+      let k = 1;
+      while (fs.existsSync(dest)) { dest = path.join(nd, path.basename(vn, ext) + '_' + k + ext); k++; }
+      try { fs.renameSync(src, dest); } catch (e) { return { ok: false, error: '移动文件失败：' + String(e) }; }
+      // 更新日志块 @out 行
+      const text = readText(fp);
+      const lines = text.split(/\r?\n/);
+      const updated = lines.map((l) => {
+        const m = /^@out:\s*(.+)$/.exec(l.replace(/\r$/, ''));
+        if (m && path.basename(String(m[1]).trim().replace(/^"|"$/g, '')) === vn) return '@out: ' + dest;
+        return l;
+      });
+      atomicWrite(fp, updated.join('\n'));
+      return { ok: true, from: src, to: dest };
+    }
+    return { ok: false, error: '未找到成片：' + vn };
+  }
+
+  // 删除二次拼接产物：扫描项目下所有拼接日志/复刻日志，找出片段引用遮罩叠加成片的成片块，
+  // 删除对应二次成片文件并同步从日志移除块（成片与日志同目录）
+  deleteSecondaryProducts(projectPath, maskOutPaths) {
+    const pdir = String(projectPath || '').trim();
+    const refs = new Set((Array.isArray(maskOutPaths) ? maskOutPaths : []).map((p) => path.basename(String(p)).toLowerCase()));
+    if (!pdir || !refs.size) return { ok: false, error: '未指定引用成片' };
+    const deleted = [];
+    const removedVideos = [];
+    const logFiles = [];
+    const walk = (d) => {
+      let ents = [];
+      try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return; }
+      for (const en of ents) {
+        if (en.name === '遮罩日志') continue;
+        const full = path.join(d, en.name);
+        if (en.isDirectory()) walk(full);
+        else if (en.isFile() && en.name.endsWith('.txt') && /(拼接日志|复刻日志)/.test(en.name)) logFiles.push(full);
+      }
+    };
+    walk(pdir);
+    for (const fp of logFiles) {
+      const text = readText(fp);
+      const lines = text.split(/\r?\n/).map((l) => l.replace(/\r$/, ''));
+      const keep = [];
+      let i = 0;
+      let changed = false;
+      while (i < lines.length) {
+        const line = lines[i];
+        if (line.trim() === '使用片段列表：') {
+          const block = [];
+          let j = Math.max(0, i - 1);
+          while (j < lines.length) {
+            const l = lines[j];
+            if (l.trim() === '使用片段列表：' && j !== i) break;
+            if (l.trim().startsWith('===')) break;
+            block.push(l);
+            j++;
+            if (j < lines.length && lines[j].trim() === '使用片段列表：') break;
+            if (j < lines.length && lines[j].trim().startsWith('===')) { block.push(lines[j]); j++; break; }
+          }
+          const clips = block.slice(2).filter((l) => l.trim() && /^[A-Za-z]:[\\/]|^\\\\/.test(l.trim()));
+          const hit = clips.some((c) => refs.has(path.basename(c.trim()).toLowerCase()));
+          if (hit) {
+            changed = true;
+            const vname = (block[0] || '').trim();
+            if (vname) removedVideos.push(vname);
+            i = j;
+            continue;
+          }
+          for (let k = Math.max(0, i - 1); k < j; k++) keep.push(lines[k]);
+          i = j;
+          continue;
+        }
+        keep.push(line);
+        i++;
+      }
+      if (changed) {
+        const logDir = path.dirname(fp);
+        for (const vn of removedVideos) {
+          const op = path.join(logDir, vn);
+          if (fs.existsSync(op)) { try { fs.unlinkSync(op); } catch (e) {} deleted.push(op); }
+        }
+        const outText = keep.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+        if (outText.replace(/\s/g, '').length) atomicWrite(fp, outText);
+        else { try { fs.unlinkSync(fp); } catch (e) {} }
+      }
+    }
+    return { ok: true, deleted, videos: removedVideos };
   }
 
   resolvePath(filePath) { return path.resolve(filePath); }

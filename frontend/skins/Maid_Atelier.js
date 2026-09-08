@@ -60,13 +60,28 @@
 
     // ── 日期分支装饰层（date-ornament）：金边 + 蕾丝 + 蝴蝶结，
     //    独立置于「日期分支」标题行下方（dates 之前），单独配置宽度；
-    //    未选中配置时展示，body[data-maid-chat-active] 时由 CSS 隐藏 ──
-    var ornament = doc.createElement('div');
-    ornament.dataset.skinChrome = 'date-ornament';
-    ornament.dataset.skinOwner = OWNER;
-    ornament.setAttribute('aria-hidden', 'true');
-    var datesHost = doc.querySelector('.center-top__dates');
-    if (datesHost && datesHost.parentNode) datesHost.parentNode.insertBefore(ornament, datesHost);
+    //    未选中配置时展示，body[data-maid-chat-active] 时由 CSS 隐藏。
+    //    头部被应用层重写（遮罩模式切换/退出）后会丢失注入元素，监听
+    //    vl:skin-refresh 按最新结构幂等重建 ──
+    function buildOrnament() {
+      var d3 = doc;
+      var old = d3.querySelector('[data-skin-chrome="date-ornament"]');
+      if (old && old.parentNode) old.parentNode.removeChild(old);
+      // 宿主：优先独立装饰容器（遮罩等无日期分支的场景），否则沿用「日期分支」行（dates 前）
+      var host = d3.querySelector('.center-top__ornament-host');
+      var datesHost = d3.querySelector('.center-top__dates');
+      if (!host && datesHost && datesHost.parentNode) host = datesHost.parentNode;
+      if (!host || !host.appendChild) return;
+      var orn = d3.createElement('div');
+      orn.dataset.skinChrome = 'date-ornament';
+      orn.dataset.skinOwner = OWNER;
+      orn.setAttribute('aria-hidden', 'true');
+      if (datesHost && datesHost.parentNode === host) host.insertBefore(orn, datesHost);
+      else host.appendChild(orn);
+    }
+    buildOrnament();
+    function onSkinRefresh() { buildOrnament(); }
+    doc.addEventListener('vl:skin-refresh', onSkinRefresh);
 
     // ── 侧栏金框角饰（sidebar-corners）：四角 62px span + 中间四段金线，
     //    注入 sidebarRoot 最前（z-index 4，母本 [data-skin-chrome='sidebar-corners']） ──
@@ -123,9 +138,10 @@
     var sideMenu = doc.getElementById('sidebarMenu');
     if (sideMenu && sideMenu.parentNode !== sidebarRoot) sidebarRoot.appendChild(sideMenu);
 
-    // 选中配置投影：.tree-txt-item--active 存在 ⟷ body[data-maid-chat-active]
+    // 选中配置投影：.tree-txt-item--active（批量配置管理模式）或
+    // .mask-proj-item--active（遮罩叠加模式选中项目）存在 ⟷ body[data-maid-chat-active]
     function syncActive() {
-      var active = tree.querySelector('.tree-txt-item--active') !== null;
+      var active = tree.querySelector('.tree-txt-item--active, .mask-proj-item--active') !== null;
       if (active && doc.body.dataset.maidChatActive === undefined) doc.body.dataset.maidChatActive = '';
       else if (!active && doc.body.dataset.maidChatActive !== undefined) delete doc.body.dataset.maidChatActive;
     }
@@ -188,6 +204,7 @@
     // ── dispose：移除本皮肤所有装饰元素、投影属性与监听，完整还原 ──
     return function dispose() {
       doc.querySelectorAll('[data-skin-owner="' + OWNER + '"]').forEach(function (el) { el.remove(); });
+      doc.removeEventListener('vl:skin-refresh', onSkinRefresh);
       var holder = doc.querySelector('[data-skin-chrome="maid-width-rule"]');
       if (holder && holder.parentNode === doc.head) doc.head.removeChild(holder);
       if (ro && typeof ro.disconnect === 'function') ro.disconnect();

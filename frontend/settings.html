@@ -30,6 +30,7 @@
     <button class="settings-nav__item is-active" data-view="general">通用设置</button>
     <button class="settings-nav__item" data-view="batch">批量拼接</button>
     <button class="settings-nav__item" data-view="replica">视频复刻</button>
+    <button class="settings-nav__item" data-view="mask">遮罩叠加</button>
     <button class="settings-nav__item" data-view="changelog">更新日志</button>
     <button class="settings-nav__item" data-view="about">关于</button>
   </aside>
@@ -169,7 +170,7 @@
 
       <div class="form-group">
         <label class="form-group__label">后缀<small>成片名末尾的序号标识，可留空</small></label>
-        <input class="form-input" id="batchSuffixMark" type="text" placeholder="YX">
+        <input class="form-input" id="batchSuffixMark" type="text" placeholder="">
       </div>
 
       <div class="producer-preview__label">成片名预览</div>
@@ -212,6 +213,27 @@
       <div class="form-group">
         <label class="form-group__label">去重阈值<small>模式2尾部替换需达到的不一致时长占比</small></label>
         <input class="form-input" id="replicaDedupRatio" type="number" min="0" max="1" step="0.05" placeholder="">
+      </div>
+    </section>
+
+    <!-- ═══ 遮罩叠加 ═══ -->
+    <section class="settings-view" id="view-mask">
+      <h2 class="settings-view__title">遮罩叠加设置</h2>
+
+      <div class="form-group">
+        <label class="form-group__label">工作路径<small>存放遮罩的路径，以文件夹区分项目</small></label>
+        <div class="dir-row">
+          <input class="form-input" id="maskRoot" type="text" placeholder="必填，选择遮罩叠加工作路径">
+          <button class="btn btn-ghost" data-dir="maskRoot">选择目录</button>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-group__label">固定水印<small>遮罩叠加模式默认水印文件</small></label>
+        <div class="dir-row">
+          <input class="form-input" id="maskWatermark" type="text" placeholder="选择水印 mov 文件">
+          <button class="btn btn-ghost" id="btnMaskWatermark">选择文件</button>
+        </div>
       </div>
     </section>
 

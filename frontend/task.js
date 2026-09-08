@@ -14,11 +14,46 @@
 
   var STATUS_TEXT = { queued: '排队中', paused: '已暂停', running: '运行中', done: '已完成', error: '失败', stopped: '已停止', interrupted: '已中断' };
   var LOCK_TEXT = { unknown: '', waiting: '等待互斥锁', locked: '已获取锁', released: '' };
-  var TYPE_TEXT = { batch: '批量拼接', replica: '视频复刻' };
+  var TYPE_TEXT = { batch: '批量拼接', replica: '视频复刻', mask: '遮罩叠加' };
 
   // 任务卡片右键菜单（置顶 / 暂停继续 / 打开成片文件夹），样式复用 styles.css 的 .ctx-menu
+  // 子菜单策略：hover 展开；离开菜单区延迟 260ms 才关闭，期间移入子菜单即取消关闭（标准 hover 菜单行为）
+  var _subEl = null, _subTimer = null, _menuX = 0, _menuY = 0;
+  function subTimerClear() { if (_subTimer) { clearTimeout(_subTimer); _subTimer = null; } }
+  function currentRootMenu() { return document.getElementById('ctxMenu'); }
+  function currentSubEl() { return document.getElementById('_vlSub'); }
+  function teardownMenu() {
+    subTimerClear();
+    if (_subEl) { try { _subEl.remove(); } catch (e) {} _subEl = null; }
+    var rootEl = currentRootMenu();
+    if (rootEl) rootEl.remove();
+    document.removeEventListener('mousedown', _onDocMd, true);
+    document.removeEventListener('contextmenu', _onCtx, true);
+    document.removeEventListener('mousemove', _onMove, true);
+  }
+  function scheduleMenuClose(ms) {
+    subTimerClear();
+    _subTimer = setTimeout(function () {
+      var rootEl = currentRootMenu(), subEl = currentSubEl();
+      var t = document.elementFromPoint(_menuX, _menuY);
+      // 鼠标仍停留在根菜单或子菜单上 → 不关闭（允许根项→子菜单的移动留白）
+      if (t && rootEl && (rootEl.contains(t) || (subEl && subEl.contains(t)))) { _subTimer = null; return; }
+      teardownMenu();
+    }, ms);
+  }
+  function _onDocMd(e) {
+    var rootEl = currentRootMenu(), subEl = currentSubEl();
+    if (!rootEl) return;
+    if (!rootEl.contains(e.target) && !(subEl && subEl.contains(e.target))) teardownMenu();
+  }
+  function _onCtx() { teardownMenu(); }
+  function _onMove(e) {
+    _menuX = e.clientX; _menuY = e.clientY;
+    var rootEl = currentRootMenu(), subEl = currentSubEl();
+    if (rootEl && (rootEl.contains(e.target) || (subEl && subEl.contains(e.target)))) subTimerClear();
+  }
   function showMenu(x, y, items) {
-    var old = document.getElementById('ctxMenu');
+    var old = currentRootMenu();
     if (old) old.remove();
     var m = document.createElement('div');
     m.id = 'ctxMenu'; m.className = 'ctx-menu';
@@ -28,20 +63,44 @@
       b.textContent = it.label;
       m.appendChild(b);
       if (it.disabled) { b.disabled = true; if (it.title) b.title = it.title; return; }
-      b.addEventListener('click', function () { close(); it.action(); });
+      if (it.submenu && it.submenu.length) {
+        // hover 展示子菜单（右侧展开，如 定位至配置 / 定位至日志）；切到其它子菜单项自动替换
+        b.classList.add('ctx-menu__item--has-sub');
+        b.addEventListener('mouseenter', function () { openSub(it.submenu, b, m); });
+        b.addEventListener('click', function (ev) { ev.stopPropagation(); });
+        return;
+      }
+      b.addEventListener('click', function () { teardownMenu(); it.action(); });
     });
     document.body.appendChild(m);
     m.style.left = Math.max(4, Math.min(x, window.innerWidth - 200)) + 'px';
     m.style.top = Math.max(4, Math.min(y, window.innerHeight - items.length * 30 - 14)) + 'px';
-    function close() {
-      m.remove();
-      document.removeEventListener('mousedown', onDocMd, true);
-      document.removeEventListener('contextmenu', onCtx, true);
-    }
-    function onDocMd(e) { if (!m.contains(e.target)) close(); }
-    function onCtx() { close(); }
-    setTimeout(function () { document.addEventListener('mousedown', onDocMd, true); }, 0);
-    document.addEventListener('contextmenu', onCtx, true);
+    // 离开根菜单：延迟关闭，留出移入子菜单的时间
+    m.addEventListener('mouseleave', function () { scheduleMenuClose(260); });
+    setTimeout(function () { document.addEventListener('mousedown', _onDocMd, true); }, 0);
+    document.addEventListener('contextmenu', _onCtx, true);
+    document.addEventListener('mousemove', _onMove, true);
+  }
+  // 渲染并展开子菜单（右侧定位）；hover 留在子菜单内保持打开
+  function openSub(sub, anchor, rootMenu) {
+    subTimerClear();
+    if (_subEl) { try { _subEl.remove(); } catch (e) {} _subEl = null; }
+    var r = anchor.getBoundingClientRect();
+    var el = document.createElement('div');
+    el.id = '_vlSub'; el.className = 'ctx-menu__sub';
+    sub.forEach(function (it) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = it.label;
+      b.addEventListener('click', function () { teardownMenu(); it.action(); });
+      el.appendChild(b);
+    });
+    el.style.top = Math.max(4, Math.min(r.top, window.innerHeight - sub.length * 30 - 8)) + 'px';
+    el.style.left = (r.right + 6) + 'px';
+    document.body.appendChild(el);
+    _subEl = el;
+    el.addEventListener('mouseenter', subTimerClear);
+    el.addEventListener('mouseleave', function () { scheduleMenuClose(260); });
   }
 
   // 图标统一来自 icons.js 全局库（硬约束：不在业务文件维护 ICONS/icon 副本）
@@ -207,6 +266,7 @@
       '<button class="task-card__pause">' + icon('pause', 12) + '暂停</button>' +
       '<button class="task-card__stop">' + icon('stop', 12) + '停止</button>' +
       '<button class="task-card__rerun" title="使用开始任务时的配置重新制作，删除上次失败的成片与日志">' + icon('rotate-ccw', 12) + '重新开始</button>' +
+      '<button class="task-card__continue" title="仅续跑失败或未完成的成片，不删除已成功产物">' + icon('play', 12) + '继续制作</button>' +
       '<button class="task-card__del" title="从列表中移除该任务">' + icon('x', 12) + '</button>';
     card.appendChild(header);
     header.querySelector('.task-card__handle').innerHTML = icon('grip-vertical', 14);
@@ -231,6 +291,7 @@
     header.addEventListener('click', function (e) {
       if (e.target.closest('.task-card__stop')) return;
       if (e.target.closest('.task-card__rerun')) return;
+      if (e.target.closest('.task-card__continue')) return;
       if (e.target.closest('.task-card__pause')) return;
       if (e.target.closest('.task-card__handle')) return;
       // 排队中任务尚未开始，日志无有用信息，点击不展开
@@ -249,6 +310,10 @@
     header.querySelector('.task-card__rerun').addEventListener('click', function (e) {
       e.stopPropagation();
       confirmRerun(card.__task || t);
+    });
+    header.querySelector('.task-card__continue').addEventListener('click', function (e) {
+      e.stopPropagation();
+      confirmContinue(card.__task || t);
     });
     header.querySelector('.task-card__pause').addEventListener('click', function (e) {
       e.stopPropagation();
@@ -345,7 +410,7 @@
     rec.header.querySelector('.task-card__title').title = t.script || '';
     var tagEl = rec.header.querySelector('.task-card__tag');
     tagEl.textContent = TYPE_TEXT[t.type] || t.type || '';
-    tagEl.className = 'task-card__tag' + ((t.type === 'batch' || t.type === 'replica') ? ' task-card__tag--' + t.type : '');
+    tagEl.className = 'task-card__tag' + ((t.type === 'batch' || t.type === 'replica' || t.type === 'mask') ? ' task-card__tag--' + t.type : '');
     var lockText = LOCK_TEXT[t.lockState] || '';
     var lockEl = rec.header.querySelector('.task-card__lock');
     lockEl.textContent = lockText;
@@ -430,6 +495,12 @@
     var rerunBtn = rec.header.querySelector('.task-card__rerun');
     var canRerun = t.status === 'error' || t.status === 'interrupted' || t.status === 'stopped';
     rerunBtn.style.display = (canRerun && state.tab !== 'running') ? '' : 'none';
+    // 继续制作按钮：仅复刻任务失败/中断/停止且存在失败记录时显示（不删除已成功产物）
+    var continueBtn = rec.header.querySelector('.task-card__continue');
+    var hasFail = (Array.isArray(t.failedVideos) && t.failedVideos.length > 0)
+      || (t.log || []).some(function (l) { return /❌ 失败成片/.test(String(l)); });
+    var canContinue = t.type === 'replica' && canRerun && hasFail;
+    continueBtn.style.display = (canContinue && state.tab !== 'running') ? '' : 'none';
     // 进度条：数字行（当前/总）+ 下方进度条，仅解析到总进度后显示；
     // 排队任务也显示预计成片数（后端创建时预填 total）；分组数>0 时追加「分 N 组」
     var prog = t.progress || {};
@@ -530,6 +601,18 @@
       inp.focus(); inp.select();
     }
   }
+  // 定位子菜单：批量任务提供「定位至配置/日志」，复刻任务仅日志（源即日志）
+  function buildLocateItem(t) {
+    var subs = [];
+    if (t.type === 'batch') subs.push({ label: '定位至配置', action: function () { locateTask(t.id, 'config'); } });
+    subs.push({ label: '定位至日志', action: function () { locateTask(t.id, 'log'); } });
+    return { label: '定位', submenu: subs };
+  }
+  function locateTask(id, target) {
+    call('locate_task', id, target).then(function (r) {
+      if (r && !r.ok) alertDialog('定位失败：' + (r.error || '未知错误'));
+    }).catch(function (e) { alertDialog('定位失败：' + e.message); });
+  }
   function showTaskMenu(x, y, t) {
     var items = [];
     function openFolder() {
@@ -543,9 +626,23 @@
       if (t.status === 'done' && t.type === 'batch') {
         mItems.push({ label: '重分组', action: function () { openRegroupDialog(t); } });
       }
+      // 复刻任务失败/中断/停止：提供「继续制作」——仅续跑失败/未完成的成片，不删除已成功产物
+      if (t.type === 'replica' && (t.status === 'error' || t.status === 'interrupted' || t.status === 'stopped')) {
+        var failN = (Array.isArray(t.failedVideos) && t.failedVideos.length) ? t.failedVideos.length : 0;
+        var cItem = { label: '继续制作', action: function () { confirmContinue(t); } };
+        if (!failN && !(t.log || []).some(function (l) { return /❌ 失败成片/.test(String(l)); })) {
+          cItem.disabled = true;
+          cItem.title = '未检测到失败成片，无法续跑';
+        } else if (failN) {
+          cItem.title = '仅续跑失败或未完成的 ' + failN + ' 个成片，不删除已成功产物';
+        }
+        mItems.push(cItem);
+      }
       var it = { label: '打开成片文件夹', action: openFolder };
       if (!t.outDir) { it.disabled = true; it.title = '该任务没有成片文件夹信息'; }
       mItems.push(it);
+      // 遮罩任务无配置/日志可定位，不提供「定位」子菜单
+      if (t.type !== 'mask') mItems.push(buildLocateItem(t));
       showMenu(x, y, mItems);
       return;
     }
@@ -562,7 +659,8 @@
       items.push({ label: '停止任务', action: function () { confirmStop(t); } });
     }
     items.push({ label: '打开成片文件夹', action: openFolder });
-    var last = items[items.length - 1];
+    items.push(buildLocateItem(t));
+    var last = items[items.length - 2]; // 定位「打开成片文件夹」项（其后为定位子菜单）
     if (!t.outDir) { last.disabled = true; last.title = '该任务没有成片文件夹信息'; }
     showMenu(x, y, items);
   }
@@ -591,6 +689,17 @@
     if (!r || !r.ok) alertDialog('恢复失败：' + ((r && r.error) || '未知错误'));
   }).catch(function (e) { alertDialog('恢复失败：' + e.message); });
 }
+
+  function confirmContinue(t) {
+    var failN = (Array.isArray(t.failedVideos) && t.failedVideos.length) ? t.failedVideos.length : 0;
+    var msg = '确定要「继续制作」吗？\n\n仅续跑失败或未完成的' + (failN ? ' ' + failN + ' 个' : '') + '成片，已成功生成的成片和日志将保留。';
+    confirmDialog(msg).then(function (ok) {
+      if (!ok) return;
+      call(t.type === 'mask' ? 'continue_mask' : 'continue_replica', t.id).then(function (r) {
+        if (!r || !r.ok) alertDialog('继续制作失败：' + ((r && r.error) || '未知错误'));
+      }).catch(function (err) { alertDialog('继续制作失败：' + err.message); });
+    });
+  }
 
   function confirmRerun(t) {
     var msg = '确定要重新开始这个任务吗？\n\n本次重开将使用与最初一致的配置（包括日期、输出目录等），并删除上次执行失败产生的成片和日志文件。';

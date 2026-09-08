@@ -160,6 +160,7 @@
     /* 按任务模式区分徽章颜色（变量随皮肤，不写死） */
     .task-card__tag--batch { background: var(--brand-500); color: var(--text-onaccent); }
     .task-card__tag--replica { background: var(--status-success-default); color: var(--text-onaccent); }
+    .task-card__tag--mask { background: var(--accent-magenta); color: var(--text-onaccent); }
     .task-card__lock { flex-shrink: 0; font-size: var(--body-xs-font-size); }
     .task-card__lock--waiting { color: var(--status-warning-default); }
     .task-card__lock--locked { color: var(--status-primary-default); }
@@ -188,6 +189,15 @@
     }
     .task-card__rerun:hover { background: var(--brand-400); border-color: var(--brand-400); }
     .task-card__rerun svg { flex-shrink: 0; }
+    /* 继续制作按钮：与重新开始同主题，但以描边呈现以区分「不删除已成功产物」 */
+    .task-card__continue {
+      flex-shrink: 0; height: 20px; padding: 0 8px; border-radius: 4px;
+      display: inline-flex; align-items: center; gap: 4px;
+      font-family: var(--font-family-default); font-size: var(--body-xs-font-size); cursor: pointer;
+      border: 1px solid var(--brand-500); background: transparent; color: var(--brand-500);
+    }
+    .task-card__continue:hover { background: var(--brand-500); color: var(--text-onbrand); }
+    .task-card__continue svg { flex-shrink: 0; }
     /* 行级删除按钮：样式与配置模式排除字段删除按钮（.config-exclude-row__remove）完全一致 */
     .task-card__del {
       flex-shrink: 0; width: 20px; height: 20px; padding: 0;

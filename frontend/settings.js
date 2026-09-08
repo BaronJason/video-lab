@@ -12,7 +12,8 @@
   ];
   var state = {
     batch: { max_duration: '', max_retry: '', speed_limit: '', txt_prefix: '', producer: '', suffix_mark: '' },
-    replica: { max_duration: '', speed_limit: '', dedup_ratio: '' }
+    replica: { max_duration: '', speed_limit: '', dedup_ratio: '' },
+    mask: { root: '', watermark_mov: '' }
   };
   // 保存按钮启用跟踪：记录加载后的原始值，任意一行变动即高亮该行并启用保存
   var origValues = {};
@@ -170,7 +171,7 @@
   function updatePreview() {
     var prefix = $('batchTxtPrefix').value.trim();
     var producer = $('batchProducer').value.trim();
-    var suffixMark = $('batchSuffixMark').value.trim() || 'YX';
+    var suffixMark = $('batchSuffixMark').value.trim();
     var now = new Date();
     var datePrefix = String(now.getFullYear()).slice(2)
       + String(now.getMonth() + 1).padStart(2, '0')
@@ -232,6 +233,9 @@
       $('replicaMaxDuration').value = r.max_duration != null ? r.max_duration : '';
       $('replicaSpeedLimit').value = r.speed_limit != null ? r.speed_limit : '';
       $('replicaDedupRatio').value = r.dedup_ratio != null ? r.dedup_ratio : '';
+      var mk = s.mask || {};
+      $('maskRoot').value = mk.root || '';
+      $('maskWatermark').value = mk.watermark_mov || '';
       updatePreview();
       captureOriginals();
       recomputeDirty();
@@ -311,6 +315,14 @@
         api.pick_directory('选择目录', cur || undefined).then(function (p) { if (p) { $(inputId).value = p; recomputeDirty(); } });
       });
     });
+    // 遮罩固定水印：选择 mov 文件
+    var mw = $('btnMaskWatermark');
+    if (mw) mw.addEventListener('click', function () {
+      var cur = $('maskWatermark').value.trim();
+      api.choose_mask_file(cur || undefined).then(function (r) {
+        if (r && r.ok && r.path) { $('maskWatermark').value = r.path; recomputeDirty(); }
+      }).catch(function () {});
+    });
   }
 
   function bindSave() {
@@ -324,6 +336,8 @@
       state.replica.max_duration = $('replicaMaxDuration').value.trim();
       state.replica.speed_limit = $('replicaSpeedLimit').value.trim();
       state.replica.dedup_ratio = $('replicaDedupRatio').value.trim();
+      state.mask.root = $('maskRoot').value.trim();
+      state.mask.watermark_mov = $('maskWatermark').value.trim();
 
       var missing = [];
       var bn = ['max_duration', 'max_retry', 'speed_limit'];
@@ -351,7 +365,8 @@
         update_mode: umEl ? umEl.value : 'notify',
         config_storage: storageEl ? storageEl.value : 'program',
         batch: state.batch,
-        replica: state.replica
+        replica: state.replica,
+        mask: state.mask
       }).then(function (res) {
         if (res && res.ok) {
           setStatus('已保存', true); setTimeout(statusTimer, 2000); captureOriginals(); recomputeDirty();

@@ -207,11 +207,12 @@ html[data-skin="Maid_Atelier"] .center-panel {
   background: transparent;
 }
 
-/* 顶部全局搜索栏：玻璃容器 + 底部金线分隔（母本 conversation header navy band 同源） */
+/* 顶部全局搜索栏：恒顶层（z 高于装饰/header 的 20/21），背景足够不透明，
+   保证 header/装饰上移退场动画从其上滑过时被盖住 */
 html[data-skin="Maid_Atelier"] .center-global-search {
   position: relative;
-  z-index: 1;
-  background: rgba(14, 29, 73, 0.55);
+  z-index: 30;
+  background: rgba(10, 24, 56, 0.96);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   border-bottom: 1px solid rgba(225, 191, 124, 0.32);
@@ -1133,6 +1134,115 @@ html[data-skin="Maid_Atelier"] .tree-txt-item--active .tree-txt-item__badge {
   background: rgba(245,220,120,0.2);
   color: var(--maid-gold-light);
 }
+
+/* ── 遮罩叠加模式项目行：与配置管理模式项目行同等女仆适配（缎带填充 + 盾徽 + 亮金徽章） ── */
+html[data-skin="Maid_Atelier"] .mask-proj-item {
+  position: relative;
+  isolation: isolate;
+  padding-left: 42px; /* 名文左移避让盾徽徽章（::after 占位） */
+}
+html[data-skin="Maid_Atelier"] .mask-proj-item:hover {
+  background: var(--maid-gold-glow); /* 与批量 tree-project__name:hover 同款金辉 */
+}
+html[data-skin="Maid_Atelier"] .mask-proj-item::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 29px;
+  background: url('assets/workspace-shield.webp') center / contain no-repeat;
+  pointer-events: none;
+  filter: drop-shadow(0 2px 3px rgba(2, 8, 28, 0.48));
+}
+html[data-skin="Maid_Atelier"] .mask-proj-item .mask-proj-item__icon { display: none; }
+html[data-skin="Maid_Atelier"] .mask-proj-item--active {
+  background: transparent;
+  box-shadow: none;
+  color: #fff8e8;
+  text-shadow: 0 1px 2px rgba(2, 8, 28, 0.54);
+}
+html[data-skin="Maid_Atelier"] .mask-proj-item--active:hover { background: transparent; }
+html[data-skin="Maid_Atelier"] .mask-proj-item--active .mask-proj-item__name { color: #fff8e8; }
+/* 缎带始终在位：默认为收起（scaleX(0)，不可见），选中展开、取消收回，
+   与批量缎带完全同构（transform-origin:left 从左向右划入/向左收回，transition 0.32s ease） */
+html[data-skin="Maid_Atelier"] .mask-proj-item::before {
+  content: '';
+  position: absolute;
+  inset: -3px 0 -3px -12px;
+  z-index: -1;
+  transform: scaleX(0);
+  transform-origin: left center;
+  border-style: solid;
+  border-width: 0 36px 0 35px;
+  border-image-source: url('assets/workspace-ribbon.webp');
+  border-image-slice: 0 145 0 140 fill;
+  border-image-width: 0 36px 0 35px;
+  border-image-repeat: stretch;
+  pointer-events: none;
+  transition: transform 0.32s ease;
+}
+html[data-skin="Maid_Atelier"] .mask-proj-item--active::before {
+  transform: scaleX(1);
+}
+html[data-skin="Maid_Atelier"] .mask-proj-item--active .mask-proj-item__badge {
+  background: linear-gradient(180deg, #f2d98f, #d9b65c);
+  color: #0a173b;
+}
+/* 遮罩模式装饰行：宿主仅为装饰提供绝对定位基线（中心列顶部 76px 可视区），
+   本身透明无底色；中心列放行溢出并取消最小高度 → 装饰完整显示、不推挤内容，
+   选中后装饰 translateY(-100%) 退场，顶部由 header 材质（选中态自带深蓝底+金线）
+   与内容区深底接管，无残留空栏、无蓝底条 */
+html[data-skin="Maid_Atelier"] body.mask-mode #maskOrnamentHost {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 76px;
+  z-index: 19;
+  pointer-events: none;
+  background: transparent;
+}
+html[data-skin="Maid_Atelier"] body.mask-mode .center-top {
+  min-height: 0;
+  overflow: visible;
+}
+/* 遮罩内容区与批量配置编辑器同款：暗沉深蓝底衬托女仆背景 + 同款进场动画（时长/曲线/方向一致） */
+html[data-skin="Maid_Atelier"] .mask-config {
+  background: rgba(8, 17, 42, 0.55);
+  animation: maidPaneIn 340ms cubic-bezier(0.22, 0.78, 0.2, 1) both;
+}
+/* 静默重复渲染不重放进场（对应批量 config-editor--static） */
+html[data-skin="Maid_Atelier"] .mask-config.mask-config--static {
+  animation: none;
+}
+/* 遮罩列表各行 hover：与批量 config-path-row 同款蓝调 */
+html[data-skin="Maid_Atelier"] .mask-folder-row:hover,
+html[data-skin="Maid_Atelier"] .mask-folder-row--open,
+html[data-skin="Maid_Atelier"] .mask-theme-row:hover,
+html[data-skin="Maid_Atelier"] .mask-theme-row--open,
+html[data-skin="Maid_Atelier"] .mask-file-item:hover,
+html[data-skin="Maid_Atelier"] .mask-group-head:hover,
+html[data-skin="Maid_Atelier"] .mask-group-file:hover {
+  background: rgba(91, 119, 188, 0.14);
+}
+/* 遮罩双栏间竖线（右栏原片素材侧）：女仆皮肤改金色（对应批量编辑器 config-resizer 金线） */
+html[data-skin="Maid_Atelier"] .mask-config__col--raw {
+  border-left-color: var(--maid-glass-border);
+}
+/* 遮罩主题字母分组头与时长：女仆皮肤金色系 */
+html[data-skin="Maid_Atelier"] .mask-letter-head__label {
+  color: var(--maid-gold-light);
+}
+html[data-skin="Maid_Atelier"] .mask-letter-head__line {
+  background: var(--maid-glass-border);
+}
+html[data-skin="Maid_Atelier"] .mask-group-file__meta,
+html[data-skin="Maid_Atelier"] .mask-group-head__meta,
+html[data-skin="Maid_Atelier"] .mask-file-item__dur {
+  color: var(--maid-gold-light);
+}
 html[data-skin="Maid_Atelier"] .sidebar-menu__item:hover {
   background: var(--maid-gold-glow);
   color: var(--text-default);
@@ -1487,6 +1597,18 @@ html[data-skin="Maid_Atelier"] .win-titlebar__title {
 }
 html[data-skin="Maid_Atelier"] .win-titlebar__btn {
   color: #e6dcc4;
+}
+/* 标题栏模式切换按钮：女仆皮肤金色适配（文字亮金、hover 金辉、图标取金色阶） */
+html[data-skin="Maid_Atelier"] .win-titlebar__mode {
+  color: var(--maid-gold-light);
+}
+html[data-skin="Maid_Atelier"] .win-titlebar__mode:hover {
+  background: var(--maid-gold-glow);
+  color: #fff7e6;
+}
+html[data-skin="Maid_Atelier"] .win-titlebar__mode i,
+html[data-skin="Maid_Atelier"] .win-titlebar__mode svg {
+  color: #d9b65c;
 }
 html[data-skin="Maid_Atelier"] .win-titlebar__btn:hover {
   background: rgba(242, 217, 143, 0.16);

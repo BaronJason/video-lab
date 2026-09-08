@@ -95,6 +95,8 @@ npm start        # 开发运行
 npm run dist     # 打包
 ```
 
+> 成片处理脚本（`video_batch.ps1` / `video_mask.ps1` / `video_replica.ps1`）随仓库托管于 `scripts/` 目录，构建时自动拷入产物的 `resources\Scripts`；运行时若缺失会在状态栏提示环境问题。
+
 ## 皮肤素材来源与许可
 
 内置皮肤「深海女仆（Maid Atelier）」移植自开源皮肤项目 `maid-atelier`（dsh-deep-whale 仓库）：

@@ -34,7 +34,7 @@
     ],
     "extraResources": [
       {
-        "from": "../Scripts",
+        "from": "scripts",
         "to": "Scripts",
         "filter": [
           "**/*"

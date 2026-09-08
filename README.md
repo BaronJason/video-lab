@@ -41,6 +41,7 @@ Video Lab/
 │  ├─ skins/            # 皮肤（Black_Orange / white_blue / Maid_Atelier + assets）
 │  └─ assets/           # 前端静态资源（内置字体等）
 ├─ icon/                # 应用图标
+├─ scripts/             # 成片处理脚本（构建时内置到 resources\Scripts）
 ├─ main.js              # Electron 主进程
 ├─ preload.js           # 渲染进程桥接
 ├─ backend.js           # 后端业务逻辑

@@ -5,10 +5,7 @@
   "author": "Video Lab",
   "main": "main.js",
   "scripts": {
-    "start": "node run.js",
-    "dist": "pwsh -NoProfile -File \"../../../打包exe.ps1\"",
-    "dist:dir": "pwsh -NoProfile -File \"../../../打包exe.ps1\" -Target dir",
-    "dist:check": "pwsh -NoProfile -File \"../../../打包exe.ps1\" -CheckOnly"
+    "start": "node run.js"
   },
   "build": {
     "appId": "com.videolab.manager",

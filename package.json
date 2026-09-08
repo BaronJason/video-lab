@@ -30,6 +30,8 @@
       "backend.js",
       "frontend/**/*",
       "icon/**/*",
+      "README.md",
+      "CHANGELOG.md",
       "package.json"
     ],
     "extraResources": [

@@ -5,8 +5,51 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu, Tray, nativeImage, net, screen } = require('electron');
 const { Api, DEFAULT_CONFIG } = require('./backend');
+const { startHttpServer } = require('./server');
+// 内嵌 HTTP 服务器：浏览器访问 http://localhost:<port> 获得与本体等价的功能
+let httpServerInfo = null; // { ok, port, token, url, broadcastAll, close }
+// 浏览器访问地址：优先取内存运行态；服务器已停/未启动时回退到 config.json 的 http_token 重建链接
+// （token 在实例启动时写入 config，供开发测试读取；typeOf 守卫避免 config 声明前的 TDZ）
+function httpUrl() {
+  if (httpServerInfo && httpServerInfo.ok) return httpServerInfo.url;
+  try {
+    if (typeof config !== 'undefined' && config && config.http_token) {
+      const p = parseInt(config.http_port, 10) || 9527;
+      return 'http://localhost:' + p + '/?token=' + config.http_token;
+    }
+  } catch (e) {}
+  return '';
+}
+
+// 启动/重启内嵌 HTTP 服务器：固定 token（首次生成持久化到 config.http_token，此后复用）；
+// 端口或令牌在设置页变更后由 save_settings 调用本函数重启服务器，新配置即时生效
+function restartHttpServer() {
+  let httpToken = '';
+  try {
+    httpToken = String(config.http_token || '').trim();
+    if (httpToken.length < 16) {
+      httpToken = crypto.randomBytes(16).toString('hex');
+      config.http_token = httpToken;
+      saveConfig(config);
+    }
+  } catch (e) { try { httpToken = crypto.randomBytes(16).toString('hex'); } catch (e2) {} }
+  startHttpServer({
+    api,
+    getMainWin: () => mainWin,
+    getSettingsWin: () => settingsWin,
+    httpPort: parseInt(config.http_port, 10) || 9527,
+    httpToken: httpToken,
+    extraRoutes: buildHttpExtraRoutes(),
+    broadcast: function (event, data) { /* webContents.send 由各 send 函数完成，此处仅占位 */ }
+  }).then(function (info) {
+    httpServerInfo = info;
+    if (info.ok) console.log('[HTTP] 浏览器访问: ' + info.url);
+    else console.error('[HTTP] 启动失败: ' + (info.error || '未知错误'));
+  }).catch(function (e) { console.error('[HTTP] 异常: ' + e); });
+}
 
 // 单实例锁：统一 userData 到固定全局路径（跨盘 / 开发版与打包版共享同一把锁），
 // 使"同一时刻仅允许一个主进程实例"真正生效；重复打开时唤出现有实例主窗口
@@ -271,6 +314,7 @@ api.onScanProgress = (p) => {
     const w = (mainWin && !mainWin.isDestroyed()) ? mainWin : (BrowserWindow.getAllWindows()[0] || null);
     if (w && !w.isDestroyed()) w.webContents.send('scan_progress', p);
   } catch (e) {}
+  if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('scan_progress', p);
 };
 
 // 主窗口与任务窗口：主窗口仅在原生模态对话框/载入遮罩时被禁用；任务列表窗口不随父窗口禁用
@@ -371,6 +415,7 @@ let settingsWin = null;
 function openSettingsWindow() {
   if (settingsWin && !settingsWin.isDestroyed()) { settingsWin.focus(); return settingsWin; }
   // 点击设置按钮时立即让主窗口显示模糊遮罩，与设置窗口出现同步，避免突兀
+  // 浏览器端自身打开内嵌模态时会自行添加遮罩，不需要这里广播（否则浏览器网页也会被遮罩）
   if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('settings_window_opened');
   settingsWin = new BrowserWindow({ title: 'Video Lab - 设置', width: 680, height: 640, resizable: false, maximizable: false, minimizable: false, parent: mainWin, frame: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
   settingsWin.loadFile(path.join(__dirname, 'frontend', 'settings.html'));
@@ -383,6 +428,7 @@ function openSettingsWindow() {
       if (!settingsWin.isDestroyed() && settingsWin.webContents && !settingsWin.webContents.isDestroyed()) {
         settingsWin.webContents.send('confirm_discard_request');
       }
+      if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('confirm_discard_request', null);
     } catch (err) {}
   });
   settingsWin.on('closed', () => {
@@ -391,6 +437,7 @@ function openSettingsWindow() {
       if (mainWin && !mainWin.isDestroyed() && mainWin.webContents && !mainWin.webContents.isDestroyed()) {
         mainWin.webContents.send('settings_window_closed');
       }
+      if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('settings_window_closed', null);
     } catch (e) {}
   });
   return settingsWin;
@@ -415,6 +462,7 @@ function handleSettingsBlur() {
     if (settingsDirty) {
       sysBeep();
       try { settingsWin.webContents.send('settings_flash_close'); } catch (e) {}
+      if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('settings_flash_close', null);
     } else {
       settingsWin.close();
     }
@@ -424,11 +472,13 @@ function handleSettingsBlur() {
 function sendTasksToAll() {
   const tasks = api.snapshotTasks();
   for (const w of BrowserWindow.getAllWindows()) w.webContents.send('task_update', tasks);
+  if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('task_update', tasks);
 }
 api.onTasksChanged = sendTasksToAll;
 // 配置文件写操作（保存/清理/迁移）广播：前端据此即时自愈版本列表、日期分支与侧栏徽章
 function sendVersionsChangedToAll() {
   for (const w of BrowserWindow.getAllWindows()) w.webContents.send('versions_changed');
+  if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('versions_changed', null);
 }
 api.onVersionsChanged = sendVersionsChangedToAll;
 
@@ -480,9 +530,11 @@ function cmpVersion(a, b) {
 }
 function sendToMain(channel, payload) {
   try { if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send(channel, payload); } catch (e) {}
+  if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll(channel, payload);
 }
 function sendToSettings(channel, payload) {
   try { if (settingsWin && !settingsWin.isDestroyed()) settingsWin.webContents.send(channel, payload); } catch (e) {}
+  if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll(channel, payload);
 }
 // 更新链路日志：按用户要求不再写入 Cache/update/update.log 缓存，保留调用点为 no-op
 function writeUpdateLog(line) {}
@@ -981,6 +1033,130 @@ async function applyUpdate() {
   return { ok: true };
 }
 
+// HTTP 服务器 extraRoutes：涉及 main.js 内部状态（config/loadConfig/saveConfig 等）的路由
+// 浏览器侧请求这些路由时，复用与 ipcMain handler 相同的逻辑
+function buildHttpExtraRoutes() {
+  return {
+    get_settings: () => {
+      const c = loadConfig();
+      return {
+        skin: c.skin, root: c.root || '',
+        batch: Object.assign({}, DEFAULT_CONFIG.batch, c.batch),
+        replica: Object.assign({}, DEFAULT_CONFIG.replica, c.replica),
+        mask: Object.assign({}, DEFAULT_CONFIG.mask, c.mask),
+        auto_check_update: c.auto_check_update !== false,
+        check_update_daily: c.check_update_daily === true,
+        check_update_hour: (() => { const h = parseInt(c.check_update_hour, 10); return (h >= 0 && h <= 23) ? h : 9; })(),
+        update_source: c.update_source === 'github' ? 'github' : 'gitee',
+        update_mode: c.update_mode === 'auto' ? 'auto' : 'notify',
+        config_storage: c.config_storage === 'appdata' ? 'appdata' : 'program',
+        config_path: configFilePath(),
+        config_path_program: path.dirname(programConfigPath()),
+        config_path_appdata: path.dirname(appdataConfigPath()),
+        autostart: c.autostart === true,
+        close_behavior: c.close_behavior === 'exit' ? 'exit' : 'tray',
+        http_port: parseInt(c.http_port, 10) || 9527,
+        http_token: String(c.http_token || ''),
+        http_url: httpUrl(),
+      };
+    },
+    save_settings: (args) => {
+      const s = args[0];
+      const cfg = loadConfig();
+      let configMoved = false;
+      if (s && typeof s === 'object') {
+        for (const k of ['skin', 'root']) {
+          if (k === 'root') { if (typeof s.root === 'string' && s.root.trim()) cfg.root = s.root.trim(); }
+          else if (typeof s[k] === 'string') cfg[k] = s[k].trim();
+        }
+        if (s.config_storage === 'program' || s.config_storage === 'appdata') cfg.config_storage = s.config_storage;
+        if (typeof s.auto_check_update === 'boolean') cfg.auto_check_update = s.auto_check_update;
+        if (typeof s.check_update_daily === 'boolean') cfg.check_update_daily = s.check_update_daily;
+        if (s.check_update_hour !== undefined && s.check_update_hour !== null) { const h = parseInt(s.check_update_hour, 10); if (h >= 0 && h <= 23) cfg.check_update_hour = h; }
+        if (typeof s.autostart === 'boolean') cfg.autostart = s.autostart;
+        if (s.close_behavior === 'exit' || s.close_behavior === 'tray') cfg.close_behavior = s.close_behavior;
+        if (s.update_source === 'github' || s.update_source === 'gitee') cfg.update_source = s.update_source;
+        if (s.update_mode === 'auto' || s.update_mode === 'notify') cfg.update_mode = s.update_mode;
+        if (s.http_port !== undefined && s.http_port !== null) { const p = parseInt(s.http_port, 10); if (p > 0 && p < 65536) cfg.http_port = p; }
+        if (typeof s.http_token === 'string') { const tk = s.http_token.trim(); if (tk.length >= 8 && tk.length <= 64) cfg.http_token = tk; }
+        if (s.batch && typeof s.batch === 'object') cfg.batch = Object.assign({}, DEFAULT_CONFIG.batch, s.batch);
+        if (s.replica && typeof s.replica === 'object') cfg.replica = Object.assign({}, DEFAULT_CONFIG.replica, s.replica);
+        if (s.mask && typeof s.mask === 'object') cfg.mask = Object.assign({}, DEFAULT_CONFIG.mask, s.mask);
+      }
+      const target = cfg.config_storage === 'appdata' ? appdataConfigPath() : programConfigPath();
+      if (path.resolve(target) !== path.resolve(configFilePath())) {
+        const mv = moveConfigFile(target);
+        if (mv.ok && mv.moved) { configMoved = true; moveCaches(); }
+      }
+      saveConfig(cfg);
+      try { if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: cfg.autostart === true, args: ['--autostart'] }); } catch (e) {}
+      Object.assign(config, cfg);
+      // 端口/令牌实际变更才重启 HTTP 服务器（重启会断开浏览器既有 SSE 连接）；
+      // 皮肤等其它设置变更保留连接，settings_saved 广播可即时送达浏览器，无需手动刷新
+      const httpPortWanted = parseInt(cfg.http_port, 10) || 9527;
+      const httpTokenWanted = String(cfg.http_token || '').trim();
+      if (httpServerInfo && httpServerInfo.close && (httpServerInfo.port !== httpPortWanted || httpServerInfo.token !== httpTokenWanted)) {
+        try { httpServerInfo.close(); } catch (e) {}
+        httpServerInfo = null;
+      }
+      if (!httpServerInfo) restartHttpServer();
+      scheduleDailyUpdateCheck();
+      api.updateSettings(cfg);
+      for (const w of BrowserWindow.getAllWindows()) w.webContents.send('settings_saved', cfg);
+      if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('settings_saved', cfg);
+      return { ok: true, config_moved: configMoved };
+    },
+    save_guide: (args) => {
+      const s = args[0];
+      const root = s && typeof s.root === 'string' ? s.root.trim() : '';
+      if (!root || !fs.existsSync(root) || !fs.statSync(root).isDirectory()) return { ok: false, error: '路径无效或不存在' };
+      config.root = root; saveConfig(config); api.setRoot(root);
+      return { ok: true, root };
+    },
+    get_skin: () => String(config.skin || 'white_blue'),
+    set_skin: (args) => { const v = String(args[0] || '').trim(); config.skin = v || 'white_blue'; saveConfig(config); return config.skin; },
+    get_autostart: () => ({ enabled: config.autostart === true }),
+    set_autostart: (args) => {
+      const v = !!args[0]; config.autostart = v; saveConfig(config);
+      try { if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: v, args: ['--autostart'] }); } catch (e) {}
+      for (const w of BrowserWindow.getAllWindows()) w.webContents.send('settings_saved', loadConfig());
+      if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('settings_saved', loadConfig());
+      return { ok: true, enabled: v };
+    },
+    get_changelog_popup: () => {
+      try {
+        const cfg = loadConfig();
+        if (String(cfg.last_changelog_version || '') === APP_VERSION) return { ok: true, show: false };
+        const r = api.getChangelog();
+        if (!r || !r.ok) return { ok: false, error: (r && r.error) || '读取更新日志失败' };
+        cfg.last_changelog_version = APP_VERSION; saveConfig(cfg);
+        try { Object.assign(config, cfg); } catch (e) {}
+        return { ok: true, show: true, content: r.content };
+      } catch (e) { return { ok: false, error: String(e) }; }
+    },
+    get_runtime: () => ({ is_portable: IS_PORTABLE, version: APP_VERSION }),
+    get_app_version: () => APP_VERSION,
+    // 返回带 token 的浏览器访问地址（含真实 token）；HTTP 侧需要自身已带 token 才能调用（本机防护），
+    // Electron 本体侧 ipcMain 无需 token —— 用于设置页/开发测试获取链接
+    get_browser_url: () => {
+      const url = httpUrl();
+      return url ? { ok: true, url } : { ok: false, error: 'HTTP 服务未就绪' };
+    },
+    check_update: (args) => {
+      const silent = !!args[0];
+      return checkForUpdate({ silent: silent, notifyMain: true });
+    },
+    respond_discard_config: (args) => {
+      // 浏览器侧响应未保存确认：简化处理（浏览器侧无关闭流程，直接返回成功）
+      return { ok: true };
+    },
+    choose_close_behavior: (args) => {
+      // 浏览器侧无关闭行为选择，返回不支持
+      return { ok: false, error: '浏览器侧不支持' };
+    },
+  };
+}
+
 function registerIpc() {
   ipcMain.handle('list_projects', (e, force) => api.listProjects(!!force));
   ipcMain.handle('list_versions', (e, project, name) => api.listVersions(project, name));
@@ -991,9 +1167,9 @@ function registerIpc() {
   ipcMain.handle('remove_branch', (e, p, scope) => api.removeBranch(p, scope));
   ipcMain.handle('branch_other_txt', (e, p) => api.branchOtherTxt(p));
   ipcMain.handle('precheck', (e, paths, excludes) => api.precheck(paths, excludes));
-  ipcMain.handle('reset_precheck', (e) => { const sender = e.sender; return api.resetPrecheck((s) => { try { sender.send('reset_progress', s); } catch (err) {} }); });
+  ipcMain.handle('reset_precheck', (e) => { const sender = e.sender; return api.resetPrecheck((s) => { try { sender.send('reset_progress', s); } catch (err) {} if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('reset_progress', s); }); });
   // 仅刷新预缓存：不删缓存，只对缺失/变化的视频增量更新（与重置同通道回报进度）
-  ipcMain.handle('refresh_precache', (e) => { const sender = e.sender; return api.refreshPrecache((s) => { try { sender.send('reset_progress', s); } catch (err) {} }); });
+  ipcMain.handle('refresh_precache', (e) => { const sender = e.sender; return api.refreshPrecache((s) => { try { sender.send('reset_progress', s); } catch (err) {} if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('reset_progress', s); }); });
   ipcMain.handle('list_logs', (e, project, name, versionPath) => api.listLogs(project, name, versionPath));
   ipcMain.handle('search_logs', (e, query) => api.searchLogs(query));
   ipcMain.handle('get_log_content', (e, fromPath, configName) => api.logContent(fromPath, configName));
@@ -1014,7 +1190,15 @@ function registerIpc() {
     showMainWindow();
     const payload = Object.assign({}, info, { target: target === 'log' ? 'log' : 'config', taskId });
     try { if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('locate_request', payload); } catch (err) {}
+    if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('locate_request', payload);
     return info;
+  });
+  // 复刻任务「打开成片文件夹」：打开复刻产物目录（月份/MMdd/模式目录），未生成时报错
+  ipcMain.handle('open_replica_output', async (e, taskId) => {
+    const r = api.taskReplicaOutputDir(taskId);
+    if (!r.ok) return r;
+    const err = await shell.openPath(r.dir);
+    return err ? { ok: false, error: err } : { ok: true };
   });
   ipcMain.handle('stop_task', (e, id) => api.stopTask(id));
   ipcMain.handle('rerun_task', (e, id) => api.rerunTask(id));
@@ -1091,6 +1275,11 @@ function registerIpc() {
     if (action === 'show_main') showMainWindow();
     else if (action === 'open_tasks') { showMainWindow(); const w = createTaskWindow(); if (w && !w.isDestroyed()) { w.show(); w.focus(); } }
     else if (action === 'open_settings') openSettingsWindow();
+    else if (action === 'open_browser') {
+      const url = httpUrl();
+      if (url) { shell.openExternal(url); return { ok: true }; }
+      return { ok: false, error: 'HTTP 服务未就绪（请检查端口/令牌配置）' };
+    }
     else if (action === 'check_update') { showMainWindow(); checkForUpdate({ silent: false }); }
     else if (action === 'quit') { isQuitting = true; app.quit(); }
     return { ok: true };
@@ -1115,6 +1304,9 @@ function registerIpc() {
       config_path_appdata: path.dirname(appdataConfigPath()),
       autostart: c.autostart === true,
       close_behavior: c.close_behavior === 'exit' ? 'exit' : 'tray',
+      http_port: parseInt(c.http_port, 10) || 9527,
+      http_token: String(c.http_token || ''),
+      http_url: httpUrl(),
     };
   });
   // 设置页：保存完整配置，写入 config.json 并同步内存/后端/主窗口皮肤；切换保存位置时迁移并删除旧文件
@@ -1134,6 +1326,8 @@ function registerIpc() {
       if (s.close_behavior === 'exit' || s.close_behavior === 'tray') cfg.close_behavior = s.close_behavior;
       if (s.update_source === 'github' || s.update_source === 'gitee') cfg.update_source = s.update_source;
       if (s.update_mode === 'auto' || s.update_mode === 'notify') cfg.update_mode = s.update_mode;
+      if (s.http_port !== undefined && s.http_port !== null) { const p = parseInt(s.http_port, 10); if (p > 0 && p < 65536) cfg.http_port = p; }
+      if (typeof s.http_token === 'string') { const tk = s.http_token.trim(); if (tk.length >= 8 && tk.length <= 64) cfg.http_token = tk; }
       if (s.batch && typeof s.batch === 'object') cfg.batch = Object.assign({}, DEFAULT_CONFIG.batch, s.batch);
       if (s.replica && typeof s.replica === 'object') cfg.replica = Object.assign({}, DEFAULT_CONFIG.replica, s.replica);
       if (s.mask && typeof s.mask === 'object') cfg.mask = Object.assign({}, DEFAULT_CONFIG.mask, s.mask);
@@ -1148,13 +1342,29 @@ function registerIpc() {
     // 应用开机自启动（openAtLogin + --autostart 静默托盘启动）；开发版不注册，避免污染开发环境
     try { if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: cfg.autostart === true, args: ['--autostart'] }); } catch (e) {}
     Object.assign(config, cfg);
+    // 端口/令牌实际变更才重启 HTTP 服务器（重启会断开浏览器既有 SSE 连接）；
+    // 皮肤等其它设置变更保留连接，settings_saved 广播可即时送达浏览器，无需手动刷新
+    const httpPortWanted = parseInt(cfg.http_port, 10) || 9527;
+    const httpTokenWanted = String(cfg.http_token || '').trim();
+    if (httpServerInfo && httpServerInfo.close && (httpServerInfo.port !== httpPortWanted || httpServerInfo.token !== httpTokenWanted)) {
+      try { httpServerInfo.close(); } catch (e) {}
+      httpServerInfo = null;
+    }
+    if (!httpServerInfo) restartHttpServer();
     scheduleDailyUpdateCheck(); // 定时检查设置可能变更：重新安排
     api.updateSettings(cfg);
     for (const w of BrowserWindow.getAllWindows()) w.webContents.send('settings_saved', cfg);
+    if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('settings_saved', cfg);
     return { ok: true, config_moved: configMoved };
   });
   // 运行时形态（便携 zip / setup 安装版），供前端决定「下载完成」后的按钮动作
   ipcMain.handle('get_runtime', () => ({ is_portable: IS_PORTABLE, version: APP_VERSION }));
+  // 返回带 token 的浏览器访问地址（含真实 token）；HTTP 侧需要自身已带 token 才能调用（本机防护），
+  // Electron 本体侧 ipcMain 无需 token —— 用于设置页/开发测试获取链接
+  ipcMain.handle('get_browser_url', () => {
+    const url = httpUrl();
+    return url ? { ok: true, url } : { ok: false, error: 'HTTP 服务未就绪' };
+  });
   // 设置页：检查更新（仅在自动更新启用时生效，UPDATE_ENABLED=false 时返回停用）。
   // 设置页来源不向主窗口弹「发现新版本」（确认弹窗已在设置页内），下载完成后主窗口才弹操作条
   ipcMain.handle('check_update', (e, silent) => {
@@ -1171,6 +1381,7 @@ function registerIpc() {
     saveConfig(config);
     try { if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: v, args: ['--autostart'] }); } catch (e) {}
     for (const w of BrowserWindow.getAllWindows()) w.webContents.send('settings_saved', loadConfig());
+    if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('settings_saved', loadConfig());
     return { ok: true, enabled: v };
   });
   // 手动取消进行中的后台预检测（后端 token 自增即中断旧探测）
@@ -1299,6 +1510,7 @@ function askDiscardConfig() {
   if (discardAskOpen || !mainWin || mainWin.isDestroyed()) return false;
   discardAskOpen = true;
   try { mainWin.webContents.send('confirm_discard_config_request'); } catch (e) { discardAskOpen = false; }
+  if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('confirm_discard_config_request', null);
   setTimeout(() => { discardAskOpen = false; }, 30000); // 兜底复位（窗口被销毁等情况）
   return true;
 }
@@ -1324,6 +1536,7 @@ function handleMainWindowClose() {
   if (closeAskOpen) { mainWin.hide(); return; } // 引导弹窗已打开：本次先收回窗口，选择在弹窗中完成
   closeAskOpen = true;
   try { mainWin.webContents.send('close_behavior_request'); } catch (e) { closeAskOpen = false; }
+  if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('close_behavior_request', null);
   setTimeout(() => { closeAskOpen = false; }, 20000); // 兜底复位（窗口被销毁等情况）
 }
 
@@ -1369,6 +1582,9 @@ app.whenReady().then(async () => {
   await ensureConfig();
   createTray();
   createWindow();
+  // 启动内嵌 HTTP 服务器：浏览器访问 http://localhost:<port> 获得与本体等价的功能
+  // （含首次固定 token 生成与持久化；save_settings 变更端口/令牌后调用同一函数重启生效）
+  restartHttpServer();
   // 开机自启（--autostart）：窗口已通过 show:false + ready-to-show 保持隐藏，进程静默常驻托盘
   if (IS_AUTOSTART && mainWin && !mainWin.isDestroyed()) {
     mainWin.hide();
@@ -1399,6 +1615,7 @@ app.on('before-quit', (e) => {
     showMainWindow();
     if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('confirm_quit_request');
     else { api.shutdownTasks(); quitConfirmed = true; app.quit(); }
+    if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('confirm_quit_request', null);
     return;
   }
   // 收尾：运行中→已中断、排队→暂停，随后持久化任务列表并退出

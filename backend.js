@@ -31,6 +31,7 @@ const DEFAULT_CONFIG = {
   update_source: 'gitee',     // 更新源：gitee=码云 release / github=GitHub release，默认码云
   update_mode: 'notify',      // 更新方式：notify=有新版本仅提醒（默认）/ auto=自动检查并下载
   config_storage: 'program',  // 配置文件保存位置：program=程序所在目录 / appdata=%APPDATA%\Video Lab
+  http_port: 9527,            // 浏览器访问端口（0-65535，默认 9527）
   // video_batch.ps1 顶部全局参数（文件内同名常量被顶部读环境变量 BATCH_* 覆盖）
   batch: {
     max_duration: 179,   // MaxTotalDurationSec 最大成片时长(秒)
@@ -1517,7 +1518,7 @@ class Api {
       try {
         const baseName = String(videoName || '').replace(/\.mp4$/i, '').toLowerCase();
         if (baseName) {
-          const hit = fs.readdirSync(dir).find((n) => /\.mp4$/i.test(n) && (n.toLowerCase().replace(/\.mp4$/i, '') === baseName || n.toLowerCase().replace(/\.mp4$/i, '').replace(/^\d{6}改-/, '') === baseName));
+          const hit = fs.readdirSync(dir).find((n) => /\.mp4$/i.test(n) && (n.toLowerCase().replace(/\.mp4$/i, '') === baseName || n.toLowerCase().replace(/\.mp4$/i, '').replace(/^\d{6}改\d*-/, '') === baseName));
           if (hit) out.replicaFile = path.join(dir, hit);
         }
       } catch (e) {}
@@ -1620,7 +1621,26 @@ class Api {
         const rel = path.relative(this.root, abs).split(path.sep);
         if (rel.length && rel[0] !== '..') info.project = rel[0];
       }
-      if (t.type === 'replica') { info.logPath = abs; }
+      if (t.type === 'replica') {
+        info.project = REPLICA_PROJECT; // 主窗口定位目标为虚拟复刻项目
+        // 输出目录与复刻日志按提交日期推算（与脚本 Get-TaskDate 一致），模式名来自 REPLICA_MODE
+        const outc = this._replicaOutInfo(t);
+        if (!outc) return { ok: false, error: '缺少复刻源日志，无法定位' };
+        // 复刻输出目录未生成：不允许定位（不得退回源日志日期目录）
+        if (!outc.outDir || !fs.existsSync(outc.outDir) || !fs.statSync(outc.outDir).isDirectory()) {
+          return { ok: false, error: '复刻成片文件夹未生成，无法定位' };
+        }
+        info.replicaMode = outc.mode;
+        // 定位本次复刻生成的输出日志（<MMdd>-<模式名>日志.txt，取同日最新）；无日志文件同样拒绝定位
+        let logFile = '';
+        try {
+          const pat = new RegExp('^\\d{4}-' + outc.mode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '日志\\.txt$');
+          const logs = fs.readdirSync(outc.outDir).filter((n) => pat.test(n)).sort();
+          if (logs.length) logFile = path.join(outc.outDir, logs[logs.length - 1]);
+        } catch (e) {}
+        if (!logFile) return { ok: false, error: '未找到本次复刻的日志文件，无法定位' };
+        info.logPath = logFile;
+      }
       else info.txtPath = abs;
     }
     // 批量任务：成片目录内优先匹配当前配置的日志 TXT
@@ -1631,6 +1651,43 @@ class Api {
       } catch (e) {}
     }
     return info;
+  }
+
+  // 复刻任务的输出目录推算：与 video_replica.ps1 的 Get-TaskDate + baseDir 规则完全一致——
+  // 日期用提交时刻（REPLICA_SUBMIT_TS，续跑亦注入），层级 月份/MMdd/模式名；
+  // baseDir 取源日志路径中首个月份/MMdd 段之前，无日期段时回退日志所在目录
+  _replicaOutInfo(t) {
+    const env = (t && t.env) || {};
+    const src = String(env.REPLICA_TXT || '').trim();
+    const mode = String(env.REPLICA_MODE || '1') === '2' ? '去重复刻' : '原片复刻';
+    if (!src) return null;
+    let d = new Date();
+    const ts = Number(env.REPLICA_SUBMIT_TS || 0);
+    if (ts > 0) d = new Date(ts);
+    const month = (d.getMonth() + 1) + '月';
+    const day = String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0');
+    const parts = path.resolve(src).split(path.sep);
+    let idx = parts.findIndex((p) => /^\d+月$/.test(p));
+    if (idx < 0) idx = parts.findIndex((p) => /^\d{4}$/.test(p));
+    let base;
+    if (idx > 0) base = parts.slice(0, idx).join(path.sep);
+    else if (idx === 0) base = parts[0];
+    else base = path.dirname(path.resolve(src));
+    return { outDir: path.join(base, month, day, mode), mode };
+  }
+
+  // 复刻任务的成片输出目录：按提交日期推算复刻产物目录（月份/MMdd/模式目录），
+  // 未生成时回退任务 outDir（原"日志目录下成片"语义），供「打开成片文件夹」使用
+  taskReplicaOutputDir(taskId) {
+    const t = this.tasks.get(taskId);
+    if (!t) return { ok: false, error: '任务不存在' };
+    if (t.type !== 'replica') return { ok: false, error: '非复刻任务' };
+    const outc = this._replicaOutInfo(t);
+    if (!outc) return { ok: false, error: '缺少复刻源日志' };
+    if (!outc.outDir || !fs.existsSync(outc.outDir) || !fs.statSync(outc.outDir).isDirectory()) {
+      return { ok: false, error: '复刻成片文件夹未生成' };
+    }
+    return { ok: true, dir: outc.outDir };
   }
 
   _createTask(type, title, scriptPath, env, srcPath) {
@@ -2651,6 +2708,20 @@ class Api {
     return txtName;
   }
 
+  // 复刻任务简化标题：项目名/MMdd-名字/模式——
+  // 将批量拼接日志名 MMdd-<HH时MM分>-<名字>-拼接日志 压缩为 MMdd-<名字>，
+  // 模式（原片/去重）以斜杠后缀标识；非拼接日志命名形态则保留原文件名
+  _replicaTaskTitle(logPath, modeLabel) {
+    const abs = path.resolve(logPath);
+    const rel = path.relative(this.root, abs);
+    const parts = rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel.split(path.sep).filter(Boolean) : [];
+    let name = path.basename(abs).replace(/\.txt$/i, '');
+    name = name.replace(/^(\d{4})-(\d{1,2}时\d{1,2}分)-(.*)$/, '$1-$3')
+               .replace(/[-–—_]\s*拼接日志$/i, '');
+    const project = parts.length > 0 ? parts[0] : '';
+    return (project ? project + '/' : '') + name + (modeLabel ? '/' + modeLabel : '');
+  }
+
   // 校验 批量/复刻 配置参数是否已设置：数字须>0，字符串须非空（txt_prefix 允许空）。返回缺失项标签，空数组=齐全
   _settingsError(group) {
     const cfg = this.config[group] || {};
@@ -3022,7 +3093,8 @@ class Api {
     env.REPLICA_SUBMIT_TS = String(Date.now());
     // 仅复刻日志中的单个指定成片（右侧「复刻」按钮/批量选择传入成片名）
     if (entryVideo) env.REPLICA_ONLY_NAME = String(entryVideo).trim();
-    const task = this._enqueueTask(this._createTask('replica', this._taskTitle(logPath) + (String(mode) === '2' ? '（去重）' : ''), script, env, logPath));
+    const modeLabel = String(mode) === '2' ? '去重' : '原片';
+    const task = this._enqueueTask(this._createTask('replica', this._replicaTaskTitle(logPath, modeLabel), script, env, logPath));
     return { ok: true, taskId: task.id };
   }
 

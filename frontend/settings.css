@@ -176,6 +176,31 @@ body {
 
 .dir-row { display: flex; gap: 8px; }
 .dir-row .field-row { flex: 1; }
+/* 浏览器访问区块（端口/令牌/链接三行）：行间距拉开，避免贴在一起 */
+.form-group--http .dir-row { margin-bottom: 10px; }
+.form-group--http .dir-row:last-of-type { margin-bottom: 0; }
+.form-group--http .producer-preview { margin-top: 2px; }
+/* 输入行左侧文字标签：与输入框垂直居中对齐，固定宽度让各输入框对齐 */
+.form-label-inline {
+  flex-shrink: 0;
+  width: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  font-size: 13px;
+  color: var(--text-secondary);
+  user-select: none;
+}
+/* 端口输入框：仅容纳 4-5 位数字的窄宽度，不被 flex 拉伸（important 覆盖 .form-input 的 width:100%） */
+.form-input--port {
+  width: 84px !important;
+  flex: 0 0 auto;
+}
+/* 令牌输入框：32 位十六进制合理宽度，不被 flex 拉伸（important 覆盖 .form-input 的 width:100%） */
+#httpToken {
+  width: 300px !important;
+  flex: 0 0 auto;
+}
 .btn {
   appearance: none;
   border: 1px solid var(--border-neutral-l2);

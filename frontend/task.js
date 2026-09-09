@@ -616,6 +616,13 @@
   function showTaskMenu(x, y, t) {
     var items = [];
     function openFolder() {
+      if (t.type === 'replica') {
+        // 复刻：打开复刻产物目录（月份/MMdd/模式目录），而非原日志所在成片目录
+        call('open_replica_output', t.id).then(function (r) {
+          if (r && !r.ok) alertDialog('打开失败：' + (r.error || '复刻成片文件夹不存在'));
+        }).catch(function (e) { alertDialog('打开失败：' + e.message); });
+        return;
+      }
       call('open_path', t.outDir).then(function (r) {
         if (r && !r.ok) alertDialog('打开失败：' + (r.error || '成片文件夹不存在'));
       }).catch(function () {});

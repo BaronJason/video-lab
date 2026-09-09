@@ -12,9 +12,16 @@
       var min = bar.querySelector('[data-wctl="min"]');
       var max = bar.querySelector('[data-wctl="max"]');
       var close = bar.querySelector('[data-wctl="close"]');
-      if (min) min.style.display = caps.minimizable ? '' : 'none';
-      if (max) max.style.display = caps.maximizable ? '' : 'none';
-      if (close) close.style.display = caps.closable ? '' : 'none';
+      // iframe 内嵌模态（如浏览器内打开设置）：仅保留关闭按钮（与本体一致），去掉最小化/最大化
+      if (window.self !== window.top) {
+        if (min) min.style.display = 'none';
+        if (max) max.style.display = 'none';
+        if (close) close.style.display = '';
+      } else {
+        if (min) min.style.display = caps.minimizable ? '' : 'none';
+        if (max) max.style.display = caps.maximizable ? '' : 'none';
+        if (close) close.style.display = caps.closable ? '' : 'none';
+      }
       var title = bar.querySelector('.win-titlebar__title');
       if (title) title.textContent = String(document.title || '').replace(/^Video Lab\s*-\s*/, '') || 'Video Lab';
     }).catch(function () {});
@@ -34,6 +41,12 @@
   function init() {
     var bar = $('winTitlebar');
     if (!bar) return;
+    // 浏览器侧隐藏窗口控制按钮：独立标签页（不在 iframe 内）时浏览器自带标签栏，隐藏按钮；
+    // iframe 内嵌模态（设置页在浏览器模态中）则保留关闭按钮，与本体一致的关闭交互
+    if (location.protocol.indexOf('http') === 0 && window.self === window.top) {
+      var ctrls = bar.querySelector('.win-titlebar__controls');
+      if (ctrls) ctrls.style.display = 'none';
+    }
     bar.addEventListener('click', function (e) {
       var btn = e.target.closest('[data-wctl]');
       if (!btn || !window.txapi) return;

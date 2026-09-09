@@ -86,6 +86,13 @@
   function wrapAllInputs() {
     document.querySelectorAll('.form-input').forEach(function (input) {
       if (input.dataset.wrapped) return;
+      // 端口/令牌输入框不参与包裹：无必填 *、不被场行强制整行宽（保持自定义宽度）
+      if (input.id === 'httpPort' || input.id === 'httpToken') {
+        input.dataset.wrapped = '1';
+        input.addEventListener('input', recomputeDirty);
+        input.addEventListener('change', recomputeDirty);
+        return;
+      }
       input.dataset.wrapped = '1';
       var wrap = document.createElement('div');
       wrap.className = 'field-row';
@@ -219,6 +226,48 @@
       document.querySelectorAll('input[name="updateMode"]').forEach(function (r) { r.checked = r.value === um; });
       var storage = s.config_storage === 'appdata' ? 'appdata' : 'program';
       document.querySelectorAll('input[name="configStorage"]').forEach(function (r) { r.checked = r.value === storage; });
+      var hp = $('httpPort'); if (hp) hp.value = s.http_port || 9527;
+      var htk = $('httpToken');
+      if (htk) htk.value = s.http_token || '';
+      // 访问链接：可点击直访（a 标签），随端口/token 变化实时重建
+      function refreshHttpUrl() {
+        var hu = $('httpUrl');
+        if (!hu) return;
+        var port = parseInt(($('httpPort') || {}).value, 10) || 9527;
+        var tk = (($('httpToken') || {}).value || '').trim() || (s.http_token || '');
+        if (tk) {
+          hu.textContent = 'http://localhost:' + port + '/?token=' + tk;
+          hu.href = hu.textContent;
+          hu.title = '点击在浏览器中打开该访问地址';
+        } else {
+          hu.textContent = '浏览器访问地址待生成';
+          hu.href = '#';
+          hu.title = '保存后生成浏览器访问地址';
+        }
+      }
+      refreshHttpUrl();
+      var hpInp = $('httpPort'); if (hpInp) hpInp.addEventListener('input', refreshHttpUrl);
+      var tkInp = $('httpToken'); if (tkInp) tkInp.addEventListener('input', refreshHttpUrl);
+      // 点击访问链接：浏览器侧直接新标签打开；本体用 open_external
+      var urlLink = $('httpUrl');
+      if (urlLink) urlLink.addEventListener('click', function (e) {
+        var href = urlLink.getAttribute('href');
+        if (!href || href === '#') { e.preventDefault(); setStatus('浏览器访问地址尚未生成', false); return; }
+        e.preventDefault();
+        if (location.protocol.startsWith('http')) { try { window.open(href); } catch (err) {} return; }
+        if (api && api.open_external) api.open_external(href).catch(function () {});
+        else try { window.open(href); } catch (err) {}
+      });
+      // 随机生成令牌：32 位十六进制（与后端生成规则一致），并重建链接
+      var genBtn = $('btnGenToken');
+      if (genBtn) genBtn.addEventListener('click', function () {
+        var bytes = [];
+        for (var i2 = 0; i2 < 16; i2++) bytes.push(Math.floor(Math.random() * 256));
+        var hex = bytes.map(function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+        if (htk) { htk.value = hex; }
+        refreshHttpUrl();
+        recomputeDirty();
+      });
       var pp = $('cfgPathProgram'), pa = $('cfgPathAppdata');
       if (pp) pp.textContent = s.config_path_program || '';
       if (pa) pa.textContent = s.config_path_appdata || '';
@@ -364,6 +413,8 @@
         update_source: srcEl ? srcEl.value : 'gitee',
         update_mode: umEl ? umEl.value : 'notify',
         config_storage: storageEl ? storageEl.value : 'program',
+        http_port: parseInt($('httpPort').value, 10) || 9527,
+        http_token: (($('httpToken') || {}).value || '').trim(),
         batch: state.batch,
         replica: state.replica,
         mask: state.mask
@@ -415,7 +466,11 @@
     var mConfirmMask = $('updateConfirmMask');
     if (mConfirmMask) mConfirmMask.addEventListener('click', function (e) { if (e.target === mConfirmMask) hideUpdateConfirm(); });
 
-    $('btnClose').addEventListener('click', function () { window.close(); });
+    $('btnClose').addEventListener('click', function () {
+      // iframe 内嵌模态（浏览器侧打开设置）：通知父窗口关闭模态；本体直接关窗口
+      if (window.self !== window.top) { try { window.parent.postMessage({ type: 'vl-close-settings' }, '*'); } catch (e) {} return; }
+      window.close();
+    });
     // 未保存修改时关闭的二级确认浮层：取消返回设置，确认放弃修改直接关闭
     var discardPop = $('discardPop');
     var btnDiscardCancel = $('discardCancel');
@@ -470,6 +525,25 @@
       api.open_path(dir).then(function (r) {
         if (!(r && r.ok)) setStatus('打开失败：' + ((r && r.error) || '路径不存在'), false);
       }).catch(function () { setStatus('打开失败', false); });
+    });
+    // 复制浏览器访问地址（带安全令牌，供用户手动填入其他设备/分享）
+    var btnCopyUrl = document.getElementById('btnOpenBrowserUrl');
+    if (btnCopyUrl) btnCopyUrl.addEventListener('click', function () {
+      var hu = document.getElementById('httpUrl');
+      var url = hu ? hu.value : '';
+      if (!url) { setStatus('浏览器访问地址尚未就绪', false); return; }
+      function copyVia(txt) {
+        var ta = document.createElement('textarea');
+        ta.value = txt;
+        ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch (e) {}
+        document.body.removeChild(ta);
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(function () { setStatus('已复制浏览器访问地址', true); }).catch(function () { copyVia(url); setStatus('已复制浏览器访问地址', true); });
+      } else { copyVia(url); setStatus('已复制浏览器访问地址', true); }
     });
     loadSettings();
     // 文档内 http 链接统一用系统默认浏览器打开（README/更新日志里的外部链接）

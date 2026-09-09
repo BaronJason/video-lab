@@ -541,7 +541,7 @@ function Invoke-ReplicaFromLog {
     if (-not (Test-Path $outRoot)) { New-Item -ItemType Directory -Path $outRoot -Force | Out-Null }
 
     # 复刻日志（不更新缓存）：同日同模式复用同一日志文件，后续批次直接续写
-    $timeTag = Get-Date -Format "MMdd"
+    $timeTag = (Get-TaskDate).ToString('MMdd')
     $logFileName = "$timeTag-${modeName}日志.txt"
     $logFilePath = Join-Path $outRoot $logFileName
     if (-not (Test-Path $logFilePath)) {
@@ -625,7 +625,26 @@ function Invoke-ReplicaFromLog {
 
         $outName = $job.Name
         if ($mode -eq 2) {
-            $outName = (Get-TaskDate).ToString('yyMMdd') + '改-' + $outName
+            # 去重复刻命名：<yyMMdd>改-<成片名>；当日同成片多次去重时序号化——
+            # 首份用 yymmdd改-，第二份起 yymmdd改1-、yymmdd改2-…（避免同名覆盖）
+            $dayPrefix = (Get-TaskDate).ToString('yyMMdd') + '改'
+            $baseStem = $job.Name -replace '\.mp4$', ''
+            $re = '^' + [regex]::Escape($dayPrefix) + '(\d*)-' + [regex]::Escape($baseStem) + '$'
+            $hits = @(Get-ChildItem -Path $outRoot -Filter "$dayPrefix*.mp4" -File -ErrorAction SilentlyContinue | Where-Object { $_.BaseName -match $re })
+            if ($hits.Count -eq 0) {
+                $outName = $dayPrefix + '-' + $outName
+            }
+            else {
+                $maxN = 0
+                foreach ($h in $hits) {
+                    $m = [regex]::Match($h.BaseName, $re)
+                    if ($m.Success -and $m.Groups[1].Value -ne '') {
+                        $n = [int]$m.Groups[1].Value
+                        if ($n -gt $maxN) { $maxN = $n }
+                    }
+                }
+                $outName = $dayPrefix + ($maxN + 1) + '-' + $outName
+            }
         }
         $finalOut = Join-Path $outRoot $outName
         if ([System.IO.Path]::GetExtension($finalOut) -eq '') { $finalOut += '.mp4' }

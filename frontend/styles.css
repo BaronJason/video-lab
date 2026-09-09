@@ -4022,6 +4022,18 @@ body[data-preview-collapsed] .center-global-search .ds-input {
   box-shadow: 0 24px 64px color-mix(in srgb, var(--text-default) 14%, transparent), 0 4px 16px color-mix(in srgb, var(--text-default) 8%, transparent);
   overflow: hidden;
 }
+/* 浏览器侧内嵌模态（设置页）：与本体「主窗口上的模态子窗口」同款视觉，iframe 占满卡片 */
+.browser-embedded-card {
+  position: relative;
+  background: var(--bg-base-default);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-12);
+  box-shadow: 0 24px 64px color-mix(in srgb, var(--text-default) 14%, transparent), 0 4px 16px color-mix(in srgb, var(--text-default) 8%, transparent);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.browser-embedded-card iframe { flex: 1; min-height: 0; }
 /* 弹窗右上角圆形关闭按钮 */
 .modal-close {
   position: absolute;
@@ -4776,7 +4788,8 @@ body.mask-mode .right-panel__subtitle { display: none; }
   font-weight: var(--font-weight-medium);
   color: var(--text-default);
   cursor: pointer; user-select: none;
-  margin-bottom: var(--spacer-4);
+  /* 左右内缩与批量项目容器(.tree-project padding 0 12px)对齐，避免项目行顶满侧栏两侧 */
+  margin: 0 var(--spacer-12) var(--spacer-4);
   position: relative;
 }
 .mask-proj-item:hover { background: var(--bg-base-tertiary); }
@@ -4840,6 +4853,14 @@ body.mask-mode .right-panel__subtitle { display: none; }
 }
 .mask-config__addbtn:hover { background: var(--bg-overlay-l1); color: var(--text-default); }
 .mask-config__hint { font-size: var(--body-xs-font-size); color: var(--text-tertiary); padding: 4px 0 8px; }
+/* 居中大字提示：遮罩主题/日志空态使用（暂无遮罩日志、正在扫描遮罩主题等），放大并水平居中 */
+.mask-config__hint--center {
+  display: block;
+  font-size: var(--body-md-font-size);
+  color: var(--text-tertiary);
+  text-align: center;
+  padding: 24px 12px;
+}
 
 .mask-folder-row {
   display: flex; align-items: center; gap: 6px;
@@ -4916,9 +4937,17 @@ body.mask-mode .right-panel__subtitle { display: none; }
 .mask-config__list::-webkit-scrollbar-thumb,
 .mask-config__col::-webkit-scrollbar-thumb { background: var(--border-neutral-l2); border-radius: 4px; }
 /* 已选遮罩计数：显示在底部配置栏「模式」左侧 */
-.mask-config__seltotal { margin-right: 8px; font-size: var(--body-xs-font-size); color: var(--status-success-default); white-space: nowrap; }
+.mask-config__seltotal { margin-right: 8px; font-size: var(--body-md-font-size); font-weight: var(--font-weight-regular); color: var(--status-success-default); white-space: nowrap; }
 .mask-files { padding: 2px 0 6px; }
 .mask-files__loading { font-size: var(--body-xs-font-size); color: var(--text-tertiary); padding: 4px 0; }
+/* 遮罩主题扫描占位：居中大字（在 .mask-files__loading 之后声明以覆盖字号/内边距） */
+.mask-files__loading--bar {
+  display: block;
+  font-size: var(--body-md-font-size);
+  color: var(--text-tertiary);
+  text-align: center;
+  padding: 24px 12px;
+}
 
 .mask-file-item {
   display: flex; align-items: center; gap: 6px;
@@ -4992,7 +5021,7 @@ body.mask-mode .center-top { min-height: 0; max-height: none; }
   background: transparent; color: var(--text-secondary); cursor: pointer;
 }
 .mask-bar__pick:hover { background: var(--bg-overlay-l1); color: var(--text-default); }
-.mask-bar__hint { color: var(--status-error-default); }
+.mask-bar__hint { color: var(--status-error-default); font-size: var(--body-md-font-size); font-weight: var(--font-weight-regular); }
 
 /* 遮罩主题：主题行 + 组勾选 */
 .mask-theme-row {
@@ -5184,4 +5213,79 @@ body.mask-mode .center-top { min-height: 0; max-height: none; }
   font-family: var(--font-family-default); font-size: var(--body-xs-font-size);
 }
 .mask-delbtn:hover { background: var(--status-error-surface-l1); }
-    
+
+/* 遮罩叠加：时长不匹配的候选复选框置灰禁用（勾选后由 JS 添加 mask-dur-disabled）。
+   保留 hover 能力以显示 title 原因提示；不可交互由原生 disabled 保证（label 点击 disabled
+   的 input 无效），因此不用 pointer-events:none 阻断悬浮 */
+.mask-dur-disabled { opacity: .45; cursor: not-allowed; }
+/* 原片按时长分组：每组折叠容器，分组头带全选复选框，组内文件缩进列出 */
+.mask-raw-group {
+  border-radius: var(--radius-6);
+  transition: background 0.1s ease;
+}
+.mask-raw-group:hover { background: var(--bg-overlay-l1); }
+.mask-raw-group__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.mask-raw-group__head:hover { background: var(--bg-overlay-l1); }
+.mask-raw-group__check {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+.mask-raw-group__box {
+  flex-shrink: 0; width: 14px; height: 14px; border-radius: 3px;
+  border: 1px solid var(--border-neutral-l3); background: var(--bg-base-default);
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.mask-raw-group__head input { display: none; }
+.mask-raw-group__head input:checked + .mask-raw-group__box {
+  background: var(--brand-500); border-color: var(--brand-500);
+}
+.mask-raw-group__head input:checked + .mask-raw-group__box::after {
+  content: ''; width: 8px; height: 8px;
+  background: var(--text-onaccent);
+  -webkit-mask: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+/* 半选（indeterminate）短横提示 */
+.mask-raw-group__head input:indeterminate + .mask-raw-group__box::after {
+  content: ''; width: 8px; height: 2px; border-radius: 1px;
+  background: var(--brand-500);
+  -webkit-mask: none; mask: none;
+}
+.mask-raw-group__head input:indeterminate + .mask-raw-group__box {
+  background: var(--brand-100); border-color: var(--brand-300);
+}
+.mask-raw-group__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--text-default);
+}
+.mask-raw-group__meta {
+  color: var(--text-muted, #999);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.mask-raw-group__arrow {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-right: 1.5px solid var(--text-muted, #999);
+  border-bottom: 1.5px solid var(--text-muted, #999);
+  transform: rotate(45deg);
+  transition: transform .15s;
+}
+.mask-raw-group--open .mask-raw-group__arrow { transform: rotate(225deg); }
+.mask-raw-group__files {
+  padding-left: 26px;
+}

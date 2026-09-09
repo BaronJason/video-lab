@@ -1,6 +1,6 @@
 {
   "name": "video-lab",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Video Lab — 批量成片项目管理",
   "author": "Video Lab",
   "main": "main.js",
@@ -25,6 +25,7 @@
       "main.js",
       "preload.js",
       "backend.js",
+      "server.js",
       "frontend/**/*",
       "icon/**/*",
       "README.md",

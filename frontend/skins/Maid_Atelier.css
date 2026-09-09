@@ -1186,9 +1186,11 @@ html[data-skin="Maid_Atelier"] .mask-proj-item::before {
 html[data-skin="Maid_Atelier"] .mask-proj-item--active::before {
   transform: scaleX(1);
 }
+html[data-skin="Maid_Atelier"] .mask-proj-item__badge,
 html[data-skin="Maid_Atelier"] .mask-proj-item--active .mask-proj-item__badge {
   background: linear-gradient(180deg, #f2d98f, #d9b65c);
   color: #0a173b;
+  text-shadow: none; /* 清除选中态父级继承的文字投影 */
 }
 /* 遮罩模式装饰行：宿主仅为装饰提供绝对定位基线（中心列顶部 76px 可视区），
    本身透明无底色；中心列放行溢出并取消最小高度 → 装饰完整显示、不推挤内容，

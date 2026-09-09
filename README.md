@@ -8,7 +8,7 @@
 
 <br>
 
-[![版本](https://img.shields.io/badge/版本-1.7.0-0078D7?style=flat-square)](https://github.com/BaronJason/video-lab/releases)
+[![版本](https://img.shields.io/badge/版本-1.8.0-0078D7?style=flat-square)](https://github.com/BaronJason/video-lab/releases)
 ![Platform](https://img.shields.io/badge/平台-Windows%2010%2F11-00A4EF?style=flat-square)
 ![PowerShell](https://img.shields.io/badge/运行时-PowerShell%207-5391FE?style=flat-square)
 ![FFmpeg](https://img.shields.io/badge/FFmpeg-必需-FF7F2A?style=flat-square)
@@ -38,7 +38,7 @@ Video Lab/
 │  ├─ settings.*        # 设置页（html/js/css）
 │  ├─ task.*            # 任务列表（html/js）
 │  ├─ guide.* / preview.html / trayMenu.html
-│  ├─ app.js / icons.js / styles.css / titlebar.js
+│  ├─ app.js / icons.js / styles.css / titlebar.js / txapi.js
 │  ├─ skins/            # 皮肤（Black_Orange / white_blue / Maid_Atelier + assets）
 │  └─ assets/           # 前端静态资源（内置字体等）
 ├─ icon/                # 应用图标
@@ -46,6 +46,7 @@ Video Lab/
 ├─ main.js              # Electron 主进程
 ├─ preload.js           # 渲染进程桥接
 ├─ backend.js           # 后端业务逻辑
+├─ server.js            # 浏览器访问 HTTP 服务
 ├─ run.js               # 启动入口（run.js 启动）
 ├─ package.json / package-lock.json
 └─ CHANGELOG.md / LICENSE / NOTICE

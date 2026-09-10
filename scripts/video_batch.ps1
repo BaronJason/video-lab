@@ -304,6 +304,19 @@ function Invoke-GroupRename {
 }
 
 # ==================== 选择函数 ====================
+# 记录某位置本轮已选片段/子组：配置允许同一路径重复出现，同一成片内相同路径的多个位置
+# 必须共用本轮排除集合，否则（沿用片段未登记时）后续位置会选到与前面相同的片段
+function Register-PickedClip {
+    param([hashtable]$SourceExcludedPaths, [hashtable]$SourceExcludedSubGroups, [string]$SrcPath, $Video, $Plan)
+    if (-not $Video) { return }
+    if (-not $SourceExcludedPaths.ContainsKey($SrcPath)) { $SourceExcludedPaths[$SrcPath] = @() }
+    $SourceExcludedPaths[$SrcPath] += $Video.FullName
+    if ($Plan -and $Plan.SelectedGroup) {
+        if (-not $SourceExcludedSubGroups.ContainsKey($SrcPath)) { $SourceExcludedSubGroups[$SrcPath] = @() }
+        $SourceExcludedSubGroups[$SrcPath] += $Plan.SelectedGroup
+    }
+}
+
 function Select-Video {
     param(
         [string]$Folder,
@@ -1134,7 +1147,7 @@ try {
             $failReason = $null   # 渐进替换提前中断时的具体原因（供失败提示输出）
             
             $firstPickVideo = $null   # 首段（第一个源）选取固定：重试时只调整后续片段，不影响开头的排列使用
-            $retryExcluded = @{}  # 跨轮失败记忆：已试过且超时限的「源|视频路径」，下轮显式避开，避免重复随机
+            $retryExcluded = @{}  # 跨轮失败记忆：已试过且超时限的「位置索引|视频路径」，下轮显式避开，避免重复随机
             # ── 渐进替换（方案A）：超限后不再整组重摇，只替换「时长最长的非首段源」为更短片段，其余源沿用上轮选择 ──
             $retryTargetSrc = -1    # 上轮超限指定的待替换源索引（-1=整组重建，仅首轮）
             # 用哈希表按 srcIdx 存（定长数组按下标写入越界会抛 IndexOutOfRangeException）
@@ -1162,6 +1175,8 @@ try {
                         $tempParts += $firstPickVideo.Video
                         $totalDuration += $firstPickVideo.Video.Duration
                         $tempUpdatePlans += $firstPickVideo.UpdatePlan
+                        # 沿用片段同样要登记到本轮排除集合（首段路径在配置中可能于后续位置重复出现）
+                        Register-PickedClip -SourceExcludedPaths $sourceExcludedPaths -SourceExcludedSubGroups $sourceExcludedSubGroups -SrcPath $srcPath -Video $firstPickVideo.Video -Plan $firstPickVideo.UpdatePlan
                         $srcIdx++
                         continue
                     }
@@ -1172,6 +1187,8 @@ try {
                         $tempParts += $staleParts[$srcIdx]
                         $totalDuration += $staleParts[$srcIdx].Duration
                         $tempUpdatePlans += $stalePlans[$srcIdx]
+                        # 同上：沿用片段登记排除，避免同一路径的后续位置选到同一片段
+                        Register-PickedClip -SourceExcludedPaths $sourceExcludedPaths -SourceExcludedSubGroups $sourceExcludedSubGroups -SrcPath $srcPath -Video $staleParts[$srcIdx] -Plan $stalePlans[$srcIdx]
                         $srcIdx++
                         continue
                     }
@@ -1184,11 +1201,12 @@ try {
                     if ($sourceExcludedPaths.ContainsKey($srcPath)) {
                         $excludedFiles = $sourceExcludedPaths[$srcPath]
                     }
-                    # 跨轮失败记忆：合并入本轮排除（含首段固定时不用重复排除，只针对被重试的源）
+                    # 跨轮失败记忆：按「位置索引」而非源路径索引——配置允许同一路径重复出现，
+                    # 按路径索引会让多个位置共享记忆、候选成倍消耗而提前「耗尽」
                     if ($srcIdx -gt 0) {
-                        $retryKey = $srcPath
+                        $retryKey = [string]$srcIdx + '|'
                         if (-not $excludedFiles) { $excludedFiles = @() }
-                        $excludedFiles = @($excludedFiles + @($retryExcluded.Keys | Where-Object { $_.StartsWith($retryKey + '|') } | ForEach-Object { $_.Substring($retryKey.Length + 1) }))
+                        $excludedFiles = @($excludedFiles + @($retryExcluded.Keys | Where-Object { $_.StartsWith($retryKey) } | ForEach-Object { $_.Substring($retryKey.Length) }))
                     }
 
                     $isRepeat = $repeatPaths -contains $srcPath
@@ -1274,7 +1292,7 @@ try {
                 else {
                     # 时长超限：记录失败记忆 + 存沿用基础 + 定下一轮目标源（非首段中最长，未耗尽）；逐轮过程静默
                     for ($pi = 1; $pi -lt $sourceRequests.Count; $pi++) {
-                        if ($pi -lt $tempParts.Count) { $retryExcluded[[string]$sourceRequests[$pi] + '|' + $tempParts[$pi].FullName] = $true }
+                        if ($pi -lt $tempParts.Count) { $retryExcluded[[string]$pi + '|' + $tempParts[$pi].FullName] = $true }
                         $staleParts[$pi] = $tempParts[$pi]
                         $stalePlans[$pi] = $tempUpdatePlans[$pi]
                     }

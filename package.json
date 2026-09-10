@@ -11,6 +11,10 @@
     "appId": "com.videolab.manager",
     "productName": "Video Lab",
     "npmRebuild": false,
+    "electronLanguages": [
+      "zh-CN",
+      "en-US"
+    ],
     "publish": [
       {
         "provider": "generic",

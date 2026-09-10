@@ -222,8 +222,9 @@ function Get-NumberSuffix {
 }
 
 function Select-ReplacementVideo {
-    param([string]$OriginalPath, [array]$Exclude = @(), [switch]$PreferShort, [double]$ShorterThan = 0)
-    $cands = @(Get-SameDirVideoCandidates -VideoPath $OriginalPath | Where-Object { $_.FullName -notin $Exclude })
+    param([string]$OriginalPath, [array]$Exclude = @(), [switch]$PreferShort, [double]$ShorterThan = 0, [array]$ExcludeNames = @())
+    # ExcludeNames：按文件名排除（片段可能已被挪到别处，同名即同一片段，成片内不得重复使用）
+    $cands = @(Get-SameDirVideoCandidates -VideoPath $OriginalPath | Where-Object { $_.FullName -notin $Exclude -and $_.Name -notin $ExcludeNames })
     # 只接受更短候选（渐进压时长用）：没有更短片段时替换不会降低总时长，
     # 硬换只会逐轮空转并把同目录候选耗尽，故此处先过滤，返回空由调用方标记该段耗尽
     if ($ShorterThan -gt 0) {
@@ -255,11 +256,13 @@ function Select-ReplacementVideo {
 }
 
 function Get-VideoFromDirectory {
-    param([string]$Directory, [string]$OriginalPath = '')
+    param([string]$Directory, [string]$OriginalPath = '', [array]$Exclude = @(), [array]$ExcludeNames = @())
     if (-not (Test-Path $Directory -PathType Container)) { return @($null, $false) }
     $vids = @(Get-ChildItem -LiteralPath $Directory -Recurse -File -Force | Where-Object {
         $_.Extension -in '.mp4','.mov','.avi','.mkv','.m4v' -and
-        $_.FullName -notlike '*\旧水印*'
+        $_.FullName -notlike '*\旧水印*' -and
+        $_.FullName -notin $Exclude -and
+        $_.Name -notin $ExcludeNames
     })
     if ($vids.Count -eq 0) { return @($null, $false) }
     $origSuffix = if ($OriginalPath) { Get-NumberSuffix -Path $OriginalPath } else { '' }
@@ -295,15 +298,19 @@ Initialize-CacheFileIndex
 # 1) 命中同名文件：优先与原缺失路径同目录的候选，其次任一同名存在候选
 # 2) 无同名但同目录存在相同数字后缀的视频：视为同内容微调（与原索引同语义）
 function Resolve-FromVideoCache {
-    param([string]$OldPath)
+    param([string]$OldPath, [array]$Exclude = @(), [array]$ExcludeNames = @())
     $p = Remove-Quotes -str $OldPath
     $p = $p -replace '\\\\', '\'
     if (-not $p) { return $null }
     $leaf = Split-Path -Path $p -Leaf
     $fnKey = $leaf.ToLower()
     $origDir = (Split-Path -Path $p -Parent)
+    # 片段以「文件名」为身份（可能已被挪到别处）：该成片其它位置已用过同名片段时，
+    # 任何同名副本都是同一片段，不能再用作本位置的修复来源
+    if ($ExcludeNames -and ($leaf -in $ExcludeNames)) { return $null }
     if ($cacheByFileName.ContainsKey($fnKey)) {
-        $cands = @($cacheByFileName[$fnKey] | Where-Object { Test-Path -LiteralPath $_ })
+        # 排除成片内其它位置已在用的片段：同名文件可能有多份，取下一份而不是直接放弃
+        $cands = @($cacheByFileName[$fnKey] | Where-Object { Test-Path -LiteralPath $_ -and $_ -notin $Exclude })
         $cands = @($cands | Sort-Object -Unique)
         if ($cands.Count -gt 0) {
             # 优先原目录候选（最可能是同一批次的真实文件），否则取任一存在候选
@@ -318,6 +325,7 @@ function Resolve-FromVideoCache {
         $sameSeq = @(Get-ChildItem -LiteralPath $origDir -File -Force -ErrorAction SilentlyContinue | Where-Object {
             $_.Extension -in '.mp4','.mov','.avi','.mkv','.m4v' -and
             $_.FullName -ine $p -and
+            $_.FullName -notin $Exclude -and
             (Get-NumberSuffix -Path $_.FullName) -eq $suffix
         } | Sort-Object FullName -Unique)
         if ($sameSeq.Count -ge 1) { return $sameSeq[0].FullName }
@@ -371,7 +379,13 @@ function Select-VariancePaths {
             $origKey = [string]$OriginalPaths[$i]
             $excludeSubs = @($TriedSubs.Keys | Where-Object { $_ -like "$origKey|*" } | ForEach-Object { $_.Substring($origKey.Length + 1) })
         }
-        $sel = Select-ReplacementVideo -OriginalPath $OriginalPaths[$i] -Exclude $excludeSubs -PreferShort:$PreferShort
+        # 成片内不得出现相同片段（与拼接脚本同约束）：按文件名排除该成片其它位置已在用的片段
+        $usedNames = @()
+        for ($k = 0; $k -lt $newPaths.Count; $k++) {
+            if ($k -ne $i -and $newPaths[$k]) { $usedNames += (Split-Path $newPaths[$k] -Leaf) }
+        }
+        $excludeSubs = @($excludeSubs + @($newPaths | Where-Object { $_ -and $_ -ne $OriginalPaths[$i] }))
+        $sel = Select-ReplacementVideo -OriginalPath $OriginalPaths[$i] -Exclude $excludeSubs -ExcludeNames $usedNames -PreferShort:$PreferShort
         $newPath = $sel[0]
         $isEquivalent = $sel[1]
         if (-not $newPath) { continue }
@@ -465,9 +479,17 @@ function Invoke-ReplicaFromLog {
             $orig = $m.Path
             $newPath = $null
             $isEquivalent = $false
+            # 成片内不得出现相同片段（与拼接脚本同约束）：修复结果不得与该成片其它位置重复。
+            # 片段以文件名为身份（可能被挪到别处），故同时按完整路径与文件名双重排除
+            $otherInJob = @($job.Videos | Where-Object { $_ -and $_ -ne $orig })
+            $otherNames = @($otherInJob | ForEach-Object { Split-Path $_ -Leaf })
 
             # 首选：从实时缓存（video_cache.json）按文件名解析（软件自动更新，唯一数据源）
-            $newPath = Resolve-FromVideoCache -OldPath $orig
+            $newPath = Resolve-FromVideoCache -OldPath $orig -Exclude $otherInJob -ExcludeNames $otherNames
+            if ($newPath -and ($newPath -in $otherInJob)) {
+                Write-Host "   ⚠️ 缓存命中与本成片其它片段重复，改用其它候选：$(Split-Path $newPath -Leaf)" -ForegroundColor Yellow
+                $newPath = $null
+            }
             if ($newPath) {
                 $isEquivalent = $true
                 Write-Host "   🔎 缓存命中：$(Split-Path $orig -Leaf) -> $(Split-Path $newPath -Leaf)（等效，不进入30%）" -ForegroundColor Cyan
@@ -475,7 +497,7 @@ function Invoke-ReplicaFromLog {
 
             # 其次：同目录优先相同数字后缀，否则随机
             if (-not $newPath) {
-                $sel = Select-ReplacementVideo -OriginalPath $orig
+                $sel = Select-ReplacementVideo -OriginalPath $orig -Exclude $otherInJob -ExcludeNames $otherNames
                 $newPath = $sel[0]
                 $isEquivalent = $sel[1]
             }
@@ -484,7 +506,7 @@ function Invoke-ReplicaFromLog {
             if (-not $newPath) {
                 $newDir = $env:REPLICA_FALLBACK_DIR
                 if ($newDir -and (Test-Path $newDir -PathType Container)) {
-                    $sel = Get-VideoFromDirectory -Directory $newDir -OriginalPath $orig
+                    $sel = Get-VideoFromDirectory -Directory $newDir -OriginalPath $orig -Exclude $otherInJob -ExcludeNames $otherNames
                     $newPath = $sel[0]
                     $isEquivalent = $sel[1]
                 }
@@ -641,6 +663,38 @@ function Invoke-ReplicaFromLog {
             }
         }
         else {
+            $totalDuration = 0
+            foreach ($p in $videos) { $totalDuration += (Get-CachedVideoInfo -VideoPath $p).Duration }
+        }
+
+        # 成片内不得出现相同片段（与拼接脚本同约束；片段以文件名为身份，同名即同一片段）：
+        # 先尝试替换重复位置，仍无法消除则不出该成片
+        $dupGroups = @($videos | Where-Object { $_ } | Group-Object { Split-Path $_ -Leaf } | Where-Object { $_.Count -gt 1 })
+        if ($dupGroups.Count -gt 0) {
+            $dupFixed = $dupGroups.Count
+            Write-Host "   ⚠️ 检测到成片内重复片段 $dupFixed 组，尝试替换消除…" -ForegroundColor Yellow
+            $seenName = @{}
+            for ($vi = 0; $vi -lt $videos.Count; $vi++) {
+                if (-not $videos[$vi]) { continue }
+                $viName = Split-Path $videos[$vi] -Leaf
+                if (-not $seenName.ContainsKey($viName)) { $seenName[$viName] = $true; continue }
+                $viOthers = @()
+                for ($k = 0; $k -lt $videos.Count; $k++) { if ($k -ne $vi -and $videos[$k]) { $viOthers += (Split-Path $videos[$k] -Leaf) } }
+                $excludeDup = @($videos | Where-Object { $_ -and $_ -ne $videos[$vi] })
+                $selDup = Select-ReplacementVideo -OriginalPath $videos[$vi] -Exclude $excludeDup -ExcludeNames $viOthers
+                if ($selDup[0] -and (Test-Path -LiteralPath $selDup[0])) {
+                    Write-Host "     第 $($vi + 1) 段: $viName -> $(Split-Path $selDup[0] -Leaf)" -ForegroundColor DarkGray
+                    $videos[$vi] = $selDup[0]
+                }
+            }
+            $dupGroups = @($videos | Where-Object { $_ } | Group-Object { Split-Path $_ -Leaf } | Where-Object { $_.Count -gt 1 })
+            if ($dupGroups.Count -gt 0) {
+                $dupNames = (@($dupGroups | ForEach-Object { $_.Name }) -join '、')
+                Invoke-ErrorAction -ErrorMessage "成片内存在重复片段：$dupNames" -ErrorStep "日志复刻-重复片段检查"
+                Write-ReplicaFail -Name $job.Name -Reason "成片内存在重复片段：$dupNames"
+                continue
+            }
+            Write-Host "   ✅ 已替换消除 $dupFixed 组重复片段" -ForegroundColor Green
             $totalDuration = 0
             foreach ($p in $videos) { $totalDuration += (Get-CachedVideoInfo -VideoPath $p).Duration }
         }

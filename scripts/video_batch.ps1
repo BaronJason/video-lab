@@ -1119,6 +1119,7 @@ try {
             $selectedParts = $null
             $updatePlans = @()
             $foundCombination = $false
+            $failReason = $null   # 渐进替换提前中断时的具体原因（供失败提示输出）
             
             $firstPickVideo = $null   # 首段（第一个源）选取固定：重试时只调整后续片段，不影响开头的排列使用
             $retryExcluded = @{}  # 跨轮失败记忆：已试过且超时限的「源|视频路径」，下轮显式避开，避免重复随机
@@ -1218,7 +1219,7 @@ try {
                     if ($retryCount -gt 0) {
                         # 目标源无可用候选：标记耗尽，改试「未耗尽中时长最长」的源继续渐进（静默，不逐轮刷日志）
                         # 该源从未选到片段（无沿用基础）说明确实无素材，替换其它源也补不齐，直接失败
-                        if (-not $staleParts[$failSrcIdx]) { break }
+                        if (-not $staleParts[$failSrcIdx]) { $failReason = "源「$(Split-Path $sourceRequests[$failSrcIdx] -Leaf)」无可用片段（无合规视频或候选已被排除）"; break }
                         $exhaustedSrcs[$failSrcIdx] = $true
                         $retryTargetSrc = -1
                         $maxDur = -1
@@ -1230,7 +1231,7 @@ try {
                             elseif ($staleParts[$pi]) { $dur = $staleParts[$pi].Duration }
                             if ($dur -gt $maxDur) { $maxDur = $dur; $retryTargetSrc = $pi }
                         }
-                        if ($retryTargetSrc -lt 0) { break }  # 所有源均已无可替换片段，交由下方统一失败处理
+                        if ($retryTargetSrc -lt 0) { $failReason = "所有源的可替换片段均已用尽（首段固定不参与替换）"; break }  # 所有源均已无可替换片段，交由下方统一失败处理
                         continue
                     }
                     continue  # 首轮失败：静默进入渐进替换
@@ -1265,12 +1266,16 @@ try {
                         if ($exhaustedSrcs.ContainsKey($pi)) { continue }
                         if ($tempParts[$pi] -and $tempParts[$pi].Duration -gt $maxDur) { $maxDur = $tempParts[$pi].Duration; $retryTargetSrc = $pi }
                     }
-                    if ($retryTargetSrc -lt 0) { break }  # 所有候选均已尝试仍超时长，交由下方统一失败处理
+                    if ($retryTargetSrc -lt 0) { $failReason = "非首段源的可替换片段均已用尽，仍超出时长上限 $MaxTotalDurationSec 秒"; break }  # 所有候选均已尝试仍超时长，交由下方统一失败处理
                 }
             }
             
             if (-not $foundCombination) {
-                Invoke-ErrorAction -ErrorMessage "连续 $MaxRetry 次重试无法找到满足时长的组合" -ErrorStep "第 $outIndex 个成片"
+                # 失败原因按实际中断点给出（提前中断时并非真的跑满 MaxRetry 轮，原提示易误导排查）；
+                # 循环正常耗尽时 $retryCount 已自增到 MaxRetry，故取二者较小值作为实际轮数
+                $rounds = [Math]::Min($retryCount + 1, [int]$MaxRetry)
+                $failMsg = if ($failReason) { $failReason } else { "重试 $rounds 轮仍无法找到满足时长的组合（时长上限 $MaxTotalDurationSec 秒）" }
+                Invoke-ErrorAction -ErrorMessage $failMsg -ErrorStep "第 $outIndex 个成片"
                 continue
             }
             

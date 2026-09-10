@@ -153,6 +153,16 @@ function startHttpServer(opts) {
       const result = await dialog.showOpenDialog(win || undefined, { title: '选择要添加的文件夹', defaultPath: api.getRoot(), properties: ['openDirectory', 'multiSelections'] });
       return result.canceled || !result.filePaths || result.filePaths.length === 0 ? [] : result.filePaths;
     },
+    pick_paths_files: async () => {
+      const win = getMainWin();
+      const result = await dialog.showOpenDialog(win || undefined, { title: '选择视频文件（支持 mp4/mov/avi/mkv 等 / .lnk 快捷方式）', defaultPath: api.getRoot(), properties: ['openFile', 'multiSelections'], filters: [{ name: '视频文件', extensions: ['mp4', 'mov', 'avi', 'mkv', 'm4v', 'webm', 'flv', 'lnk'] }] });
+      return result.canceled || !result.filePaths || result.filePaths.length === 0 ? [] : result.filePaths;
+    },
+    pick_paths_dirs: async () => {
+      const win = getMainWin();
+      const result = await dialog.showOpenDialog(win || undefined, { title: '选择文件夹（将递归扫描其中视频）', defaultPath: api.getRoot(), properties: ['openDirectory', 'multiSelections'] });
+      return result.canceled || !result.filePaths || result.filePaths.length === 0 ? [] : result.filePaths;
+    },
     pick_single_folder: async () => {
       const win = getMainWin();
       const result = await dialog.showOpenDialog(win || undefined, { title: '选择要修改为的文件夹', defaultPath: api.getRoot(), properties: ['openDirectory'] });

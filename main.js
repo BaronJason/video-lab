@@ -88,6 +88,17 @@ function projectDir() {
   // setup 安装版：exe 所在目录即程序根（config/Cache/Scripts 同级定位）
   return path.dirname(process.execPath);
 }
+// 脚本目录动态解析：成片处理脚本需要真实文件系统路径（供外部 pwsh 执行，无法读 asar）。
+// 源码共存形态（便携开发机，resources\app\scripts 存在）直接用仓库内脚本——项目内只维护这一份，
+// 不再需要顶层 resources\Scripts 副本；构建/分发形态（D 盘/setup/便携包解压，无 resources\app）
+// 回退到构建时 extraResources 生成的 resources\Scripts。
+function resolveScriptsDir() {
+  const base = projectDir();
+  const src = path.join(base, 'resources', 'app', 'scripts');
+  const dist = path.join(base, 'resources', 'Scripts');
+  try { if (fs.existsSync(src)) return src; } catch (e) {}
+  return dist;
+}
 function configFilePath() { return configFile; }
 function programConfigPath() { return path.join(projectDir(), 'config.json'); }
 function appdataConfigPath() { return path.join(app.getPath('appData'), 'Video Lab', 'config.json'); }
@@ -307,7 +318,7 @@ let watermarkCachePath = path.join(path.dirname(configFilePath()), watermarkCach
   if (oldScan === scanCachePath || !fs.existsSync(oldScan) || fs.existsSync(scanCachePath)) return;
   try { fs.copyFileSync(oldScan, scanCachePath); fs.unlinkSync(oldScan); } catch (e) {}
 })();
-const api = new Api(root, config, scanCachePath, videoCachePath, logCachePath, path.join(projectDir(), 'resources', 'Scripts'), clipCachePath, taskStatePath, watermarkCachePath);
+const api = new Api(root, config, scanCachePath, videoCachePath, logCachePath, resolveScriptsDir(), clipCachePath, taskStatePath, watermarkCachePath);
 // 扫描/重建环节进度：推送主窗口渲染层实时状态（walk/收集日志/重建成片索引/水印统计 一一对应）
 api.onScanProgress = (p) => {
   try {
@@ -1466,6 +1477,23 @@ function registerIpc() {
     const result = await dialog.showOpenDialog(mainWin, { title: '选择要修改为的文件夹', defaultPath: api.getRoot(), properties: ['openDirectory'] });
     return result.canceled || !result.filePaths || result.filePaths.length === 0 ? '' : result.filePaths[0];
   });
+  // 遮罩「添加文件」（原片/遮罩两栏共用）：多选视频文件（含 .lnk 快捷方式）
+  ipcMain.handle('pick_paths_files', async () => {
+    const result = await dialog.showOpenDialog(mainWin, {
+      title: '选择视频文件（支持 mp4/mov/avi/mkv 等 / .lnk 快捷方式）',
+      defaultPath: api.getRoot(),
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: '视频文件', extensions: ['mp4', 'mov', 'avi', 'mkv', 'm4v', 'webm', 'flv', 'lnk'] }]
+    });
+    return result.canceled || !result.filePaths || result.filePaths.length === 0 ? [] : result.filePaths;
+  });
+  // 遮罩「添加文件夹」（原片/遮罩两栏共用）：多选文件夹，其中视频将递归扫描
+  ipcMain.handle('pick_paths_dirs', async () => {
+    const result = await dialog.showOpenDialog(mainWin, { title: '选择文件夹（将递归扫描其中视频）', defaultPath: api.getRoot(), properties: ['openDirectory', 'multiSelections'] });
+    return result.canceled || !result.filePaths || result.filePaths.length === 0 ? [] : result.filePaths;
+  });
+  ipcMain.handle('resolve_shortcut', (e, p) => api.resolveShortcut(p));
+  ipcMain.handle('mask_add_source', (e, side, p) => api.maskAddSource(side, p));
 
   // ── 自制标题栏（frame:false）窗口控制 ──
   // 查找请求来源窗口；无来源时回退主窗口

@@ -3252,7 +3252,7 @@
     on: false, projects: [], project: null, mode: 1, view: 'config', search: '',
     maskLogBranch: '', // 日志视图当前选中的日期分支（对应某日志文件路径，空=自动最新）
     rawDirs: [],      // 原片文件夹列表 [{ path, name, files }]
-    rawSel: {},       // { path: [视频名] } 缺省=全选
+    rawSel: {},       // { path: [视频相对路径 = 子目录/文件名] } 缺省=全选
     themes: [],       // 可用遮罩主题 [{ path, name }]（项目主题 + 额外目录）
     maskSel: {},      // { mov完整路径: true } 勾选的遮罩（按组勾选）
     maskDur: {},      // { mov完整路径: 时长秒 } 遮罩时长映射（渲染时写入，供开始前校验）
@@ -3312,8 +3312,8 @@
     if (_maskPersistTimer) clearTimeout(_maskPersistTimer);
     _maskPersistTimer = setTimeout(function () {
       call('save_mask_session', maskState.project.name, {
-        rawDirs: (maskState.rawDirs || []).map(function (d) { return { path: d.path, name: d.name }; }),
-        themes: (maskState.themes || []).map(function (t) { return { path: t.path, name: t.name }; }),
+        rawDirs: (maskState.rawDirs || []).map(function (d) { return { path: d.path, name: d.name, single: !!d.single }; }),
+        themes: (maskState.themes || []).map(function (t) { return { path: t.path, name: t.name, single: !!t.single }; }),
         mode: maskState.mode || 1,
         outputDir: maskState.outputDir || '',
         suffix: maskState.suffix || ''
@@ -3364,6 +3364,49 @@
       buildMaskCenter(); maskPersist();
     }).catch(function () {});
   }
+  // 合并原片分组：保留手动添加的外部目录与单文件（允许外部路径），项目内分组以扫描结果为准。
+  // 仅当目录失效时由 validateMaskDirs 存在性校验移除。
+  function maskMergeRawDirs(scanDirs) {
+    if (!maskState.project) return scanDirs || [];
+    var rootP = String(maskState.project.path).replace(/[\\/]+$/, '').toLowerCase();
+    var inProj = function (d) {
+      var s = String(d).replace(/[\\/]+$/, '').toLowerCase();
+      return s === rootP || s.indexOf(rootP + '\\') === 0;
+    };
+    var external = (maskState.rawDirs || []).filter(function (d) { return d.single || !inProj(d.path); });
+    var out = external.concat(scanDirs || []);
+    var seen = {};
+    return out.filter(function (d) { var k = String(d.path).toLowerCase(); if (seen[k]) return false; seen[k] = 1; return true; });
+  }
+  // 遮罩「添加文件/添加文件夹」（原片/遮罩两栏共用）：kind='file' 选单个视频文件（原片=mp4 等，遮罩=mov）
+  // kind='dir' 选文件夹（递归扫描其中视频）；均支持 .lnk 快捷方式，后端统一解析与校验，已存在的路径跳过
+  function maskPickAdd(side, kind) {
+    if (!maskOn() || !maskState.project) return;
+    var arr = side === 'theme' ? (maskState.themes || []) : (maskState.rawDirs || []);
+    var sideName = side === 'theme' ? '遮罩' : '原片';
+    call(kind === 'file' ? 'pick_paths_files' : 'pick_paths_dirs').then(function (list) {
+      if (!list || !list.length) return;
+      var added = 0, dup = 0, errs = [];
+      var chain = Promise.resolve();
+      list.forEach(function (p) {
+        chain = chain.then(function () {
+          return call('mask_add_source', side, p).then(function (r) {
+            if (!r || r.error) { errs.push(p); return; }
+            if (arr.some(function (d) { return pathResolveEq(d.path, r.path); })) { dup += 1; return; }
+            arr.push({ path: r.path, name: baseNameNoExt(r.path) || r.path, single: r.type === 'file' });
+            added += 1;
+          }).catch(function () { errs.push(p); });
+        });
+      });
+      chain.then(function () {
+        buildMaskCenter(); maskPersist();
+        var msg = '已添加 ' + sideName + ' ' + added + ' 项';
+        if (dup) msg += '，跳过重复 ' + dup + ' 项';
+        if (errs.length) msg += '，' + errs.length + ' 项无效';
+        setStatusDone(msg);
+      }).catch(function () { setStatus('添加失败'); });
+    }).catch(function () {});
+  }
   // 左下角菜单「刷新列表」：重扫当前项目原片分组（保留仍存在的勾选）+ 重载遮罩主题
   function maskRescanCurrent() {
     if (!maskOn() || !maskState.project) { setStatus('未选择遮罩叠加项目'); return; }
@@ -3371,7 +3414,7 @@
     setStatus('正在重新扫描原片分组…');
     call('scan_mask_raw_dirs', p.path).then(function (dirs) {
       if (!maskOn() || !maskState.project || maskState.project.name !== p.name) return;
-      maskState.rawDirs = Array.isArray(dirs) ? dirs : [];
+      maskState.rawDirs = maskMergeRawDirs(dirs);
       var keep = {};
       (maskState.rawDirs || []).forEach(function (d) { if (maskState.rawSel[d.path]) keep[d.path] = maskState.rawSel[d.path]; });
       maskState.rawSel = keep;
@@ -3489,16 +3532,31 @@
       var d = Number(cb.getAttribute('data-dur') || 0);
       setDis(cb, d > 0 && !ok(d, allKeys));
     });
+    // 分组头元素本身置灰（名称/元信息文字与图标随禁用态变灰），并带原因提示
+    function setHeadDis(head, dis) {
+      if (!head) return;
+      head.classList.toggle('mask-head-disabled', !!dis);
+      if (dis) {
+        if (head.getAttribute('title')) head.setAttribute('data-orig-title', head.getAttribute('title'));
+        head.setAttribute('title', '时长与已选素材不匹配，该组不可选');
+      } else {
+        var o = head.getAttribute('data-orig-title');
+        if (o) head.setAttribute('title', o);
+        else head.removeAttribute('title');
+      }
+    }
     // 遮罩分组头：单文件组头按时长判定；多文件组头按组内文件全禁则禁（组头全选会跳过禁用项）
     document.querySelectorAll('#maskAllGroups input[data-grpall]').forEach(function (cb) {
-      if (cb.checked) { setDis(cb, false); return; }
+      if (cb.checked) { setDis(cb, false); setHeadDis(cb.closest('.mask-group-head'), false); return; }
       var grp = cb.closest('.mask-group');
       if (grp && !grp.classList.contains('mask-group--single')) {
-        setDis(cb, !grpHeadUsable('input[data-grpfile]', grp));
+        var g1 = !grpHeadUsable('input[data-grpfile]', grp);
+        setDis(cb, g1); setHeadDis(grp.querySelector('.mask-group-head'), g1);
         return;
       }
       var d = Number(cb.getAttribute('data-dur') || 0);
-      setDis(cb, d > 0 && !ok(d, allKeys));
+      var g2 = d > 0 && !ok(d, allKeys);
+      setDis(cb, g2); setHeadDis(cb.closest('.mask-group-head'), g2);
     });
     // 原片文件夹行全选框：组内全部文件被禁用 → 全选框禁用（避免点了全选却一个都勾不上）
     document.querySelectorAll('.mask-folder-row input[data-rawall]').forEach(function (cb) {
@@ -3510,9 +3568,10 @@
     });
     // 原片分组头：组内全部文件被禁用 → 组头禁用；否则可用（全选会跳过禁用项）
     document.querySelectorAll('.mask-config [data-rawgrpall]').forEach(function (cb) {
-      if (cb.checked) { setDis(cb, false); return; }
+      if (cb.checked) { setDis(cb, false); setHeadDis(cb.closest('.mask-raw-group__head'), false); return; }
       var grp = cb.closest('.mask-raw-group');
-      setDis(cb, !grpHeadUsable('input[data-vid]', grp));
+      var d3 = !grpHeadUsable('input[data-vid]', grp);
+      setDis(cb, d3); setHeadDis(cb.closest('.mask-raw-group__head'), d3);
     });
   }
   // 分组头勾选/半选态同步：按实时的组内 checkbox 状态刷新所有分组头
@@ -3855,11 +3914,11 @@
     call('get_mask_session', p.name).then(function (sess) {
       if (!maskOn() || !maskState.project || maskState.project.name !== p.name) return;
       if (sess && Array.isArray(sess.rawDirs)) {
-        maskState.rawDirs = sess.rawDirs.map(function (d) { return { path: d.path, name: d.name }; });
+        maskState.rawDirs = sess.rawDirs.map(function (d) { return { path: d.path, name: d.name, single: !!d.single }; });
         // 勾选不持久化记忆：一律从空开始（提交任务后已清空，此处忽略历史勾选）
         maskState.rawSel = {};
         maskState.maskSel = {};
-        if (Array.isArray(sess.themes) && sess.themes.length) maskState.themes = sess.themes.map(function (t) { return { path: t.path, name: t.name }; });
+        if (Array.isArray(sess.themes) && sess.themes.length) maskState.themes = sess.themes.map(function (t) { return { path: t.path, name: t.name, single: !!t.single }; });
         if (sess.mode) maskState.mode = sess.mode;
         if (sess.outputDir) maskState.outputDir = sess.outputDir;
         if (typeof sess.suffix === 'string') maskState.suffix = sess.suffix;
@@ -3912,7 +3971,8 @@
     // ── 左栏：遮罩主题（标题固定，列表独立滚动） ──
     if (maskNeedMask()) {
       html += '<div class="mask-config__col mask-config__col--mask"><div class="mask-config__section-title"><span class="mask-config__title">遮罩主题</span>' +
-        '<button type="button" class="mask-config__addbtn" id="maskAddThemeDir" title="添加项目外遮罩目录">' + icon('plus', 12) + '添加遮罩目录</button></div><div class="mask-config__list">';
+        '<button type="button" class="mask-config__addbtn" id="maskAddThemeFile" title="添加单个遮罩文件（.mov）">' + icon('plus', 12) + '添加文件</button>' +
+        '<button type="button" class="mask-config__addbtn" id="maskAddThemeDir" title="添加遮罩文件夹（其中 .mov 递归扫描）">' + icon('plus', 12) + '添加文件夹</button></div><div class="mask-config__list">';
       if (!maskState.themes.length) {
         html += '<div class="mask-config__hint mask-config__hint--center">项目下没有遮罩主题文件夹，请放入含 mov 的主题文件夹后刷新</div>';
       } else {
@@ -3922,7 +3982,8 @@
     }
     // ── 右栏：原片选择（标题固定，列表独立滚动） ──
     html += '<div class="mask-config__col mask-config__col--raw"><div class="mask-config__section-title"><span class="mask-config__title">原片素材</span>' +
-      '<button type="button" class="mask-config__addbtn" id="maskAddRawDir" title="添加原片文件夹">' + icon('plus', 12) + '添加文件夹</button></div><div class="mask-config__list">';
+      '<button type="button" class="mask-config__addbtn" id="maskAddRawFile" title="添加单个原片文件（mp4 等视频）">' + icon('plus', 12) + '添加文件</button>' +
+      '<button type="button" class="mask-config__addbtn" id="maskAddRawDir" title="添加原片文件夹（其中视频递归扫描）">' + icon('plus', 12) + '添加文件夹</button></div><div class="mask-config__list">';
     if (!maskState.rawDirs.length) {
       html += '<div class="mask-config__hint mask-config__hint--center">尚未选择原片文件夹</div>';
     } else {
@@ -3944,23 +4005,13 @@
     var po = $('maskOpenProj');
     if (po) po.addEventListener('click', function () { call('open_path', p.path); });
     var ar = $('maskAddRawDir');
-    if (ar) ar.addEventListener('click', function () {
-      call('pick_single_folder').then(function (np) {
-        if (!np) return;
-        if (maskState.rawDirs.some(function (d) { return pathResolveEq(d.path, np); })) { setStatus('该原片文件夹已添加'); return; }
-        maskState.rawDirs.push({ path: np, name: baseNameNoExt(np) || np });
-        buildMaskCenter(); maskPersist();
-      }).catch(function () {});
-    });
+    if (ar) ar.addEventListener('click', function () { maskPickAdd('raw', 'dir'); });
+    var arf = $('maskAddRawFile');
+    if (arf) arf.addEventListener('click', function () { maskPickAdd('raw', 'file'); });
     var at = $('maskAddThemeDir');
-    if (at) at.addEventListener('click', function () {
-      call('pick_single_folder').then(function (np) {
-        if (!np) return;
-        if (maskState.themes.some(function (t) { return pathResolveEq(t.path, np); })) { setStatus('该遮罩目录已添加'); return; }
-        maskState.themes.push({ path: np, name: baseNameNoExt(np) || np });
-        buildMaskCenter(); maskPersist();
-      }).catch(function () {});
-    });
+    if (at) at.addEventListener('click', function () { maskPickAdd('theme', 'dir'); });
+    var atf = $('maskAddThemeFile');
+    if (atf) atf.addEventListener('click', function () { maskPickAdd('theme', 'file'); });
     // 两栏素材右键菜单：遮罩主题组/文件、原片文件 → 打开文件/打开路径/删除素材成片；原片文件夹行 → 打开路径
     panel.addEventListener('contextmenu', function (e) {
       var mkOpen = function (full) {
@@ -4057,6 +4108,7 @@
       // 分组按 ±1s 容差聚类（与时长校验阈值一致，避免 59.9s/60.1s 这种微小偏差被拆开）
       var rawGroups = [];
       files.forEach(function (f) {
+        if (!f.rel) f.rel = f.sub ? f.sub + '/' + f.name : f.name;
         var d = f.dur || 0;
         var gi = -1;
         for (var gi2 = 0; gi2 < rawGroups.length; gi2++) {
@@ -4071,7 +4123,7 @@
         rawGroups.forEach(function (g, gi) {
           var gname = rd.name + '-' + (gi + 1);
           var selNames = maskState.rawSel[rd.path] || [];
-          var inGroup = g.files.filter(function (f) { return selNames.indexOf(f.name) >= 0; });
+          var inGroup = g.files.filter(function (f) { return selNames.indexOf(f.rel) >= 0; });
           var gany = inGroup.length > 0;
           var gall = gany && inGroup.length === g.files.length;
           var gid = i + '_' + gi;
@@ -4084,8 +4136,8 @@
             '<div class="mask-raw-group__files"' + (gany ? '' : ' style="display:none"') + '>';
           g.files.forEach(function (f) {
             var full = maskFullPath(rd.path, f.sub, f.name);
-            var sel = selNames.indexOf(f.name) >= 0;
-            html += '<label class="mask-file-item" data-full="' + escapeHtml(full) + '"><input type="checkbox" data-vid="' + escapeHtml(f.name) + '" data-dur="' + (f.dur || 0) + '"' + (sel ? ' checked' : '') + '>' +
+            var sel = selNames.indexOf(f.rel) >= 0;
+            html += '<label class="mask-file-item" data-full="' + escapeHtml(full) + '"><input type="checkbox" data-vid="' + escapeHtml(f.rel) + '" data-dur="' + (f.dur || 0) + '"' + (sel ? ' checked' : '') + '>' +
               '<span class="mask-file-item__box"></span>' +
               '<span class="mask-file-item__name" title="' + escapeHtml(full) + '">' + (f.sub ? escapeHtml(f.sub) + '/' : '') + escapeHtml(f.name) + '</span>' +
               '<span class="mask-file-item__dur">' + maskFmtDur(f.dur) + '</span></label>';
@@ -4098,8 +4150,8 @@
         g.files.forEach(function (f) {
           var full = maskFullPath(rd.path, f.sub, f.name);
           var selNames = maskState.rawSel[rd.path] || [];
-          var sel = selNames.indexOf(f.name) >= 0;
-          html += '<label class="mask-file-item" data-full="' + escapeHtml(full) + '"><input type="checkbox" data-vid="' + escapeHtml(f.name) + '" data-dur="' + (f.dur || 0) + '"' + (sel ? ' checked' : '') + '>' +
+          var sel = selNames.indexOf(f.rel) >= 0;
+          html += '<label class="mask-file-item" data-full="' + escapeHtml(full) + '"><input type="checkbox" data-vid="' + escapeHtml(f.rel) + '" data-dur="' + (f.dur || 0) + '"' + (sel ? ' checked' : '') + '>' +
             '<span class="mask-file-item__box"></span>' +
             '<span class="mask-file-item__name" title="' + escapeHtml(full) + '">' + (f.sub ? escapeHtml(f.sub) + '/' : '') + escapeHtml(f.name) + '</span>' +
             '<span class="mask-file-item__dur">' + maskFmtDur(f.dur) + '</span></label>';
@@ -4128,13 +4180,13 @@
           if (rc.checked) {
             // 全选：跳过被时长禁用的片段（与文件夹行全选一致）
             g2.files.forEach(function (f) {
-              var fc = grp.querySelector('input[data-vid="' + CSS.escape(f.name) + '"]');
+              var fc = grp.querySelector('input[data-vid="' + CSS.escape(f.rel) + '"]');
               if (fc && fc.disabled) return;
-              if (set.indexOf(f.name) < 0) set.push(f.name);
+              if (set.indexOf(f.rel) < 0) set.push(f.rel);
             });
           } else {
             g2.files.forEach(function (f) {
-              var k = set.indexOf(f.name);
+              var k = set.indexOf(f.rel);
               if (k >= 0) set.splice(k, 1);
             });
           }
@@ -4754,7 +4806,7 @@
     (maskState.rawDirs || []).forEach(function (rd) {
       var sel = maskState.rawSel[rd.path] || [];
       (rd.files || []).forEach(function (f) {
-        if (sel.indexOf(f.name) >= 0) rawDurs.push({ name: f.name, dur: f.dur || 0 });
+        if (sel.indexOf(f.rel) >= 0) rawDurs.push({ name: f.rel, dur: f.dur || 0 });
       });
     });
     var maskDurs = [];
@@ -4871,11 +4923,13 @@
     if (!p) return;
     call('scan_mask_raw_dirs', p.path).then(function (dirs) {
       if (!maskOn() || !maskState.project || maskState.project.name !== p.name) return;
+      // 合并保留手动添加的外部目录与单文件；项目内分组以扫描结果为准
+      var nextRaw = maskMergeRawDirs(dirs);
       var cur = (maskState.rawDirs || []).map(function (d) { return d.path; }).sort().join('|');
-      var next = (dirs || []).map(function (d) { return d.path; }).sort().join('|');
+      var next = nextRaw.map(function (d) { return d.path; }).sort().join('|');
       if (cur !== next) {
-        // 分组变化（含目录被删/变空 → 自动去除）
-        maskState.rawDirs = dirs || [];
+        // 分组变化（含项目内目录被删/变空 → 自动去除；外部添加目录与单文件保留）
+        maskState.rawDirs = nextRaw;
         var keep = {};
         (maskState.rawDirs || []).forEach(function (d) { if (maskState.rawSel[d.path]) keep[d.path] = maskState.rawSel[d.path]; });
         maskState.rawSel = keep;

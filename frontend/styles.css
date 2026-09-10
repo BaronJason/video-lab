@@ -5271,6 +5271,20 @@ body.mask-mode .center-top { min-height: 0; max-height: none; }
   font-size: 13px;
   color: var(--text-default);
 }
+/* 分组头禁选（时长不匹配）：整行置灰、取消 hover 高亮，保留悬停原因提示 */
+.mask-group-head.mask-head-disabled,
+.mask-raw-group__head.mask-head-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.mask-group-head.mask-head-disabled:hover,
+.mask-raw-group__head.mask-head-disabled:hover {
+  background: transparent;
+}
+.mask-group-head.mask-head-disabled .mask-group-head__name,
+.mask-raw-group__head.mask-head-disabled .mask-raw-group__name {
+  color: var(--text-tertiary);
+}
 .mask-raw-group__meta {
   color: var(--text-muted, #999);
   font-size: 12px;

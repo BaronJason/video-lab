@@ -226,7 +226,7 @@ class Api {
     this.cachePath = cachePath || '';
     this.videoCachePath = videoCachePath || '';
     this.logCachePath = logCachePath || '';
-    this.scriptsDirFixed = scriptsDir || ''; // 脚本固定位置（main 进程传入 resources\Scripts），无需用户配置
+    this.scriptsDirFixed = scriptsDir || ''; // 脚本位置（main 进程动态解析：源码形态用仓库内 scripts，分发形态用 resources\Scripts）
     this.clipIndexCachePath = clipIndexCachePath || ''; // 成片名搜索索引缓存文件（Cache 子文件夹）
     this.taskStatePath = taskStatePath || '';           // 任务列表持久化文件（Cache 子文件夹）
     this.watermarkCachePath = watermarkCachePath || ''; // 水印主流水印固化缓存（Cache 子文件夹，随工作目录重置）
@@ -271,7 +271,7 @@ class Api {
   }
 
   get scriptsDir() {
-    // 脚本固定于项目 resources\Scripts 子文件夹（打包/开发由 main 统一计算传入），不再读取 config.scripts_dir
+    // 脚本位置由 main 按形态动态解析传入（源码形态用仓库内 scripts，分发形态用 resources\Scripts），不再读取 config.scripts_dir
     if (this.scriptsDirFixed) return this.scriptsDirFixed;
     let d = this.config.scripts_dir;
     if (!d || !fs.existsSync(d)) d = DEFAULT_CONFIG.scripts_dir;
@@ -2074,10 +2074,14 @@ class Api {
     // 优先使用任务标记：其中保存了完整 env 与逐个成片的产出清单（精确还原、不依赖日志窗口）
     const marker = this._loadMarker(t);
     const env = Object.assign({}, (marker && marker.env) || t.env || {});
-    const src = env.REPLICA_TXT ? String(env.REPLICA_TXT) : '';
+    // 遮罩任务 env 为 MASK_* 系列；批量/复刻为 REPLICA_TXT + 其它变量
+    const isMask = t.type === 'mask';
+    const src = isMask
+      ? (env.MASK_RAW_DIRS ? String(env.MASK_RAW_DIRS).split(';')[0] : '')
+      : (env.REPLICA_TXT ? String(env.REPLICA_TXT) : '');
     if (!src) {
       this._removeMarker(t);
-      return { ok: false, error: '原任务缺少 TXT 配置，无法重新开始' };
+      return { ok: false, error: isMask ? '原任务缺少遮罩配置，无法重新开始' : '原任务缺少 TXT 配置，无法重新开始' };
     }
     // 删除上次失败残留的成片与日志：有标记按标记精确清单，无标记回退日志解析+目录推算
     if (marker) this._removeMarkerArtifacts(marker);
@@ -3172,7 +3176,12 @@ class Api {
     const pickVids = [];
     const vids = (p && p.videos) || {};
     for (const dir of Object.keys(vids)) {
-      for (const name of (vids[dir] || [])) { if (String(name).trim()) pickVids.push(path.resolve(dir, name)); }
+      // 原片项可能是目录（名称+相对路径）或用户添加的单个视频文件（路径即文件本身）
+      let dirIsFile = false;
+      try { dirIsFile = fs.statSync(dir).isFile(); } catch (e) {}
+      for (const name of (vids[dir] || [])) {
+        if (String(name).trim()) pickVids.push(dirIsFile ? path.resolve(dir) : path.resolve(dir, name));
+      }
     }
     // 任务列表标题：项目名 / 遮罩名（遮罩名按 mov 前缀去重，与遮罩主题分组口径一致）
     const maskPfx = (name) => String(name || '').replace(/\.[^.]+$/, '').replace(/[-_ ]+\d+$/, '').replace(/\d+$/, '');
@@ -3289,6 +3298,14 @@ let themes = [];
   _listMaskMedia(dir, exts) {
     const abs = path.resolve(dir);
     if (!fs.existsSync(abs)) return Promise.resolve([]);
+    // 单文件（用户通过「添加文件或文件夹」添加的单个视频文件）：扩展名匹配则返回该文件
+    try {
+      const st = fs.statSync(abs);
+      if (st.isFile()) {
+        if (!exts.has(path.extname(abs).toLowerCase())) return Promise.resolve([]);
+        return this._probeVideoAsync(abs).then((r) => [{ name: path.basename(abs), sub: '', dur: r && r.duration > 0 ? r.duration : 0 }]);
+      }
+    } catch (e) { return Promise.resolve([]); }
     const items = [];
     const walk = (d, rel) => {
       let ents = [];
@@ -3309,29 +3326,76 @@ let themes = [];
 
   listMaskMasks(dir) { return this._listMaskMedia(dir, new Set(['.mov'])); }
 
+  // 解析 .lnk 快捷方式目标（单个）；非快捷方式/解析失败返回空串
+  resolveShortcut(p) {
+    if (!p || !/\.lnk$/i.test(p)) return '';
+    const m = this._resolveShortcutTargets([p]);
+    return (m && m[p]) ? String(m[p]) : '';
+  }
+
+  // 统一添加入口（原片/遮罩侧「添加文件或文件夹」）：接受 快捷方式 / 视频文件 / 文件夹，
+  // 快捷方式先解析目标，再按类型返回；原片=mp4 等视频，遮罩=mov。返回 { type: 'dir'|'file', path } 或 { error }
+  maskAddSource(side, p) {
+    if (!p) return { error: '空路径' };
+    let target = String(p);
+    if (/\.lnk$/i.test(target)) {
+      target = this.resolveShortcut(target);
+      if (!target) return { error: '快捷方式无效（无法解析目标）' };
+    }
+    try {
+      const st = fs.statSync(target);
+      if (st.isDirectory()) return { type: 'dir', path: target };
+      if (st.isFile()) {
+        const ext = path.extname(target).toLowerCase();
+        const okExt = side === 'theme' ? ['.mov'] : ['.mp4', '.mov', '.avi', '.mkv', '.m4v', '.webm', '.flv'];
+        if (okExt.indexOf(ext) < 0) return { error: side === 'theme' ? '遮罩仅支持 .mov 文件' : '不支持的文件类型' };
+        return { type: 'file', path: target };
+      }
+      return { error: '无法识别该路径' };
+    } catch (e) { return { error: '路径不存在' }; }
+  }
+
   // 原片默认扫描：递归收集项目下所有含 mp4 的文件夹（以 mp4 所在文件夹为单位分组，不跳过任何目录；根目录含 mp4 也计入）
   scanMaskRawDirs(dir) {
     const abs = path.resolve(dir);
     const hitDirs = [];
+    const hitKeys = {};
+    const addHit = (d) => { const k = String(d).replace(/[\\/]+$/, '').toLowerCase(); if (!hitKeys[k]) { hitKeys[k] = 1; hitDirs.push(d); } };
     const hasMp4 = (d) => {
       try { return fs.readdirSync(d).some((f) => /\.mp4$/i.test(f)); } catch (e) { return false; }
     };
+    const lnks = [];
     const walk = (d) => {
       let ents = [];
       try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return; }
       for (const en of ents) {
         const full = path.join(d, en.name);
         if (en.isDirectory()) {
-          if (hasMp4(full)) hitDirs.push(full);
+          if (hasMp4(full)) addHit(full);
           walk(full);
+        } else if (en.isFile() && path.extname(en.name).toLowerCase() === '.lnk') {
+          lnks.push(full);
         }
       }
     };
     if (!fs.existsSync(abs)) return [];
-    if (hasMp4(abs)) hitDirs.push(abs);
+    if (hasMp4(abs)) addHit(abs);
     walk(abs);
-    const uniq = [...new Set(hitDirs)];
-    return uniq
+    // .lnk 快捷方式：解析目标目录并递归扫描其内容；目标路径/文件夹已存在则跳过
+    if (lnks.length) {
+      const map = this._resolveShortcutTargets(lnks);
+      for (const l of lnks) {
+        const t = map[l];
+        if (!t) continue;
+        const target = String(t).trim();
+        if (!target) continue;
+        try { if (!fs.statSync(target).isDirectory()) continue; } catch (e) { continue; }
+        if (hitKeys[String(target).replace(/[\\/]+$/, '').toLowerCase()]) continue; // 目标已存在 → 跳过
+        addHit(target);
+        walk(target);
+      }
+    }
+    return hitDirs
       .map((d) => ({ path: d, name: path.basename(d) || String(d) }))
       .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
   }

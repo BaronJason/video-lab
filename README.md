@@ -42,7 +42,7 @@ Video Lab/
 │  ├─ skins/            # 皮肤（Black_Orange / white_blue / Maid_Atelier + assets）
 │  └─ assets/           # 前端静态资源（内置字体等）
 ├─ icon/                # 应用图标
-├─ scripts/             # 成片处理脚本（构建时内置到 resources\Scripts）
+├─ scripts/             # 成片处理脚本（唯一源：源码形态直接运行此份，构建时 extraResources 复制为产物 resources\Scripts）
 ├─ main.js              # Electron 主进程
 ├─ preload.js           # 渲染进程桥接
 ├─ backend.js           # 后端业务逻辑
@@ -98,7 +98,7 @@ npm start        # 开发运行
 npm run dist     # 打包
 ```
 
-> 成片处理脚本（`video_batch.ps1` / `video_mask.ps1` / `video_replica.ps1`）随仓库托管于 `scripts/` 目录，构建时自动拷入产物的 `resources\Scripts`；运行时若缺失会在状态栏提示环境问题。
+> 成片处理脚本（`video_batch.ps1` / `video_mask.ps1` / `video_replica.ps1`）唯一托管于仓库 `scripts/` 目录，是脚本的唯一源：源码共存形态运行时直接执行这一份；构建/分发形态由 electron-builder `extraResources` 自动复制为产物 `resources\Scripts`。运行时自动按形态解析脚本目录，不依赖多余副本。
 
 ## 皮肤素材来源与许可
 

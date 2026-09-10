@@ -580,28 +580,59 @@ function Invoke-ReplicaFromLog {
 
         $totalDuration = 0
         if ($mode -eq 2) {
-            # 模式2：替换尾部片段规避判重；若替换后总时长超阈值，自动重试其他替换组合（最多45次有效尝试）
-            $baseVideos = @($job.Videos)
+            # 模式2：替换尾部片段规避判重；若替换后总时长超阈值，进入「渐进压时长」——保留当前组合，
+            # 只把时长最长的一段换成更短片段（沿用成功缩减），相比整组重选更快收敛；逐轮过程静默，达标后汇总一次
+            $workVideos = @($job.Videos)
+            $triedSubs = @{}          # 失败记忆：已试过的「原路径|替换路径」，显式跳过避免重复
+            $exhaustedIdx = @{}       # 该段候选已用尽（无可更短），跳过不再尝试
             $attempt = 0
-            $triedSubs = @{}   # 失败记忆：已试过的「原路径|替换路径」，每轮显式跳过，避免重复随机
-            do {
-                $videos = @(Select-VariancePaths -OriginalPaths $baseVideos -AlreadyChangedIndices @($job.MissingReplacedIndices) -AlreadyEquivalentIndices @($job.MissingEquivalentIndices) -TriedSubs $triedSubs -PreferShort:($attempt -gt 3))
-                $totalDuration = 0
-                foreach ($p in $videos) { $totalDuration += (Get-CachedVideoInfo -VideoPath $p).Duration }
-                # 记录本轮替换组合进失败记忆（下次不再重复同一替换）
-                for ($i = 0; $i -lt $baseVideos.Count; $i++) {
-                    if ($baseVideos[$i] -ne $videos[$i]) { $triedSubs[[string]$baseVideos[$i] + '|' + $videos[$i]] = $true }
+            $durOk = $false
+            while (($attempt -eq 0) -or (-not $durOk -and $attempt -lt 45 -and $exhaustedIdx.Count -lt $workVideos.Count)) {
+                $newVideos = @()
+                if ($attempt -eq 0) {
+                    # 首轮：既有尾部判重替换（第 1 次尝试起即取最短优先，提前收缩时长）
+                    $newVideos = @(Select-VariancePaths -OriginalPaths $job.Videos -AlreadyChangedIndices @($job.MissingReplacedIndices) -AlreadyEquivalentIndices @($job.MissingEquivalentIndices) -TriedSubs $triedSubs -PreferShort)
                 }
-                if ($totalDuration -le $MaxTotalDurationSec * $SpeedThreshold) { break }
+                else {
+                    # 渐进轮：找未耗尽的最长段，换为更短片段（同段经失败记忆不重复选同一替换）
+                    $longestIdx = -1
+                    $longestDur = -1
+                    for ($i = 0; $i -lt $workVideos.Count; $i++) {
+                        if ($exhaustedIdx.ContainsKey($i)) { continue }
+                        $d = (Get-CachedVideoInfo -VideoPath $workVideos[$i]).Duration
+                        if ($d -gt $longestDur) { $longestDur = $d; $longestIdx = $i }
+                    }
+                    if ($longestIdx -lt 0) { $durOk = $false; break }
+                    $workKey = [string]$workVideos[$longestIdx]
+                    $exclude = @($triedSubs.Keys | Where-Object { $_ -like "$workKey|*" } | ForEach-Object { $_.Substring($workKey.Length + 1) })
+                    $sel = Select-ReplacementVideo -OriginalPath $workVideos[$longestIdx] -Exclude $exclude -PreferShort
+                    if (-not $sel[0]) { $exhaustedIdx[$longestIdx] = $true; continue }
+                    $newVideos = @($workVideos)
+                    $newVideos[$longestIdx] = $sel[0]
+                    $triedSubs[[string]$workVideos[$longestIdx] + '|' + $sel[0]] = $true
+                }
+                # 记录改动 + 累计时长
+                $totalDuration = 0
+                for ($i = 0; $i -lt $newVideos.Count; $i++) { $totalDuration += (Get-CachedVideoInfo -VideoPath $newVideos[$i]).Duration }
+                if ($attempt -eq 0) {
+                    for ($i = 0; $i -lt $job.Videos.Count; $i++) {
+                        if ($job.Videos[$i] -ne $newVideos[$i]) { $triedSubs[[string]$job.Videos[$i] + '|' + $newVideos[$i]] = $true }
+                    }
+                }
+                $workVideos = @($newVideos)
+                if ($totalDuration -le $MaxTotalDurationSec * $SpeedThreshold) { $durOk = $true; break }
                 $attempt++
-                Write-Host "⚠️  替换后总时长 $([math]::Round($totalDuration, 1)) 秒超阈值，重试替换（$attempt/45）" -ForegroundColor Yellow
-            } while ($attempt -lt 45)
-            if ($totalDuration -gt $MaxTotalDurationSec * $SpeedThreshold) {
-                # 彻底无解的兜底：优先再次尝试预检测是否仍超（若有更近组合已保留），无则直接判定失败
-                # 45 次有效尝试后仍未达标 → 记为失败（可续跑），不再盲目消耗资源
+            }
+            $videos = @($workVideos)
+            if (-not $durOk) {
+                # 渐进压时长后仍超阈值（候选用尽或无更短可换）→ 记为失败（可续跑），不再盲目消耗资源
                 Invoke-ErrorAction -ErrorMessage "总时长 $([math]::Round($totalDuration,1)) 秒超过允许阈值（重试45次后仍不达标），请重选片段或调整日志" -ErrorStep "日志复刻-时长检查"
                 Write-ReplicaFail -Name $job.Name -Reason ("总时长超阈值：" + [math]::Round($totalDuration,1) + " 秒")
                 continue
+            }
+            # 重试过程静默，达标后仅汇总一次（避免每次重试都刷一行日志）
+            if ($attempt -gt 0) {
+                Write-Host "⚠️  该成片经 $attempt 轮渐进压时长后达标（总时长 $([math]::Round($totalDuration,1)) 秒）" -ForegroundColor Yellow
             }
         }
         else {

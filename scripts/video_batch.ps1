@@ -1122,21 +1122,27 @@ try {
             
             $firstPickVideo = $null   # 首段（第一个源）选取固定：重试时只调整后续片段，不影响开头的排列使用
             $retryExcluded = @{}  # 跨轮失败记忆：已试过且超时限的「源|视频路径」，下轮显式避开，避免重复随机
+            # ── 渐进替换（方案A）：超限后不再整组重摇，只替换「时长最长的非首段源」为更短片段，其余源沿用上轮选择 ──
+            $retryTargetSrc = -1    # 上轮超限指定的待替换源索引（-1=整组重建，仅首轮）
+            $staleParts = @()       # [srcIdx] 上轮每源 Video 对象（沿用基础）
+            $stalePlans = @()       # [srcIdx] 上轮每源 UpdatePlan
+            $exhaustedSrcs = @{}    # 已无可换候选的源索引（快速失败/改试次长源）
             for ($retryCount = 0; $retryCount -lt $MaxRetry; $retryCount++) {
                 $tempParts = @()
                 $tempUpdatePlans = @()
                 $totalDuration = 0
                 $allValid = $true
-                
+                $failSrcIdx = -1
+
                 $sourceExcludedSubGroups = @{}
                 $sourceExcludedPaths = @{}
                 $repeatPickCount = @{}
                 $srcIdx = 0
-                
+
                 foreach ($srcPath in $sourceRequests) {
                     $track = $usageTracker[$srcPath]
                     $folderData = $folderVideos[$srcPath]
-                    
+
                     # 首段固定：只有第一个源在第一次尝试时选定，后续所有重试轮复用同一视频（srcIdx==0 是首段）
                     if ($retryCount -gt 0 -and $srcIdx -eq 0 -and $firstPickVideo) {
                         $tempParts += $firstPickVideo.Video
@@ -1145,7 +1151,16 @@ try {
                         $srcIdx++
                         continue
                     }
-                    
+
+                    # 渐进沿用：非目标源且上轮已有该源选择 → 直接复用上轮结果（重复轮次只动目标源）
+                    if ($retryCount -gt 0 -and $retryTargetSrc -ne $srcIdx -and $staleParts[$srcIdx] -and -not $exhaustedSrcs.ContainsKey($srcIdx)) {
+                        $tempParts += $staleParts[$srcIdx]
+                        $totalDuration += $staleParts[$srcIdx].Duration
+                        $tempUpdatePlans += $stalePlans[$srcIdx]
+                        $srcIdx++
+                        continue
+                    }
+
                     $excludedSubs = @()
                     if ($sourceExcludedSubGroups.ContainsKey($srcPath)) {
                         $excludedSubs = $sourceExcludedSubGroups[$srcPath]
@@ -1160,44 +1175,59 @@ try {
                         if (-not $excludedFiles) { $excludedFiles = @() }
                         $excludedFiles = @($excludedFiles + @($retryExcluded.Keys | Where-Object { $_.StartsWith($retryKey + '|') } | ForEach-Object { $_.Substring($retryKey.Length + 1) }))
                     }
-                    
+
                     $isRepeat = $repeatPaths -contains $srcPath
                     if ($isRepeat) {
                         if (-not $repeatPickCount.ContainsKey($srcPath)) { $repeatPickCount[$srcPath] = 0 }
                         $pickSeq = $repeatPickCount[$srcPath] + 1
                     }
-                    # 首个源用普通随机均衡选择（保开头分布）；其余源重试第4次起倾向取短片段压低时长
-                    $preferShort = $srcIdx -gt 0 -and $retryCount -gt 2
+                    # 时长感知：重试轮/替换轮对非首段强制最短优先（原为第4轮起，提前收紧加速收敛）
+                    $preferShort = $srcIdx -gt 0 -and $retryCount -gt 0
                     $result = Select-Video -Folder $srcPath -Track $track -FolderData $folderData -ExcludedPaths $excludedFiles -ExcludedSubGroups $excludedSubs -PreferShort:$preferShort
                     if (-not $result) {
                         $allValid = $false
+                        $failSrcIdx = $srcIdx
                         break
                     }
                     if ($srcIdx -eq 0 -and -not $firstPickVideo) { $firstPickVideo = $result }  # 记录首段（含其 UpdatePlan，供重试轮复用）
                     $tempParts += $result.Video
                     $totalDuration += $result.Video.Duration
                     $tempUpdatePlans += $result.UpdatePlan
-                    
+
                     if ($isRepeat) {
                         $subGroupName = if ($result.UpdatePlan.SelectedGroup) { $result.UpdatePlan.SelectedGroup } else { "(根目录)" }
                         Write-Host "🔁 [重复源] 第 $pickSeq 次选取: $subGroupName\$($result.Video.Name)" -ForegroundColor Magenta
                         $repeatPickCount[$srcPath] = $pickSeq
                     }
-                    
+
                     if ($result.UpdatePlan.SelectedGroup) {
                         if (-not $sourceExcludedSubGroups.ContainsKey($srcPath)) { $sourceExcludedSubGroups[$srcPath] = @() }
                         $sourceExcludedSubGroups[$srcPath] += $result.UpdatePlan.SelectedGroup
                     }
                     if (-not $sourceExcludedPaths.ContainsKey($srcPath)) { $sourceExcludedPaths[$srcPath] = @() }
                     $sourceExcludedPaths[$srcPath] += $result.Video.FullName
+
+                    $staleParts[$srcIdx] = $result.Video
+                    $stalePlans[$srcIdx] = $result.UpdatePlan
                     $srcIdx++
                 }
-                
+
                 if (-not $allValid) {
-                    Write-Host "❌ 存在源无可用视频，第 $($retryCount+1)/$MaxRetry 次重试" -ForegroundColor Red
-                    continue
+                    if ($retryCount -gt 0) {
+                        # 目标源无可用候选：标记耗尽，改试「未耗尽中时长最长」的源继续渐进（静默，不逐轮刷日志）
+                        $exhaustedSrcs[$failSrcIdx] = $true
+                        $retryTargetSrc = -1
+                        $maxDur = -1
+                        for ($pi = 1; $pi -lt $sourceRequests.Count; $pi++) {
+                            if ($exhaustedSrcs.ContainsKey($pi)) { continue }
+                            if ($tempParts[$pi] -and $tempParts[$pi].Duration -gt $maxDur) { $maxDur = $tempParts[$pi].Duration; $retryTargetSrc = $pi }
+                        }
+                        if ($retryTargetSrc -lt 0) { break }  # 所有源均已无可替换片段，交由下方统一失败处理
+                        continue
+                    }
+                    continue  # 首轮失败：静默进入渐进替换
                 }
-                
+
                 if ($totalDuration -le $maxAllowedEstimate) {
                     if ($totalDuration -le $MaxTotalDurationSec) {
                         # 时长校验通过：不再单独输出（具体时长另有输出，校验失败时也有独立失败行，避免重复）
@@ -1205,17 +1235,29 @@ try {
                     else {
                         Write-Host "⚠️  预估时长 $totalDuration 秒 超过设定值但未超过阈值 $(($SpeedThreshold - 1) * 100)%，后续将加速处理" -ForegroundColor Yellow
                     }
+                    # 重试过程静默，达标后仅汇总一次（避免每次重试都刷一行日志）
+                    if ($retryCount -gt 0) {
+                        Write-Host "⚠️  该成片经 $retryCount 轮渐进替换后达标（总时长 $totalDuration 秒）" -ForegroundColor Yellow
+                    }
                     $selectedParts = $tempParts
                     $updatePlans = $tempUpdatePlans
                     $foundCombination = $true
                     break
                 }
                 else {
-                    # 时长超限：记录本轮选择的非首段排除（下次避开这些超时组合），保证每轮是有效新组合
+                    # 时长超限：记录失败记忆 + 存沿用基础 + 定下一轮目标源（非首段中最长，未耗尽）；逐轮过程静默
                     for ($pi = 1; $pi -lt $sourceRequests.Count; $pi++) {
                         if ($pi -lt $tempParts.Count) { $retryExcluded[[string]$sourceRequests[$pi] + '|' + $tempParts[$pi].FullName] = $true }
+                        $staleParts[$pi] = $tempParts[$pi]
+                        $stalePlans[$pi] = $tempUpdatePlans[$pi]
                     }
-                    Write-Host "❌ 时长超限（总时长：$totalDuration 秒 > 最大允许 $maxAllowedEstimate 秒），第 $($retryCount+1)/$MaxRetry 次重试" -ForegroundColor Red
+                    $retryTargetSrc = -1
+                    $maxDur = -1
+                    for ($pi = 1; $pi -lt $sourceRequests.Count; $pi++) {
+                        if ($exhaustedSrcs.ContainsKey($pi)) { continue }
+                        if ($tempParts[$pi] -and $tempParts[$pi].Duration -gt $maxDur) { $maxDur = $tempParts[$pi].Duration; $retryTargetSrc = $pi }
+                    }
+                    if ($retryTargetSrc -lt 0) { break }  # 所有候选均已尝试仍超时长，交由下方统一失败处理
                 }
             }
             

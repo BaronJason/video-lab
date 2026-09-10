@@ -1,7 +1,7 @@
 {
   "name": "video-lab",
   "version": "1.8.0",
-  "description": "Video Lab — 批量成片项目管理",
+  "description": "Video Lab",
   "author": "Video Lab",
   "main": "main.js",
   "scripts": {
@@ -74,8 +74,8 @@
     }
   },
   "devDependencies": {
-    "electron": "33.4.11",
-    "electron-builder": "^25.1.8"
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3"
   },
   "dependencies": {
     "electron-updater": "^6.8.9"

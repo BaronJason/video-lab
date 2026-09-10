@@ -3,6 +3,11 @@
  */
 (function () {
   'use strict';
+  // 数字输入框：禁用滚轮滚动改值（仅保留手动输入）
+  document.addEventListener('wheel', function (ev) {
+    var t = ev.target;
+    if (t && t.tagName === 'INPUT' && (t.type === 'number' || t.type === 'range')) ev.preventDefault();
+  }, { passive: false });
   function $(id) { return document.getElementById(id); }
   function getApi() { return window.txapi || null; }
   function call(method) {

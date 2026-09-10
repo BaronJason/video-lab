@@ -4,6 +4,12 @@
 (function () {
   'use strict';
 
+  // 数字输入框：禁用滚轮滚动改值（仅保留手动输入）
+  document.addEventListener('wheel', function (ev) {
+    var t = ev.target;
+    if (t && t.tagName === 'INPUT' && (t.type === 'number' || t.type === 'range')) ev.preventDefault();
+  }, { passive: false });
+
   // 图标统一来自 icons.js 全局库（硬约束：不在业务文件维护 ICONS/icon 副本）
   function icon(name, size, cls) { return window.VL_icon ? window.VL_icon(name, size, cls) : ''; }
   function hydrateIcons(root) { if (window.VL_hydrateIcons) window.VL_hydrateIcons(root); }

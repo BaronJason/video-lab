@@ -163,6 +163,8 @@ function startHttpServer(opts) {
       const result = await dialog.showOpenDialog(win || undefined, { title: '选择文件夹（将递归扫描其中视频）', defaultPath: api.getRoot(), properties: ['openDirectory', 'multiSelections'] });
       return result.canceled || !result.filePaths || result.filePaths.length === 0 ? [] : result.filePaths;
     },
+    resolve_shortcut: async (args) => api.resolveShortcut(args[0]),
+    mask_add_source: async (args) => api.maskAddSource(args[0], args[1]),
     pick_single_folder: async () => {
       const win = getMainWin();
       const result = await dialog.showOpenDialog(win || undefined, { title: '选择要修改为的文件夹', defaultPath: api.getRoot(), properties: ['openDirectory'] });

@@ -5,6 +5,12 @@
   var $ = function (id) { return document.getElementById(id); };
   var api = window.txapi;
 
+  // 数字输入框：禁用滚轮滚动改值（仅保留手动输入）
+  document.addEventListener('wheel', function (ev) {
+    var t = ev.target;
+    if (t && t.tagName === 'INPUT' && (t.type === 'number' || t.type === 'range')) ev.preventDefault();
+  }, { passive: false });
+
   var THEMES = [
     { id: 'white_blue', label: '白蓝', bg: '#F5F5F5', theme: '#4B3FE3' },
     { id: 'Black_Orange', label: '黑橙', bg: '#111113', theme: '#FF6600' },

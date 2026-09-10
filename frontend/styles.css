@@ -854,6 +854,10 @@ pre {
     .ds-input input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
     .ds-input input[type="number"]::-webkit-outer-spin-button,
     .ds-input input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    /* 全站数字输入框：隐藏右侧上下步进按钮，仅保留输入（各类输入框统一） */
+    input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
+    input[type="number"]::-webkit-outer-spin-button,
+    input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
     .ds-input input::placeholder { color: var(--text-tertiary); }
     .ds-input input:disabled { color: var(--text-disabled); cursor: not-allowed; }
     .ds-input.is-error { border-color: var(--status-error-default); }
@@ -1735,7 +1739,7 @@ body[data-preview-collapsed] .center-global-search .ds-input {
   cursor: pointer;
   box-shadow: 0 2px 8px color-mix(in srgb, var(--text-default) 14%, transparent);
   transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease, transform 0.12s ease;
-  z-index: 6;
+  z-index: 40; /* 高于 .center-global-search(30)：折叠态搜索栏横向铺到右缘时不被其盖住 */
 }
 .preview-collapse-round:hover {
   background: var(--bg-base-tertiary);

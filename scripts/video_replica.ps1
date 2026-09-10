@@ -222,8 +222,13 @@ function Get-NumberSuffix {
 }
 
 function Select-ReplacementVideo {
-    param([string]$OriginalPath, [array]$Exclude = @(), [switch]$PreferShort)
+    param([string]$OriginalPath, [array]$Exclude = @(), [switch]$PreferShort, [double]$ShorterThan = 0)
     $cands = @(Get-SameDirVideoCandidates -VideoPath $OriginalPath | Where-Object { $_.FullName -notin $Exclude })
+    # 只接受更短候选（渐进压时长用）：没有更短片段时替换不会降低总时长，
+    # 硬换只会逐轮空转并把同目录候选耗尽，故此处先过滤，返回空由调用方标记该段耗尽
+    if ($ShorterThan -gt 0) {
+        $cands = @($cands | Where-Object { (Get-CachedVideoInfo -VideoPath $_.FullName).Duration -lt $ShorterThan })
+    }
     if ($cands.Count -eq 0) { return @($null, $false) }
     $origSuffix = Get-NumberSuffix -Path $OriginalPath
     $sameSuffix = @()
@@ -605,7 +610,7 @@ function Invoke-ReplicaFromLog {
                     if ($longestIdx -lt 0) { $durOk = $false; break }
                     $workKey = [string]$workVideos[$longestIdx]
                     $exclude = @($triedSubs.Keys | Where-Object { $_ -like "$workKey|*" } | ForEach-Object { $_.Substring($workKey.Length + 1) })
-                    $sel = Select-ReplacementVideo -OriginalPath $workVideos[$longestIdx] -Exclude $exclude -PreferShort
+                    $sel = Select-ReplacementVideo -OriginalPath $workVideos[$longestIdx] -Exclude $exclude -PreferShort -ShorterThan $longestDur
                     if (-not $sel[0]) { $exhaustedIdx[$longestIdx] = $true; continue }
                     $newVideos = @($workVideos)
                     $newVideos[$longestIdx] = $sel[0]

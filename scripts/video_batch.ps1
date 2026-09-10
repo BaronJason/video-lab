@@ -311,7 +311,11 @@ function Select-Video {
         $FolderData,
         [array]$ExcludedPaths = @(),
         [array]$ExcludedSubGroups = @(),
-        [switch]$PreferShort
+        [switch]$PreferShort,
+        # 只接受时长严格短于该值（秒）的候选；0=不限制。
+        # 渐进替换据此判断「该源是否存在更短片段」：没有更短候选时换片段不会降低总时长，
+        # 返回 $null 让调用方标记该源耗尽、改试其它源（避免素材等长时逐轮空换把整源排除干净）
+        [double]$ShorterThan = 0
     )
     
     $plan = [PSCustomObject]@{
@@ -330,22 +334,30 @@ function Select-Video {
             [hashtable]$UsedCount,
             [array]$RoundUsed,
             [array]$Exclude,
-            [switch]$PreferShort
+            [switch]$PreferShort,
+            [double]$ShorterThan = 0
         )
         $candidates = @($FileList | Where-Object { $_.FullName -notin $RoundUsed -and $_.FullName -notin $Exclude })
+        if ($ShorterThan -gt 0) {
+            $candidates = @($candidates | Where-Object { (Get-CachedVideoInfo -VideoPath $_.FullName).Duration -lt $ShorterThan })
+        }
         if ($candidates.Count -eq 0) { return $null }
         $minCount = $candidates | ForEach-Object { $UsedCount[$_.FullName] } | Measure-Object -Minimum | Select-Object -ExpandProperty Minimum
         $minFiles = @($candidates | Where-Object { $UsedCount[$_.FullName] -eq $minCount })
         # 时长感知（重试轮）：同频次候选中优先取最短，压低总时长，减少超限重试
         if ($PreferShort) {
-            return @($minFiles | Sort-Object { (Get-CachedVideoInfo -VideoPath $_.FullName).Duration })[0]
+            $sorted = @($minFiles | Sort-Object { (Get-CachedVideoInfo -VideoPath $_.FullName).Duration })
+            $shortest = (Get-CachedVideoInfo -VideoPath $sorted[0].FullName).Duration
+            # 时长并列时随机取（排序对相同键的输出是确定的，直接取 [0] 会长期锁定同一个文件）
+            $tied = @($sorted | Where-Object { (Get-CachedVideoInfo -VideoPath $_.FullName).Duration -le $shortest })
+            return $tied | Get-Random
         }
         return $minFiles | Get-Random
     }
     
     if ($FolderData.SubGroupList.Count -le 1) {
         $allFiles = $FolderData.AllVideos
-        $selectedVideo = Select-VideoCandidate -FileList $allFiles -UsedCount $Track.UsedCount -RoundUsed $Track.RoundUsed -Exclude $ExcludedPaths -PreferShort:$PreferShort
+        $selectedVideo = Select-VideoCandidate -FileList $allFiles -UsedCount $Track.UsedCount -RoundUsed $Track.RoundUsed -Exclude $ExcludedPaths -PreferShort:$PreferShort -ShorterThan $ShorterThan
         if ($selectedVideo) {
             $plan.SelectedGroup = $null
             $plan.IncrementSubUsage = $null
@@ -354,7 +366,7 @@ function Select-Video {
         else {
             $plan.NewRound = $Track.Round + 1
             $plan.NewRoundUsed = @()
-            $selectedVideo = Select-VideoCandidate -FileList $allFiles -UsedCount $Track.UsedCount -RoundUsed @() -Exclude $ExcludedPaths -PreferShort:$PreferShort
+            $selectedVideo = Select-VideoCandidate -FileList $allFiles -UsedCount $Track.UsedCount -RoundUsed @() -Exclude $ExcludedPaths -PreferShort:$PreferShort -ShorterThan $ShorterThan
             if ($selectedVideo) {
                 $plan.SelectedGroup = $null
                 $plan.IncrementSubUsage = $null
@@ -416,7 +428,7 @@ function Select-Video {
         $selectedGroup = $bestGroups | Get-Random
         
         $allFiles = $FolderData.SubGroups[$selectedGroup]
-        $selectedVideo = Select-VideoCandidate -FileList $allFiles -UsedCount $Track.UsedCount -RoundUsed $Track.RoundUsed -Exclude $ExcludedPaths -PreferShort:$PreferShort
+        $selectedVideo = Select-VideoCandidate -FileList $allFiles -UsedCount $Track.UsedCount -RoundUsed $Track.RoundUsed -Exclude $ExcludedPaths -PreferShort:$PreferShort -ShorterThan $ShorterThan
         
         if ($selectedVideo) {
             $plan.SelectedGroup = $selectedGroup
@@ -435,7 +447,7 @@ function Select-Video {
         $plan.NewSubRound = $FolderData.SubRound + 1
         $plan.NewSubUsedInRound = @()
         $allFiles = $FolderData.AllVideos
-        $selectedVideo = Select-VideoCandidate -FileList $allFiles -UsedCount $Track.UsedCount -RoundUsed @() -Exclude $ExcludedPaths -PreferShort:$PreferShort
+        $selectedVideo = Select-VideoCandidate -FileList $allFiles -UsedCount $Track.UsedCount -RoundUsed @() -Exclude $ExcludedPaths -PreferShort:$PreferShort -ShorterThan $ShorterThan
         if ($selectedVideo) {
             $plan.SelectedGroup = $null
             $plan.IncrementSubUsage = $null
@@ -1186,7 +1198,13 @@ try {
                     }
                     # 时长感知：重试轮/替换轮对非首段强制最短优先（原为第4轮起，提前收紧加速收敛）
                     $preferShort = $srcIdx -gt 0 -and $retryCount -gt 0
-                    $result = Select-Video -Folder $srcPath -Track $track -FolderData $folderData -ExcludedPaths $excludedFiles -ExcludedSubGroups $excludedSubs -PreferShort:$preferShort
+                    # 替换目标源只接受更短片段：该源没有更短候选时换片段不会降低总时长（素材等长场景尤其明显），
+                    # 硬换只会逐轮排除候选、最终反复用同一个文件；此处返回空由调用方标记该源耗尽、改试其它源
+                    $shorterThan = 0
+                    if ($preferShort -and $retryTargetSrc -eq $srcIdx -and $staleParts[$srcIdx]) {
+                        $shorterThan = [double]$staleParts[$srcIdx].Duration
+                    }
+                    $result = Select-Video -Folder $srcPath -Track $track -FolderData $folderData -ExcludedPaths $excludedFiles -ExcludedSubGroups $excludedSubs -PreferShort:$preferShort -ShorterThan $shorterThan
                     if (-not $result) {
                         $allValid = $false
                         $failSrcIdx = $srcIdx

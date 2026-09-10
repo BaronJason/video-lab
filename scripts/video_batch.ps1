@@ -1124,8 +1124,9 @@ try {
             $retryExcluded = @{}  # 跨轮失败记忆：已试过且超时限的「源|视频路径」，下轮显式避开，避免重复随机
             # ── 渐进替换（方案A）：超限后不再整组重摇，只替换「时长最长的非首段源」为更短片段，其余源沿用上轮选择 ──
             $retryTargetSrc = -1    # 上轮超限指定的待替换源索引（-1=整组重建，仅首轮）
-            $staleParts = @()       # [srcIdx] 上轮每源 Video 对象（沿用基础）
-            $stalePlans = @()       # [srcIdx] 上轮每源 UpdatePlan
+            # 用哈希表按 srcIdx 存（定长数组按下标写入越界会抛 IndexOutOfRangeException）
+            $staleParts = @{}       # [srcIdx] 上轮每源 Video 对象（沿用基础）
+            $stalePlans = @{}       # [srcIdx] 上轮每源 UpdatePlan
             $exhaustedSrcs = @{}    # 已无可换候选的源索引（快速失败/改试次长源）
             for ($retryCount = 0; $retryCount -lt $MaxRetry; $retryCount++) {
                 $tempParts = @()
@@ -1152,8 +1153,9 @@ try {
                         continue
                     }
 
-                    # 渐进沿用：非目标源且上轮已有该源选择 → 直接复用上轮结果（重复轮次只动目标源）
-                    if ($retryCount -gt 0 -and $retryTargetSrc -ne $srcIdx -and $staleParts[$srcIdx] -and -not $exhaustedSrcs.ContainsKey($srcIdx)) {
+                    # 渐进沿用：非目标源且上轮已有该源选择 → 直接复用上轮结果（重复轮次只动目标源；
+                    # 已耗尽源同样沿用上轮片段，仅不再作为替换目标，否则每轮都会在它身上重新失败）
+                    if ($retryCount -gt 0 -and $retryTargetSrc -ne $srcIdx -and $staleParts[$srcIdx]) {
                         $tempParts += $staleParts[$srcIdx]
                         $totalDuration += $staleParts[$srcIdx].Duration
                         $tempUpdatePlans += $stalePlans[$srcIdx]
@@ -1215,12 +1217,18 @@ try {
                 if (-not $allValid) {
                     if ($retryCount -gt 0) {
                         # 目标源无可用候选：标记耗尽，改试「未耗尽中时长最长」的源继续渐进（静默，不逐轮刷日志）
+                        # 该源从未选到片段（无沿用基础）说明确实无素材，替换其它源也补不齐，直接失败
+                        if (-not $staleParts[$failSrcIdx]) { break }
                         $exhaustedSrcs[$failSrcIdx] = $true
                         $retryTargetSrc = -1
                         $maxDur = -1
                         for ($pi = 1; $pi -lt $sourceRequests.Count; $pi++) {
                             if ($exhaustedSrcs.ContainsKey($pi)) { continue }
-                            if ($tempParts[$pi] -and $tempParts[$pi].Duration -gt $maxDur) { $maxDur = $tempParts[$pi].Duration; $retryTargetSrc = $pi }
+                            # 本轮在此处中断时 tempParts 不完整，回退用上轮沿用基础评估时长，避免误判为「全部耗尽」
+                            $dur = 0
+                            if ($tempParts[$pi]) { $dur = $tempParts[$pi].Duration }
+                            elseif ($staleParts[$pi]) { $dur = $staleParts[$pi].Duration }
+                            if ($dur -gt $maxDur) { $maxDur = $dur; $retryTargetSrc = $pi }
                         }
                         if ($retryTargetSrc -lt 0) { break }  # 所有源均已无可替换片段，交由下方统一失败处理
                         continue

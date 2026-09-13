@@ -1759,7 +1759,7 @@
     } else {
       var html = '';
       items.slice(0, 200).forEach(function (r) {
-        html += '<div class="search-dropdown__item" data-txt="' + escapeHtml(r.txtPath) + '" data-project="' + escapeHtml(r.project) + '" data-video="' + escapeHtml(r.video) + '">';
+        html += '<div class="search-dropdown__item" data-txt="' + escapeHtml(r.txtPath) + '" data-project="' + escapeHtml(r.project) + '" data-video="' + escapeHtml(r.video) + '" data-log="' + escapeHtml(r.logPath || '') + '">';
         html += '<div class="search-dropdown__title">' + escapeHtml(r.video) + '</div>';
         html += '<div class="search-dropdown__meta">' + escapeHtml(r.project) + ' / ' + escapeHtml(r.txtName) + ' / ' + escapeHtml(r.label) + '</div>';
         html += '</div>';
@@ -1775,8 +1775,9 @@
         var txt = it.getAttribute('data-txt');
         var proj = it.getAttribute('data-project');
         var video = it.getAttribute('data-video');
+        var log = it.getAttribute('data-log') || '';
         closeLogDropdown();
-        focusSearchResult(txt, proj, video);
+        focusSearchResult(txt, proj, video, log);
       });
     });
     setTimeout(function () {
@@ -1811,7 +1812,9 @@
       }).catch(function () { closeLogDropdown(); });
     }, 300);
   }
-  function focusSearchResult(txtPath, project, video) {
+  // 批量模式成片搜索：命中项点击后跳转并精确钉在目标日志文件（logPath），
+  // 避免 buildLogDateBranches 回退/残留选中其他日期分支（如最新日期）导致定错位
+  function focusSearchResult(txtPath, project, video, logPath) {
     state.focusVideo = video;
     state.activeProject = project;
     state.mode = 'log';
@@ -1820,6 +1823,9 @@
     state.logSearchQuery = '';
     var input = $('logSearchInput');
     if (input) input.value = video;
+    state._locateLogPath = logPath || null; // 与任务列表「定位至日志」同一机制：按实际文件精确匹配
+    state.activeLogPath = null;
+    state.activeLogDate = null;
     jumpToVersionPath(txtPath);
   }
   function highlightFocus(container) {

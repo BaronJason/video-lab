@@ -247,8 +247,7 @@ else {
         foreach ($mp in $allMasks) {
             $maskName = [System.IO.Path]::GetFileNameWithoutExtension($mp)
             $parentDir = Split-Path -Path $mp -Parent
-            $theme = Split-Path -Path $parentDir -Leaf
-            if ([string]::IsNullOrWhiteSpace($theme)) { $theme = $maskName }
+            $theme = $maskName
             $vidIdx = [Array]::IndexOf($allVideos, $vp) + 1
             # 模式1/3 命名：日期-项目名-遮罩名-后缀序号；放子文件夹。
             # 文件夹名 = 未加序号后缀的成片名先剥数字段，再附加后缀（后缀不参与剥除）

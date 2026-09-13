@@ -17,9 +17,16 @@ $LogDir = ""          # MASK_LOG_DIR       遮罩叠加日志目录（项目下�
 $OnlyNames = ""       # MASK_ONLY_NAMES    续跑过滤，分号分隔成片名；空=全部
 $SuffixMark = ""      # MASK_SUFFIX_MARK   成片名序号前的后缀（可空，参考批量模式 名称-后缀序号）
 $SubmitTs = 0         # MASK_SUBMIT_TS     提交时刻（跨天命名）
+$WmAlpha = 0.3        # MASK_WATERMARK_ALPHA 水印透明度（0.05-1；留空/非法用默认 0.3）
 $Script:HasError = $false
 
 if ($env:MASK_MODE) { try { $MaskMode = [int]$env:MASK_MODE } catch {} }
+if ($env:MASK_WATERMARK_ALPHA) {
+    try {
+        $alpha = [double]$env:MASK_WATERMARK_ALPHA
+        if ($alpha -ge 0.05 -and $alpha -le 1.0) { $WmAlpha = $alpha }
+    } catch {}
+}
 if ($env:MASK_RAW_DIRS) { $RawVideoDirs = [string]$env:MASK_RAW_DIRS }
 if ($env:MASK_VIDEOS) { $Videos = [string]$env:MASK_VIDEOS }
 if ($env:MASK_MASK_DIRS) { $MaskDirs = [string]$env:MASK_MASK_DIRS }
@@ -175,7 +182,7 @@ if ($MaskMode -ne 2) {
     }
 }
 if (-not (Test-Path -LiteralPath $OutputDir)) { New-Item -Path $OutputDir -ItemType Directory -Force | Out-Null }
-if ($MaskMode -ne 2 -and -not (Test-Path -LiteralPath $WatermarkMov)) {
+if ($MaskMode -ne 3 -and -not (Test-Path -LiteralPath $WatermarkMov)) {
     Invoke-ErrorAction -ErrorMessage "水印文件不存在：$WatermarkMov" -ErrorStep "参数校验"
     [Environment]::Exit(1)
 }
@@ -304,7 +311,7 @@ if ($MaskMode -eq 1) {
         Write-Host "`n🔧 预处理合并遮罩与水印：$maskName ..." -ForegroundColor Cyan
         $maskDur = Get-VideoDuration -Path $j.MaskPath
         if ($maskDur -le 0) { $maskDur = 5.0 }
-        $filterStr = "[0:v]trim=duration=$maskDur,setpts=PTS-STARTPTS[mask];[1:v]trim=duration=$maskDur,setpts=PTS-STARTPTS,colorchannelmixer=aa=0.3[wm];[mask][wm]overlay=0:0[outv]"
+        $filterStr = "[0:v]trim=duration=$maskDur,setpts=PTS-STARTPTS[mask];[1:v]trim=duration=$maskDur,setpts=PTS-STARTPTS,colorchannelmixer=aa=$WmAlpha[wm];[mask][wm]overlay=0:0[outv]"
         $ffmpegArgs = @("-y", "-loglevel", "error", "-stats",
             "-i", $j.MaskPath, "-i", $WatermarkMov,
             "-filter_complex", $filterStr,
@@ -368,7 +375,7 @@ try {
             $vidDur = Get-VideoDuration -Path $j.VidPath
             if ($vidDur -le 0) { $vidDur = 5.0 }
             $targetDur = $vidDur
-            $filterStr = "[0:v]trim=duration=$vidDur,setpts=PTS-STARTPTS[base];[1:v]trim=duration=$vidDur,setpts=PTS-STARTPTS,colorchannelmixer=aa=0.3[wm];[base][wm]overlay=0:0[outv]"
+            $filterStr = "[0:v]trim=duration=$vidDur,setpts=PTS-STARTPTS[base];[1:v]trim=duration=$vidDur,setpts=PTS-STARTPTS,colorchannelmixer=aa=$WmAlpha[wm];[base][wm]overlay=0:0[outv]"
             $ffmpegParam = @("-y", "-loglevel", "error", "-stats",
                 "-i", $j.VidPath, "-i", $WatermarkMov,
                 "-filter_complex", $filterStr,

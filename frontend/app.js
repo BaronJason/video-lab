@@ -2636,6 +2636,29 @@
       var label = btn.getAttribute('data-label'); var v = state.versions.find(function (x) { return x.label === label; }); if (v) call('open_folder_select', v.path);
     });
     document.addEventListener('contextmenu', function (e) {
+      // 遮罩模式日志日期分支：右键打开/移除该遮罩日志（样式与操作参考批量日志分支）
+      var mb = $('maskDateBranches');
+      if (mb && mb.contains(e.target)) {
+        var mbtn = e.target.closest('.date-branch-btn');
+        if (!mbtn) return;
+        e.preventDefault();
+        var mfp = mbtn.getAttribute('data-masklog');
+        if (!mfp) return;
+        showMenu(e.clientX, e.clientY, [
+          { label: '打开文件', action: function () { call('open_path', mfp); } },
+          { label: '打开路径', action: function () { call('open_folder_select', mfp); } },
+          { label: '移除该日志', action: function () {
+              showDialog({ title: '移除遮罩日志', message: '确定删除遮罩日志：\n' + mfp + '\n\n（移入回收站）', buttons: [ { label: '取消', value: 0 }, { label: '删除', value: 1, danger: true } ] }).then(function (v) {
+                if (v !== 1) return;
+                call('remove_branch', mfp, 'txt').then(function (r) {
+                  if (!(r && r.ok)) { setStatus('移除失败：' + ((r && r.error) || '未知错误')); return; }
+                  setStatus('已移除遮罩日志'); buildMaskLogView();
+                }).catch(function (err) { setStatus('移除失败：' + err.message); });
+              });
+          } }
+        ]);
+        return;
+      }
       var db = $('dateBranches'); if (!db || !db.contains(e.target)) return;
       var btn = e.target.closest('.date-branch-btn');
       if (!btn) return;
@@ -3473,7 +3496,7 @@
   }
   function maskResetSession() {
     maskState.project = null; maskState.rawDirs = []; maskState.rawSel = {};
-    maskState.themes = []; maskState.maskSel = {}; maskState.watermark = ''; maskState.outputDir = '';
+    maskState.themes = []; maskState.maskSel = {}; maskState.watermark = ''; maskState.watermarkAlpha = ''; maskState.outputDir = '';
     maskState.suffix = ''; maskState.maskLogBranch = '';
   }
   function maskFmtDur(sec) {
@@ -3639,10 +3662,11 @@
     buildMaskCenter();
     buildMaskConfigBar();
     refreshMaskProjects();
-    // 读取设置里的固定水印作为默认水印（界面不提供临时更换；读取后同步刷新底栏提示）
+    // 读取设置里的固定水印与透明度作为默认（界面不提供临时更换；读取后同步刷新底栏提示）
     call('get_settings').then(function (cfg) {
-      if (cfg && cfg.mask && cfg.mask.watermark_mov) {
-        maskState.watermark = cfg.mask.watermark_mov;
+      if (cfg && cfg.mask) {
+        if (cfg.mask.watermark_mov) maskState.watermark = cfg.mask.watermark_mov;
+        maskState.watermarkAlpha = (cfg.mask.watermark_alpha != null && String(cfg.mask.watermark_alpha).trim() !== '') ? String(cfg.mask.watermark_alpha).trim() : '';
         if (maskState.on) {
           if (maskState.view === 'config') buildMaskCenter();
           buildMaskConfigBar(); // 刷新「未选水印」等提示
@@ -3953,11 +3977,12 @@
         maskRerenderAfterRestore();
       }).catch(function () {});
     });
-    // 兜底：进入模式即选项目时默认水印可能尚未读入，补一次
+    // 兜底：进入模式即选项目时默认水印/透明度可能尚未读入，补一次
     if (!maskState.watermark) {
       call('get_settings').then(function (cfg) {
-        if (cfg && cfg.mask && cfg.mask.watermark_mov) {
-          maskState.watermark = cfg.mask.watermark_mov;
+        if (cfg && cfg.mask) {
+          if (cfg.mask.watermark_mov) maskState.watermark = cfg.mask.watermark_mov;
+          maskState.watermarkAlpha = (cfg.mask.watermark_alpha != null && String(cfg.mask.watermark_alpha).trim() !== '') ? String(cfg.mask.watermark_alpha).trim() : '';
           if (maskState.on) buildMaskConfigBar();
         }
       }).catch(function () {});
@@ -4868,6 +4893,7 @@
       masks: selMaskFull.join(';'),
       projectName: maskState.project ? maskState.project.name : '',
       watermark: maskState.watermark,
+      watermarkAlpha: maskState.watermarkAlpha || '',
       outputDir: maskEffectiveOutDir(),
       suffix: maskState.suffix || '',
       logDir: pathJoin(maskState.project.path, '遮罩日志')

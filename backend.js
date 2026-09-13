@@ -51,6 +51,7 @@ const DEFAULT_CONFIG = {
   mask: {
     root: '',            // 遮罩叠加项目工作路径（不允许复用批量拼接工作路径）
     watermark_mov: '',   // 固定水印 mov（模式1/2 默认水印，界面可临时更换）
+    watermark_alpha: '', // 水印透明度（0.05-1；留空用脚本默认 0.3）
   },
 };
 
@@ -2240,6 +2241,52 @@ class Api {
     }
   }
 
+  // 遮罩任务清除：从项目「遮罩日志」目录（MASK_LOG_DIR）的 *.txt 中移除目标成片的条目块。
+  // 遮罩日志块结构与复刻日志一致：成片名（.mp4）行开头，块含使用片段列表/原片/遮罩/@out/分隔线
+  _removeMaskLogBlocks(task, videoPaths) {
+    const logDir = String((task && task.env && task.env.MASK_LOG_DIR) || '').trim();
+    if (!logDir || !fs.existsSync(logDir) || !fs.statSync(logDir).isDirectory()) return;
+    if (!Array.isArray(videoPaths) || !videoPaths.length) return;
+    const bases = new Set();
+    for (const v of videoPaths) {
+      try { const b = path.basename(String(v)); if (b) bases.add(b); } catch (e) {}
+    }
+    if (!bases.size) return;
+    let files = [];
+    try {
+      files = fs.readdirSync(logDir).filter((f) => /遮罩日志\.txt$/.test(String(f)) && fs.statSync(path.join(logDir, f)).isFile());
+    } catch (e) { return; }
+    for (const f of files) {
+      const lp = path.join(logDir, f);
+      try {
+        const lines = fs.readFileSync(lp, 'utf-8').split('\n');
+        const starts = [];
+        for (let i = 0; i < lines.length; i++) {
+          const ln = (lines[i] || '').trimEnd();
+          if (ln.endsWith('.mp4') && !ln.includes('\\') && !ln.includes('/')) starts.push(i);
+        }
+        const delStarts = new Set();
+        for (const si of starts) if (bases.has((lines[si] || '').trimEnd())) delStarts.add(si);
+        if (!delStarts.size) continue;
+        const delIdx = new Set();
+        for (let k = 0; k < starts.length; k++) {
+          const si = starts[k];
+          if (!delStarts.has(si)) continue;
+          const end = k + 1 < starts.length ? starts[k + 1] : lines.length;
+          for (let i = si; i < end; i++) delIdx.add(i);
+          let p = si - 1;
+          while (p >= 0 && !(lines[p] || '').trim()) p--;
+          if (p >= 0 && /^=+$/.test((lines[p] || '').trimEnd())) delIdx.add(p);
+        }
+        const out = [];
+        for (let i = 0; i < lines.length; i++) if (!delIdx.has(i)) out.push(lines[i]);
+        while (out.length && !(out[out.length - 1] || '').trim()) out.pop();
+        if (!out.some((l) => (l || '').trim())) { try { fs.unlinkSync(lp); } catch (e) {} }
+        else fs.writeFileSync(lp, out.join('\n'), 'utf-8');
+      } catch (e) {}
+    }
+  }
+
   // 删除失败任务在磁盘上遗留的产物（无任务标记时的回退方案）：
   // 1) 任务日志中「✅ 成片完成：」明确列出的成片文件；
   _removeTaskArtifacts(task) {
@@ -2401,7 +2448,10 @@ class Api {
           try { if (p && fs.existsSync(p)) await trash(p); }
           catch (e) { errors.push('清除成片失败：' + p); }
         }
-        if (scope === 'all' || scope === 'video') this._removeLogEntries(uniq);
+        if (scope === 'all' || scope === 'video') {
+          this._removeLogEntries(uniq);
+          this._removeMaskLogBlocks(t, uniq); // 遮罩任务：从项目遮罩日志中移除该批成片的条目块
+        }
       }
     }
     this._emitTasks();
@@ -3206,11 +3256,20 @@ class Api {
       MASK_PROJECT_NAME: String((p && p.projectName) || '').trim(),
       MASK_SUFFIX_MARK: String((p && p.suffix) || '').trim(),
       MASK_LOG_DIR: String((p && p.logDir) || '').trim(),
+      MASK_WATERMARK_ALPHA: this._maskWmAlphaString(p && p.watermarkAlpha),
       MASK_SUBMIT_TS: String(Date.now()),
       VL_CACHE_DIR: this.videoCachePath ? path.dirname(this.videoCachePath) : '',
     };
     const task = this._enqueueTask(this._createTask('mask', title, script, env, dirs[0]));
     return { ok: true, taskId: task.id };
+  }
+
+  // 遮罩水印透明度解析：任务传入值优先，其次设置页配置；留空/非法回退脚本默认 0.3
+  _maskWmAlphaString(v) {
+    let raw = (v == null || String(v).trim() === '') ? this.config.mask.watermark_alpha : v;
+    const n = parseFloat(String(raw == null ? '' : raw));
+    if (!(n >= 0.05 && n <= 1)) return '0.3';
+    return String(n);
   }
 
   // 断点续跑：失败/中断/停止的遮罩叠加任务，仅续跑失败成片（MASK_ONLY_NAMES 过滤），不删已成功产物

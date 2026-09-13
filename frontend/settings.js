@@ -19,7 +19,7 @@
   var state = {
     batch: { max_duration: '', max_retry: '', speed_limit: '', txt_prefix: '', producer: '', suffix_mark: '' },
     replica: { max_duration: '', speed_limit: '', dedup_ratio: '' },
-    mask: { root: '', watermark_mov: '' }
+    mask: { root: '', watermark_mov: '', watermark_alpha: '' }
   };
   // 保存按钮启用跟踪：记录加载后的原始值，任意一行变动即高亮该行并启用保存
   var origValues = {};
@@ -291,6 +291,7 @@
       var mk = s.mask || {};
       $('maskRoot').value = mk.root || '';
       $('maskWatermark').value = mk.watermark_mov || '';
+      $('maskAlpha').value = mk.watermark_alpha != null && String(mk.watermark_alpha).trim() !== '' ? mk.watermark_alpha : '';
       updatePreview();
       captureOriginals();
       recomputeDirty();
@@ -393,6 +394,7 @@
       state.replica.dedup_ratio = $('replicaDedupRatio').value.trim();
       state.mask.root = $('maskRoot').value.trim();
       state.mask.watermark_mov = $('maskWatermark').value.trim();
+      state.mask.watermark_alpha = $('maskAlpha').value.trim();
 
       var missing = [];
       var bn = ['max_duration', 'max_retry', 'speed_limit'];

@@ -4038,7 +4038,7 @@
         '<button type="button" class="mask-config__addbtn" id="maskAddThemeFile" title="添加单个遮罩文件（.mov）">' + icon('plus', 12) + '添加文件</button>' +
         '<button type="button" class="mask-config__addbtn" id="maskAddThemeDir" title="添加遮罩文件夹（其中 .mov 递归扫描）">' + icon('plus', 12) + '添加文件夹</button></div><div class="mask-config__list">';
       if (!maskState.themes.length) {
-        html += '<div class="mask-config__hint mask-config__hint--center">项目下没有遮罩文件夹，请放入含 mov 的文件夹后刷新</div>';
+        html += '<div class="mask-config__hint mask-config__hint--center">项目下没有遮罩文件夹，请放入含 mov 的主题文件夹后刷新</div>';
       } else {
         html += '<div id="maskAllGroups"><div class="mask-files__loading mask-files__loading--bar">正在扫描遮罩…</div></div>';
       }

@@ -1967,6 +1967,7 @@ class Api {
       }
       if (data.planSeq > this._planSeq) this._planSeq = data.planSeq;
       if (this.tasks.size) this._emitTasks();
+      this._gcOrphanMarkers(); // 任务恢复完成后回收孤儿标记（任务不存在的残留，含旧版命名）
     } catch (e) {}
   }
   // 退出前收尾：运行中→已中断，排队→暂停（后由 persistTasks 落盘）
@@ -2122,6 +2123,24 @@ class Api {
   _removeMarker(task) {
     const p = this._markerPath(task);
     try { if (p && fs.existsSync(p)) fs.unlinkSync(p); } catch (e2) {}
+  }
+  // 孤儿任务标记回收：标记文件对应的任务已不存在于列表（清除/旧版遗留）时删除；
+  // 仍存在的任务（含 done 历史，供「清除成片/日志」精确删除）标记保留。兼容旧版 .video-lab-mark-* 命名
+  _gcOrphanMarkers() {
+    const dir = this._markerDir();
+    if (!dir || !fs.existsSync(dir)) return;
+    const known = new Set(this.tasks.keys());
+    let removed = 0;
+    try {
+      for (const f of fs.readdirSync(dir)) {
+        if (!/\.json$/i.test(f)) continue;
+        const m = /^(?:\.video-lab-)?mark-(.+)\.json$/i.exec(f);
+        if (!m) continue;
+        if (known.has(m[1])) continue;
+        try { fs.unlinkSync(path.join(dir, f)); removed++; } catch (e) {}
+      }
+    } catch (e) {}
+    if (removed) console.log('[cache] 已回收孤儿任务标记 ' + removed + ' 个');
   }
   // 任务真正开始执行时初始化标记（含 env 快照，重开可完整还原环境）
   _touchMarker(task) {

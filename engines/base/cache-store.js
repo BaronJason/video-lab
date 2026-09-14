@@ -53,8 +53,15 @@ class CacheStore {
     this._inTx = false;
   }
 
-  open() {
+  // readOnly：只读用途（如 replica 仅消费缓存）不得建表 / 写 meta / 改 journal_mode ——
+  // 否则一次「读缓存」就会改动调用方并不拥有的库（曾因此把运行中的 clip_cache.db 写脏）。
+  open(opts) {
+    const readOnly = !!(opts && opts.readOnly);
     if (this._db && !this._db.closed) return this._db;
+    if (readOnly) {
+      this._db = new DatabaseSync(this.dbPath, { readOnly: true });
+      return this._db;
+    }
     fs.mkdirSync(path.dirname(this.dbPath), { recursive: true });
     this._db = new DatabaseSync(this.dbPath);
     // WAL：backend（主进程）与引擎（子进程）会同时读写同一个库，WAL + busy_timeout 是并发安全的前提；

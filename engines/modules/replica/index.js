@@ -485,6 +485,9 @@ async function run(ctx, env = process.env) {
 
   // ── 互斥锁（PS 用 Global\VideoBatchMutex；Node 用文件锁，协议行保持一致） ──
   // 顺序对齐 PS1：先输出锁行，再输出总数行（video_replica.ps1 为「已获取互斥锁」→「开始日志复刻，共 N 个成片」）
+  // 等待行：PS1 的 replica 缺此态，但 batch/mask 均有，backend 也用 /等待获取互斥锁/ 显示排队中；
+  // 三脚本原为独立存在、行为不同步，此处按「无实质理由即统一」补齐
+  logger.lockWaiting();
   const lock = await acquireLock(path.join(outRoot, '.video-lab-replica.lock'));
   logger.lockAcquired('开始复刻任务');
 

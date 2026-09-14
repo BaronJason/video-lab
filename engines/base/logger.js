@@ -53,7 +53,9 @@ class Logger {
   }
 
   // 锁状态
-  lockWaiting() { this.raw('等待获取互斥锁'); }
+  // suffix 用于对齐各脚本原文（如 batch 的「等待获取互斥锁，准备拼接...」）；
+  // backend 用 /等待获取互斥锁/ 匹配，故三模块统一走本方法、仅 suffix 不同
+  lockWaiting(suffix) { this.raw('等待获取互斥锁' + (suffix ? '，' + suffix : '')); }
   lockAcquired(msg) { this.raw('🔒 已获取互斥锁' + (msg ? '，' + msg : '')); }
   lockReleased() { this.raw('🔓 互斥锁已释放'); }
 

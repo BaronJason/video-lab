@@ -909,7 +909,7 @@ async function run(ctx, env = process.env) {
 
   // ── 互斥锁（backend 已串行；此处为兜底，语义与 PS 一致） ──
   logger.info('');
-  logger.info('等待获取互斥锁，准备拼接...');
+  logger.lockWaiting('准备拼接...');
   const lockPath = path.join(cacheDir, '.video-lab-batch.lock');
   let lock = null;
   try {

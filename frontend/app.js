@@ -1568,7 +1568,12 @@
       html += '</div>';
       container.innerHTML = html;
       bindLogListScroll(container);
-      highlightFocus(container);
+      // 搜索跳转定位：列表可能被异步再次渲染覆盖展开，窗口期内反复维持展开（幂等），窗口结束才消费焦点
+      (function retryFocus(cont, tries) {
+        highlightFocus(cont);
+        if (tries > 1) setTimeout(function () { retryFocus(cont, tries - 1); }, 300);
+        else state.focusVideo = null;
+      })(container, 8);
     }).catch(function (e) { container.innerHTML = '<div class="center-empty">' + icon('search-x', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">加载日志失败：' + escapeHtml(e.message) + '</span></div>'; });
     container.oncontextmenu = function (e) {
       var clip = e.target.closest('.log-entry__clip');
@@ -1830,11 +1835,17 @@
   }
   function highlightFocus(container) {
     var fv = state.focusVideo;
-    if (fv == null || !container) return;
-    state.focusVideo = null;
+    if (fv == null || !container) return false;
+    var fvBase = String(fv).replace(/\.[^.]+$/, '');
     var el = null;
-    container.querySelectorAll('.log-entry').forEach(function (e) { if (e.dataset.video === fv) el = e; });
-    if (!el) return;
+    // 匹配忽略扩展名：搜索结果与日志条目可能一个带 .mp4 一个不带
+    container.querySelectorAll('.log-entry').forEach(function (e) {
+      if (el) return;
+      var v = String(e.getAttribute('data-video') || '').replace(/\.[^.]+$/, '');
+      if (v === fvBase) el = e;
+    });
+    // 未找到目标（异步渲染未就绪）：保留焦点，由调用方在窗口期重试
+    if (!el) return false;
     // 搜索跳转定位：默认展开目标日志行（片段列表），再滚动居中与高亮
     var clips = el.querySelector('.log-entry__clips');
     if (clips && clips.style.display === 'none') {
@@ -1848,6 +1859,7 @@
     el.scrollIntoView({ block: 'center', behavior: 'smooth' });
     setTimeout(function () { el.classList.remove('log-entry--highlight'); }, 2500);
     jumpLogRightByVideo(el.dataset.video, el.getAttribute('data-log-path'));
+    return true;
   }
   function buildModifiedLines() {
     var ed = getEditorState();

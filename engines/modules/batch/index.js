@@ -62,6 +62,38 @@ function serializeVideoCache(obj) {
   return '{' + parts.join(',') + '}';
 }
 
+/**
+ * 精确读 JSON：LastWriteTime 是 18 位大整数，JSON.parse 会降为 double（ulp≈128 ticks）。
+ * 用 JSON.parse 的 source text access（Node 21+ 支持；Electron 44 内置 Node 24 满足）
+ * 取回原文精确值；运行时不支持或文件损坏时自动回退普通 parse，不影响功能。
+ */
+function readJsonExact(file, fallback = {}) {
+  try {
+    if (!exists(file)) return fallback;
+    const raw = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
+    const data = JSON.parse(raw, function (k, v, ctx) {
+      if (k === 'LastWriteTime' && ctx && typeof ctx.source === 'string') {
+        try { return BigInt(ctx.source); } catch (e) { return v; }
+      }
+      return v;
+    });
+    return data && typeof data === 'object' ? data : fallback;
+  } catch (e) {
+    return readJson(file, fallback);
+  }
+}
+
+/** usage_cache 序列化：LastWriteTime 同为 18 位大整数，需精确写入（与 video_cache 同理） */
+function serializeUsageCache(obj) {
+  const parts = [];
+  for (const k of Object.keys(obj)) {
+    const v = obj[k] || {};
+    const lw = v.LastWriteTime != null ? String(v.LastWriteTime) : '0';
+    parts.push(JSON.stringify(k) + ':{"UsageCount":' + (Number(v.UsageCount) || 0) + ',"LastWriteTime":' + lw + '}');
+  }
+  return '{' + parts.join(',') + '}';
+}
+
 /** 原子写：先写临时文件再 rename（与 PS 的"确有变更才落盘 + 原子覆盖"一致，避免写坏共用缓存） */
 function writeFileAtomic(file, text) {
   const tmp = file + '.tmp' + process.pid;
@@ -512,7 +544,8 @@ async function run(ctx, env = process.env) {
   const fail = (msg, step) => { logger.error(step, msg); return 1; };
 
   // ── 缓存载入：video_cache 只读复用（避免 Ticks 精度回写风险），usage_cache 保留「≥1 降为 1」的内存重置语义 ──
-  const diskVideoCache = readJson(videoCacheFile, {});
+  // 用精确读取：写回时未被触碰的条目能保留原始 18 位 Ticks，不被 JSON.parse 的 double 降精度
+  const diskVideoCache = readJsonExact(videoCacheFile, {});
   const memInfo = new Map();          // 本次任务内的探测结果缓存
   // 本次真正探测过的条目 → 任务结束后合并写回（只增/更新，不删；GC 仍归 backend）
   // 目的：让执行期现场探测的新文件沉淀进 video_cache，供预检测/PS1 复用，避免重复 ffprobe
@@ -921,16 +954,17 @@ async function run(ctx, env = process.env) {
 
   let hasError = false;
   try {
-    // ── 合并缓存（usage_cache 回写；video_cache 只读不动） ──
-    const globalUsage = readJson(usageCacheFile, {});
+    // ── 合并缓存（usage_cache 回写；video_cache 写回见收尾 finally） ──
+    // LastWriteTime 一律用精确 .NET Ticks（BigInt）填写：与 PS 写入值同语义，
+    // 避免 Number 近似（±64 ticks）污染与 PS/backend 共用的缓存
+    const globalUsage = readJsonExact(usageCacheFile, {});
     for (const nf of newFiles) {
       if (!Object.prototype.hasOwnProperty.call(globalUsage, nf)) {
-        let t = 0;
-        try { t = ticksOf(fs.statSync(nf)); } catch (e) { t = 0; }
-        globalUsage[nf] = { UsageCount: 0, LastWriteTime: t };
+        const tb = ticksBigOfFile(nf);
+        globalUsage[nf] = { UsageCount: 0, LastWriteTime: tb === null ? 0 : tb };
       }
     }
-    writeJson(usageCacheFile, globalUsage);
+    writeFileAtomic(usageCacheFile, serializeUsageCache(globalUsage));
     // 用磁盘最新计数刷新内存计数（保留「≥1 降为 1」语义）
     for (const f of uniqueFolders) {
       const track = usageTracker.get(f);
@@ -1306,10 +1340,11 @@ async function run(ctx, env = process.env) {
 
 /** usage_cache 增量导出（对齐 Export-UsageCache：读现有 → 累加 → 写回） */
 function exportUsageCache(increments, usageCacheFile) {
-  const globalCache = readJson(usageCacheFile, {});
+  const globalCache = readJsonExact(usageCacheFile, {});
   for (const [p, inc] of increments.entries()) {
-    let ticks = 0;
-    try { ticks = ticksOf(fs.statSync(p)); } catch (e) { ticks = 0; }
+    // 精确 Ticks（BigInt）：与 PS 的 LastWriteTimeUtc.Ticks 同语义，避免 Number 近似写回
+    const tb = ticksBigOfFile(p);
+    const ticks = tb === null ? 0 : tb;
     if (Object.prototype.hasOwnProperty.call(globalCache, p)) {
       const entry = globalCache[p] || {};
       entry.UsageCount = (Number(entry.UsageCount) || 0) + inc;
@@ -1319,7 +1354,7 @@ function exportUsageCache(increments, usageCacheFile) {
       globalCache[p] = { UsageCount: inc, LastWriteTime: ticks };
     }
   }
-  writeJson(usageCacheFile, globalCache);
+  writeFileAtomic(usageCacheFile, serializeUsageCache(globalCache));
 }
 
 module.exports = {

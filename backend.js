@@ -1305,12 +1305,20 @@ class Api {
       this._videoCache = null;
       this._videoInfoCache = new Map();
     } else this._saveVideoCache(); // 已完成的增量结果才原子覆盖原缓存；取消/中断保留原文件
-    // 刷新完成后顺带回收失效条目（文件已删除/旧工作目录残留）：
-    // 「仅刷新」已整合清理失效（用户主动点刷新即清，不受后台 1h 节流限制），
-    // 后台空闲清理仍走 _gcVideoCacheThrottled 的节流
-    const gcRemoved = cancelled ? 0 : this._gcVideoCache(true);
     report({ done: base + probed, total, finished: true, cancelled });
-    return { ok: true, total, updated: probed, valid, cancelled, removed: gcRemoved };
+    // 失效清理放到后台执行（用户主动点刷新即清，不受后台 1h 节流限制）：
+    // 全量清理要对每条缓存做一次 fs.existsSync，耗时随条目数线性增长（数千条可达数秒～数十秒）；
+    // 若同步放在返回之前，前端「正在预检测」遮罩（Promise.finally 里才隐藏）会被一直挂住。
+    // 故先上报 finished 并立即返回，清理在事件循环下一轮完成，结果通过缓存 GC 事件回传前端提示。
+    if (!cancelled) {
+      setImmediate(() => {
+        try {
+          const n = this._gcVideoCache();
+          if (n > 0) console.log('[video_cache] 后台清理失效条目 ' + n + ' 条');
+        } catch (e) { /* 后台清理失败不影响刷新结果 */ }
+      });
+    }
+    return { ok: true, total, updated: probed, valid, cancelled, removed: 0 };
   }
 
   // 收集某配置目录下的日志候选并解析为成片条目（按目录 mtime 缓存）

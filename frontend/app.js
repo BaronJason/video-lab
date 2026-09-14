@@ -3349,9 +3349,8 @@
       call('save_mask_session', maskState.project.name, {
         rawDirs: (maskState.rawDirs || []).map(function (d) { return { path: d.path, name: d.name, single: !!d.single }; }),
         themes: (maskState.themes || []).map(function (t) { return { path: t.path, name: t.name, single: !!t.single }; }),
-        mode: maskState.mode || 1,
-        outputDir: maskState.outputDir || '',
         suffix: maskState.suffix || ''
+        // 模式/输出目录不持久化：重启软件后重置为初始默认（模式=遮罩+水印，输出走项目默认目录占位）
       }).catch(function () {});
     }, 300);
   }
@@ -3945,8 +3944,8 @@
     function maskRerenderAfterRestore() {
       buildMaskCenter(); buildMaskConfigBar(); refreshMaskStartHint();
     }
-    // 恢复持久化会话：有缓存（含外部添加目录/模式/输出目录；勾选不持久化）则原样恢复；
-    // 无缓存 → 自动扫描项目下所有 mp4 所在文件夹分组并落盘
+    // 恢复持久化会话：有缓存（含外部添加目录、后缀；勾选与模式/输出目录不持久化）则恢复素材，
+    // 模式/输出目录保持初始默认（模式=遮罩+水印，输出走项目默认目录占位）；无缓存自动扫描并落盘
     call('get_mask_session', p.name).then(function (sess) {
       if (!maskOn() || !maskState.project || maskState.project.name !== p.name) return;
       if (sess && Array.isArray(sess.rawDirs)) {
@@ -3955,8 +3954,6 @@
         maskState.rawSel = {};
         maskState.maskSel = {};
         if (Array.isArray(sess.themes) && sess.themes.length) maskState.themes = sess.themes.map(function (t) { return { path: t.path, name: t.name, single: !!t.single }; });
-        if (sess.mode) maskState.mode = sess.mode;
-        if (sess.outputDir) maskState.outputDir = sess.outputDir;
         if (typeof sess.suffix === 'string') maskState.suffix = sess.suffix;
         maskRerenderAfterRestore();
         // 校验持久化目录有效性：不存在/为空的原片文件夹与失效外部遮罩目录从列表去除

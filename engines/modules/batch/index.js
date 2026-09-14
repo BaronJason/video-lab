@@ -1336,6 +1336,13 @@ async function run(ctx, env = process.env) {
       const increments = new Map();
       for (const video of selectedParts) increments.set(video.fullName, (increments.get(video.fullName) || 0) + 1);
       exportUsageCache(increments, usageCacheFile);
+      // 同步累加进缓存库的 usage_count：与 JSON 两份计数从此同步演进，
+      // 为 legacy 退役后的「usage_cache 并库」提前铺路（届时时只需丢掉 JSON，无需迁移数据）
+      if (videoStore) {
+        for (const [p, inc] of increments.entries()) {
+          try { videoStore.addVideoUsage(p, inc); } catch (e) { /* 计数写库失败不影响出片 */ }
+        }
+      }
 
       // ── 最终时长 + 完成行 ──
       const finalInfo = await probe(finalOut);

@@ -41,5 +41,20 @@ module.exports = async function (context) {
   // 版本字符串：版权 + 清空原始文件名
   execFileSync(rcedit, [exePath, '--set-version-string', 'LegalCopyright', 'Copyright (C) Video Lab', '--set-version-string', 'OriginalFilename', ''], { stdio: 'ignore' });
 
+  // 无多语言需求：清理 Electron 自带的语言包（保留 zh-CN / en-US），减小安装包与运行体积
+  try {
+    const localesDir = path.join(appOutDir, 'locales');
+    if (fs.existsSync(localesDir)) {
+      const keep = new Set(['zh-CN.pak', 'en-US.pak']);
+      let removed = 0;
+      for (const f of fs.readdirSync(localesDir)) {
+        if (f.endsWith('.pak') && !keep.has(f)) {
+          try { fs.unlinkSync(path.join(localesDir, f)); removed++; } catch (e) {}
+        }
+      }
+      if (removed) console.log('afterPack: 已清理多余语言包 ' + removed + ' 个（保留 zh-CN/en-US）');
+    }
+  } catch (e) {}
+
   console.log('afterPack: 已应用图标 + 版本 ' + pkg.version + ' + 版权 + 清原始文件名 -> ' + exePath);
 };

@@ -1835,6 +1835,15 @@
     var el = null;
     container.querySelectorAll('.log-entry').forEach(function (e) { if (e.dataset.video === fv) el = e; });
     if (!el) return;
+    // 搜索跳转定位：默认展开目标日志行（片段列表），再滚动居中与高亮
+    var clips = el.querySelector('.log-entry__clips');
+    if (clips && clips.style.display === 'none') {
+      clips.style.display = 'block';
+      var arrow = el.querySelector('.log-entry__arrow');
+      if (arrow) arrow.style.transform = 'rotate(90deg)';
+      el.classList.add('log-entry--open');
+      precheckClips(el);
+    }
     el.classList.add('log-entry--highlight');
     el.scrollIntoView({ block: 'center', behavior: 'smooth' });
     setTimeout(function () { el.classList.remove('log-entry--highlight'); }, 2500);

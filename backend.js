@@ -1721,22 +1721,66 @@ class Api {
 
   // ── 成片名搜索索引：仅索引日志解析出的成片条目（video/clips/watermark/log_path）。
   //    以「配置目录」为单位按目录 mtime 失效，命中直接读内存，未命中重扫该目录；
-  //    有变更时落库到 Cache\clip_cache.db（node:sqlite 内置驱动，无原生模块），
+  //    有变更时落库（node:sqlite 内置驱动，无原生模块）—— 缓存后端为 sqlite 时与 video_cache 同库
   //    冷启动直接复用，避免每次搜索全量读盘解析。旧版 clip_cache.json 首次接管后自动迁移并删除。
   // 打开 sqlite 连接（惰性）；失败返回 null 时索引退化为纯内存模式
+  // 成片索引库路径：缓存后端为 sqlite 时与 video_cache 同库（Cache\cache.db 的 clip_index 表），
+  // 否则回退到独立的 clip_cache.db（JSON 缓存后端 / 库不可用时，功能不受影响）
+  get _clipDbPath() {
+    try { if (this._useDbCache()) return this.cacheDbPath; } catch (e) {}
+    return this.clipIndexCachePath;
+  }
+
   _openClipDb() {
     try {
       if (this._clipDb && !this._clipDb.closed) return this._clipDb;
-      if (!this.clipIndexCachePath) return null;
-      fs.mkdirSync(path.dirname(this.clipIndexCachePath), { recursive: true });
+      const dbPath = this._clipDbPath;
+      if (!dbPath) return null;
+      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
       const { DatabaseSync } = require('node:sqlite');
-      this._clipDb = new DatabaseSync(this.clipIndexCachePath);
+      this._clipDb = new DatabaseSync(dbPath);
+      // 与缓存库同库时也要设 busy_timeout：两个连接（缓存/索引）会并发写同一个文件
+      try { this._clipDb.exec('PRAGMA busy_timeout=5000'); } catch (e) {}
       this._clipDb.exec('CREATE TABLE IF NOT EXISTS clip_index(dir TEXT PRIMARY KEY, mtime INTEGER NOT NULL, entries TEXT NOT NULL)');
+      if (this.cacheDbPath && path.resolve(dbPath) === path.resolve(this.cacheDbPath)) this._mergeClipDbIntoCache();
       return this._clipDb;
     } catch (e) {
       this._clipDb = null;
       return null;
     }
+  }
+
+  // 旧 clip_cache.db 一次性并库到 cache.db：clip_index 表结构两边完全一致，逐行搬运即可（无需重建索引）。
+  // 读回校验（行数 + 首/中/末三行内容逐字相同）通过后才把旧库移入回收站；失败则保持独立库，下次重试。
+  _mergeClipDbIntoCache() {
+    const src = this.clipIndexCachePath, dst = this.cacheDbPath;
+    if (!src || !dst || path.resolve(src) === path.resolve(dst)) return;
+    if (!fs.existsSync(src) || !this._cacheStore) return;
+    try {
+      const key = 'clip_db_merged_from';
+      if (this._cacheStore.getMeta(key) === src) return; // 已并过
+      const { DatabaseSync } = require('node:sqlite');
+      const sdb = new DatabaseSync(src, { readOnly: true });
+      const rows = sdb.prepare('SELECT dir, mtime, entries FROM clip_index').all();
+      sdb.close();
+      if (!rows.length) return;
+      const db = this._cacheStore.open();
+      let n = 0;
+      this._cacheStore.transaction(() => {
+        const up = db.prepare('INSERT OR REPLACE INTO clip_index (dir, mtime, entries) VALUES (?, ?, ?)');
+        for (const r of rows) { up.run(String(r.dir), Number(r.mtime) || 0, String(r.entries)); n++; }
+      });
+      const back = db.prepare('SELECT dir, mtime, entries FROM clip_index').all();
+      const byDir = new Map(back.map((x) => [String(x.dir), x]));
+      const ok = back.length >= n && [0, Math.floor(rows.length / 2), rows.length - 1].every((i) => {
+        const a = rows[i]; const b = byDir.get(String(a.dir));
+        return b && Number(b.mtime) === Number(a.mtime) && String(b.entries) === String(a.entries);
+      });
+      if (!ok) return; // 校验失败：不动旧库
+      this._cacheStore.setMeta(key, src);
+      this._recycleFile(src);
+      console.log('[clip_index] 已并入 cache.db（' + n + ' 个目录），旧 clip_cache.db 已移入回收站');
+    } catch (e) { /* 并库失败：继续用独立库，索引功能不受影响 */ }
   }
 
   _loadClipIndex() {

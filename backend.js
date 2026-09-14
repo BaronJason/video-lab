@@ -2342,6 +2342,7 @@ class Api {
         outDir: t.outDir || '', log: (t.log || []).slice(-500), _stopRequested: !!t._stopRequested,
         groupDate: typeof t.groupDate === 'string' ? t.groupDate : '',
         failedVideos: Array.isArray(t.failedVideos) ? t.failedVideos.slice(-100) : [],
+        engine: t.engine || '',   // 'node' | 'pwsh'：本次任务由哪条路径执行（供事后核对是否发生回退）
       })),
     };
     // 原子写：任务列表高频落盘，写坏会导致整批任务记录丢失
@@ -4377,13 +4378,24 @@ let themes = [];
     };
     const engine = !!this._engineRunnerPath();
     const pwsh = have('pwsh');
+    // 当前实际执行路径：引擎可用且未被开关强制关闭 → 走内置引擎；否则回退 legacy PS1
+    const envFlag = String(process.env.VL_USE_NODE_ENGINE || '').trim();
+    const cfgFlag = this.config && this.config.use_node_engine != null ? String(this.config.use_node_engine).trim() : '';
+    const flag = (envFlag || cfgFlag || 'auto').toLowerCase();
+    const forcedOff = (flag === 'off' || flag === 'false' || flag === '0' || flag === 'legacy' || flag === 'pwsh');
+    const nodeEngineActive = engine && !forcedOff;
     return {
       pwsh,
       ffmpeg: have('ffmpeg'),
       ffprobe: have('ffprobe'),
       engine,
-      // pwsh 是否仍为必需：引擎不可用（或开关强制 legacy）时才需要
-      pwshRequired: !this._nodeEnginePrimary(),
+      // 是否正在使用内置引擎；false 即处于回退（前端据此显式告警）
+      nodeEngineActive,
+      fallbackReason: nodeEngineActive ? '' : (forcedOff
+        ? '引擎开关已关闭（use_node_engine=' + flag + (envFlag ? '，来自环境变量 VL_USE_NODE_ENGINE' : '，来自配置文件') + '）'
+        : '未找到内置引擎（resources\\Engines\\engine-runner.js）'),
+      // pwsh 是否仍为必需：回退时才需要
+      pwshRequired: !nodeEngineActive,
     };
   }
 }

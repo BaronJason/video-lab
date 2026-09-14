@@ -4034,18 +4034,18 @@
     html += '<div class="mask-config__cols">';
     // ── 左栏：遮罩主题（标题固定，列表独立滚动） ──
     if (maskNeedMask()) {
-      html += '<div class="mask-config__col mask-config__col--mask"><div class="mask-config__section-title"><span class="mask-config__title">遮罩主题</span>' +
+      html += '<div class="mask-config__col mask-config__col--mask"><div class="mask-config__section-title"><span class="mask-config__title">遮罩</span>' +
         '<button type="button" class="mask-config__addbtn" id="maskAddThemeFile" title="添加单个遮罩文件（.mov）">' + icon('plus', 12) + '添加文件</button>' +
         '<button type="button" class="mask-config__addbtn" id="maskAddThemeDir" title="添加遮罩文件夹（其中 .mov 递归扫描）">' + icon('plus', 12) + '添加文件夹</button></div><div class="mask-config__list">';
       if (!maskState.themes.length) {
-        html += '<div class="mask-config__hint mask-config__hint--center">项目下没有遮罩主题文件夹，请放入含 mov 的主题文件夹后刷新</div>';
+        html += '<div class="mask-config__hint mask-config__hint--center">项目下没有遮罩文件夹，请放入含 mov 的文件夹后刷新</div>';
       } else {
-        html += '<div id="maskAllGroups"><div class="mask-files__loading mask-files__loading--bar">正在扫描遮罩主题…</div></div>';
+        html += '<div id="maskAllGroups"><div class="mask-files__loading mask-files__loading--bar">正在扫描遮罩…</div></div>';
       }
       html += '</div></div>';
     }
     // ── 右栏：原片选择（标题固定，列表独立滚动） ──
-    html += '<div class="mask-config__col mask-config__col--raw"><div class="mask-config__section-title"><span class="mask-config__title">原片素材</span>' +
+    html += '<div class="mask-config__col mask-config__col--raw"><div class="mask-config__section-title"><span class="mask-config__title">原片</span>' +
       '<button type="button" class="mask-config__addbtn" id="maskAddRawFile" title="添加单个原片文件（mp4 等视频）">' + icon('plus', 12) + '添加文件</button>' +
       '<button type="button" class="mask-config__addbtn" id="maskAddRawDir" title="添加原片文件夹（其中视频递归扫描）">' + icon('plus', 12) + '添加文件夹</button></div><div class="mask-config__list">';
     if (!maskState.rawDirs.length) {
@@ -4840,7 +4840,7 @@
       if (!maskState.rawDirs.length) errs.push('未选中成片');
       else if (!maskState.rawDirs.some(function (d) { return (d.files || []).length > 0; })) errs.push('未选中成片');
       // 必须实际勾选原片素材（选中的文件集），不能只选目录不勾文件
-      else if (maskRawSelCount() < 1) errs.push('未勾选原片素材');
+      else if (maskRawSelCount() < 1) errs.push('未勾选原片');
       if (maskNeedMask() && !Object.keys(maskState.maskSel).length) errs.push('未选中遮罩');
       if (maskNeedWm() && !maskState.watermark) errs.push('未选水印');
       if (!maskEffectiveOutDir()) errs.push('无输出目录');

@@ -161,7 +161,7 @@ function Get-VideoDuration {
 # ------------------------------ 校验 -------------------------------------
 if ($MaskMode -ne 2 -and $MaskMode -ne 3) { $MaskMode = 1 }
 if ([string]::IsNullOrWhiteSpace($RawVideoDirs) -or [string]::IsNullOrWhiteSpace($OutputDir)) {
-    Invoke-ErrorAction -ErrorMessage "缺少原片文件夹或输出目录环境变量" -ErrorStep "参数校验"
+    Invoke-ErrorAction -ErrorMessage "缺少原片或输出目录环境变量" -ErrorStep "参数校验"
     [Environment]::Exit(1)
 }
 if (($MaskMode -eq 1 -or $MaskMode -eq 3) -and [string]::IsNullOrWhiteSpace($MaskDirs)) {

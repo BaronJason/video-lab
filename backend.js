@@ -3220,7 +3220,7 @@ class Api {
     const needMask = mode === 1 || mode === 3;
     const needWm = mode === 1 || mode === 2;
     const maskDirs = needMask && Array.isArray(p && p.maskDirs) ? p.maskDirs.filter((d) => String(d).trim()) : [];
-    if (needMask && !maskDirs.length) errs.push('遮罩主题');
+    if (needMask && !maskDirs.length) errs.push('遮罩');
     if (needWm && !String((p && p.watermark) || '').trim()) errs.push('水印文件');
     if (errs.length) return { ok: false, error: '遮罩叠加配置缺失：' + errs.join('、') };
     // 勾选视频序列化：完整路径分号分隔（空=该文件夹全部）

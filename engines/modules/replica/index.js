@@ -483,12 +483,13 @@ async function run(ctx, env = process.env) {
     else fs.appendFileSync(logFilePath, '='.repeat(46) + '\r\n', 'utf8');
   } catch (e) {}
 
-  logger.info('');
-  logger.info(`开始日志复刻，共 ${jobs.length} 个成片`);
-
   // ── 互斥锁（PS 用 Global\VideoBatchMutex；Node 用文件锁，协议行保持一致） ──
+  // 顺序对齐 PS1：先输出锁行，再输出总数行（video_replica.ps1 为「已获取互斥锁」→「开始日志复刻，共 N 个成片」）
   const lock = await acquireLock(path.join(outRoot, '.video-lab-replica.lock'));
   logger.lockAcquired('开始复刻任务');
+
+  logger.info('');
+  logger.info(`开始日志复刻，共 ${jobs.length} 个成片`);
   let hasError = false;
   try {
     for (let jobIndex = 0; jobIndex < jobs.length; jobIndex++) {

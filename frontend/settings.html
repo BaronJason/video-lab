@@ -102,6 +102,27 @@
 
       <div class="form-group">
         <div class="form-group__head">
+          <label class="form-group__label">任务执行引擎<small>调试项：切换后新提交的任务立即按所选路径执行，无需重启</small></label>
+          <span class="opt-path" id="engineStateHint"></span>
+        </div>
+        <div class="opt-row">
+          <label class="opt-radio">
+            <input type="radio" name="engineMode" value="auto">
+            <span class="opt-radio__dot"></span>
+            <span class="opt-radio__label">内置 Node 引擎<span class="opt-path">推荐；引擎文件缺失时自动回退并告警</span></span>
+          </label>
+        </div>
+        <div class="opt-row">
+          <label class="opt-radio">
+            <input type="radio" name="engineMode" value="off">
+            <span class="opt-radio__dot"></span>
+            <span class="opt-radio__label">PowerShell 脚本（回退）<span class="opt-path">与旧脚本行为一致；用于对照排查</span></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <div class="form-group__head">
           <label class="form-group__label">配置和数据保存位置<small>保存后立即生效，配置与 Cache 缓存将一并迁移</small></label>
           <button type="button" class="cfg-open-btn" id="btnOpenCfgDir">打开文件夹</button>
         </div>

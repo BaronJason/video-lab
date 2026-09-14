@@ -310,7 +310,7 @@ function Resolve-FromVideoCache {
     if ($ExcludeNames -and ($leaf -in $ExcludeNames)) { return $null }
     if ($cacheByFileName.ContainsKey($fnKey)) {
         # 排除成片内其它位置已在用的片段：同名文件可能有多份，取下一份而不是直接放弃
-        $cands = @($cacheByFileName[$fnKey] | Where-Object { Test-Path -LiteralPath $_ -and $_ -notin $Exclude })
+        $cands = @($cacheByFileName[$fnKey] | Where-Object { (Test-Path -LiteralPath $_) -and ($_ -notin $Exclude) })
         $cands = @($cands | Sort-Object -Unique)
         if ($cands.Count -gt 0) {
             # 优先原目录候选（最可能是同一批次的真实文件），否则取任一存在候选

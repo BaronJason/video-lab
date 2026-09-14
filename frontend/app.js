@@ -4561,7 +4561,7 @@
             '<span class="log-entry__arrow">' + icon('chevron-right', 14) + '</span>' + icon('video', 14) +
             '<span class="log-entry__video-name" title="' + escapeHtml(e.outPath || e.video) + '">' + escapeHtml(e.video || '（未命名成片）') + '</span>' +
             '<span class="log-entry__clip-count">' + clips.length + ' 素材</span>' +
-            '<button type="button" class="log-entry__replica mask-log-entry__del" data-delone="' + escapeHtml(e.video) + '" title="删除该成片">' + icon('trash-2', 13) + '删除成片</button></div>';
+            '<button type="button" class="mask-log-entry__del" data-delone="' + escapeHtml(e.video) + '" title="删除该成片">' + icon('trash-2', 14) + '</button></div>';
           html += '<div class="log-entry__clips" style="display:none">';
           clips.forEach(function (c) {
             html += '<div class="log-entry__clip" data-clip="' + escapeHtml(c) + '" title="删除所有使用该素材的成片：' + escapeHtml(baseNameNoExt(c)) + '">' + icon('layers', 12) + '<span class="log-entry__clip-path" title="' + escapeHtml(c) + '">' + escapeHtml(baseNameNoExt(c)) + '</span></div>';

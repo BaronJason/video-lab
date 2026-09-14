@@ -99,6 +99,15 @@ function resolveScriptsDir() {
   try { if (fs.existsSync(src)) return src; } catch (e) {}
   return dist;
 }
+// Node 引擎目录动态解析：与脚本目录同源——源码共存形态用仓库内 resources\app\engines，
+// 构建/分发形态回退到 extraResources 生成的 resources\Engines（引擎同样必须是真实文件系统路径）
+function resolveEnginesDir() {
+  const base = projectDir();
+  const src = path.join(base, 'resources', 'app', 'engines');
+  const dist = path.join(base, 'resources', 'Engines');
+  try { if (fs.existsSync(src)) return src; } catch (e) {}
+  return dist;
+}
 function configFilePath() { return configFile; }
 function programConfigPath() { return path.join(projectDir(), 'config.json'); }
 function appdataConfigPath() { return path.join(app.getPath('appData'), 'Video Lab', 'config.json'); }
@@ -318,7 +327,7 @@ let watermarkCachePath = path.join(path.dirname(configFilePath()), watermarkCach
   if (oldScan === scanCachePath || !fs.existsSync(oldScan) || fs.existsSync(scanCachePath)) return;
   try { fs.copyFileSync(oldScan, scanCachePath); fs.unlinkSync(oldScan); } catch (e) {}
 })();
-const api = new Api(root, config, scanCachePath, videoCachePath, logCachePath, resolveScriptsDir(), clipCachePath, taskStatePath, watermarkCachePath);
+const api = new Api(root, config, scanCachePath, videoCachePath, logCachePath, resolveScriptsDir(), clipCachePath, taskStatePath, watermarkCachePath, resolveEnginesDir());
 // 扫描/重建环节进度：推送主窗口渲染层实时状态（walk/收集日志/重建成片索引/水印统计 一一对应）
 api.onScanProgress = (p) => {
   try {

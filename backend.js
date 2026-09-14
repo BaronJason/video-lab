@@ -24,6 +24,8 @@ const REPLICA_MARK = 'REPLICA:'; // 复刻项目虚拟版本的 path 前缀，�
 // 默认配置
 const DEFAULT_CONFIG = {
   scripts_dir: '',
+  // 任务执行引擎：auto=引擎可用即走 Node 引擎（缺失/异常自动回退 legacy PS1）；off=强制 legacy PS1
+  use_node_engine: 'auto',
   skin: 'white_blue',
   auto_check_update: true,    // 启动时自动检查更新
   check_update_daily: false,  // 每日定时检查更新（整点触发，需 app 保持运行）
@@ -221,13 +223,14 @@ function zhLiveLine(kv) {
 }
 
 class Api {
-  constructor(root, config, cachePath, videoCachePath, logCachePath, scriptsDir, clipIndexCachePath, taskStatePath, watermarkCachePath) {
+  constructor(root, config, cachePath, videoCachePath, logCachePath, scriptsDir, clipIndexCachePath, taskStatePath, watermarkCachePath, enginesDir) {
     this.root = root;
     this.config = Object.assign({}, DEFAULT_CONFIG, config || {});
     this.cachePath = cachePath || '';
     this.videoCachePath = videoCachePath || '';
     this.logCachePath = logCachePath || '';
     this.scriptsDirFixed = scriptsDir || ''; // 脚本位置（main 进程动态解析：源码形态用仓库内 scripts，分发形态用 resources\Scripts）
+    this.enginesDirFixed = enginesDir || ''; // Node 引擎位置（源码形态 app\engines，分发形态 resources\Engines）
     this.clipIndexCachePath = clipIndexCachePath || ''; // 成片名搜索索引缓存文件（Cache 子文件夹）
     this.taskStatePath = taskStatePath || '';           // 任务列表持久化文件（Cache 子文件夹）
     this.watermarkCachePath = watermarkCachePath || ''; // 水印主流水印固化缓存（Cache 子文件夹，随工作目录重置）
@@ -244,9 +247,16 @@ class Api {
     this.probeConcurrency = 4;
     this._videoCache = null;
     this._videoInfoCache = new Map();
+    this._videoCacheDirty = false; // 缓存内容是否有未落盘变更：无变更时预检测不再重复写整份缓存
+    this._videoCacheDirtyKeys = new Set();   // sqlite 模式：待写回的路径（增量 upsert）
+    this._videoCacheRemovedKeys = new Set(); // sqlite 模式：待删除的路径
+    this._cacheStore = null;       // sqlite 缓存库（Cache\cache.db），惰性打开
+    this._cacheBackendMode = '';   // 'db' | 'json'：首次使用时判定一次
+    this._saveSeq = 0;             // 缓存原子写临时文件序号（并发落盘互不覆盖）
+    this._lnkCache = new Map();    // .lnk 解析结果缓存（lnk 路径 → { mtimeMs, target }），免重复启动 pwsh
     this._txtTree = null;
     // 启动后空闲期执行一次 video_cache 失效清理（文件已删除/旧工作目录残留回收）
-    setImmediate(() => { try { this._gcVideoCacheThrottled(true); } catch (e) {} });
+    setImmediate(() => { this._gcVideoCacheThrottled(true).catch(() => {}); });
     this._txtTreeRoot = null;
     this._projectsCache = null;
     this._versionsCache = new Map();
@@ -282,6 +292,55 @@ class Api {
     return d;
   }
 
+  // Node 引擎根目录：由 main 按形态动态解析传入（源码形态 app\engines，分发形态 resources\Engines）；
+  // 未传入时按脚本目录同级推断作为兜底
+  get enginesDir() {
+    if (this.enginesDirFixed) return this.enginesDirFixed;
+    const s = this.scriptsDir;
+    if (!s) return '';
+    const parent = path.dirname(s);
+    // 源码形态为 app\engines，分发形态为 resources\Engines：逐一探测并取回真实大小写
+    for (const name of ['engines', 'Engines']) {
+      const cand = path.join(parent, name);
+      try { if (fs.existsSync(cand)) return fs.realpathSync(cand); } catch (e) {}
+    }
+    return path.join(parent, 'engines');
+  }
+
+  // 引擎入口文件；不存在返回空串（调用方据此回退 legacy）
+  _engineRunnerPath() {
+    const d = this.enginesDir;
+    if (!d) return '';
+    const p = path.join(d, 'engine-runner.js');
+    try { return fs.existsSync(p) ? p : ''; } catch (e) { return ''; }
+  }
+
+  // legacy 脚本路径：脚本目录下 legacy\ 子目录优先（P5 归档形态），
+  // 回退脚本目录根（旧布局/尚未同步该目录结构的分发形态）
+  _legacyScriptPath(name) {
+    const root = this.scriptsDir;
+    if (!root) return name;
+    const inLegacy = path.join(root, 'legacy', name);
+    try { if (fs.existsSync(inLegacy)) return inLegacy; } catch (e) {}
+    return path.join(root, name);
+  }
+
+  // 引擎是否为主执行路径：环境变量/配置未强制 legacy，且引擎文件就绪
+  _nodeEnginePrimary() {
+    const envFlag = String(process.env.VL_USE_NODE_ENGINE || '').trim();
+    const cfgFlag = this.config && this.config.use_node_engine != null ? String(this.config.use_node_engine).trim() : '';
+    const flag = (envFlag || cfgFlag || 'auto').toLowerCase();
+    if (flag === 'off' || flag === 'false' || flag === '0' || flag === 'legacy' || flag === 'pwsh') return false;
+    return !!this._engineRunnerPath();
+  }
+
+  // 任务执行引擎选择：off/0/false/legacy/pwsh → 强制 legacy PS1；其余（含 auto）→ 引擎可用即走 Node 引擎，
+  // 引擎缺失自动回退 legacy（任何环境下都不至于无法出片）。
+  shouldUseNodeEngine(type) {
+    if (!type) return false;
+    return this._nodeEnginePrimary();
+  }
+
   getRoot() { return this.root; }
 
   setRoot(newRoot) {
@@ -304,6 +363,12 @@ class Api {
     this._clipIndexRoot = '';
     this._clipIndexDirty = false;
     this._clipDb = null; // 关闭 sqlite 连接，下次按新 root 重新打开
+    // 预检测缓存库同样随 root 重置：关闭连接并重新判定后端（root 前缀隔离在库内以 gcPlan 体现）
+    if (this._cacheStore) { try { this._cacheStore.close(); } catch (e) {} }
+    this._cacheStore = null;
+    this._cacheBackendMode = '';
+    this._videoCacheDirtyKeys.clear();
+    this._videoCacheRemovedKeys.clear();
     this._rebuildingClip = false;
     // 预检测随工作目录取消：旧路径的探测结果不写入新目录缓存
     this._precheckToken++;
@@ -849,19 +914,153 @@ class Api {
     } catch (e) { return { ok: false, error: String(e), hasOther: false }; }
   }
 
+  // ── video_cache 持久层（P5：sqlite 生产接入 + JSON 回退通道）──
+  // 权威存储为 Cache\cache.db：Ticks 以 TEXT 精确承载（INTEGER 列读 Int64 会抛 RangeError）、
+  // 支持增量写与 backend↔引擎跨进程并发（WAL）；legacy JSON 保留为回退通道
+  // （VL_CACHE_BACKEND=json 强制，或 node:sqlite 不可用/库打开失败时自动回退）。
+  get cacheDbPath() {
+    if (!this.videoCachePath) return '';
+    return path.join(path.dirname(this.videoCachePath), 'cache.db');
+  }
+
+  // 选择缓存后端（进程内只判定一次）；任何异常都回退 JSON，绝不影响出片
+  _useDbCache() {
+    if (this._cacheBackendMode) return this._cacheBackendMode === 'db';
+    if (!this.videoCachePath) { this._cacheBackendMode = 'json'; return false; }
+    const forced = String(process.env.VL_CACHE_BACKEND || '').trim().toLowerCase();
+    const forceJson = (forced === 'json' || forced === 'off');
+    // 回退模式：仅在库已存在时才打开（用于必要时导出给 legacy），不凭空创建库文件
+    if (forceJson && !fs.existsSync(this.cacheDbPath)) { this._cacheBackendMode = 'json'; return false; }
+    let store = null;
+    try {
+      const CacheStore = require(path.join(this.enginesDir, 'base', 'cache-store.js'));
+      store = new CacheStore(this.cacheDbPath, { root: this.root });
+      store.open();
+    } catch (e) { store = null; }
+    this._cacheStore = store;
+    if (forceJson || !store) { this._cacheBackendMode = 'json'; return false; }
+    this._cacheBackendMode = 'db';
+    this._migrateCacheJsonToDb();
+    return true;
+  }
+
+  // 旧 JSON 一次性迁移：库为空且 JSON 存在时单事务导入，读回校验（条目数 + Ticks 逐条精确）
+  // 通过后才把旧文件移入回收站；校验失败即清空库、保持 JSON 为权威，下次启动重试。
+  _migrateCacheJsonToDb() {
+    const store = this._cacheStore, jp = this.videoCachePath;
+    if (!store || !jp || !fs.existsSync(jp)) return;
+    try {
+      if (store.countVideos() > 0) return;
+      const before = JSON.parse(fs.readFileSync(jp, 'utf-8'));
+      if (!before || typeof before !== 'object' || Array.isArray(before)) return;
+      const keys = Object.keys(before);
+      if (!keys.length) return;
+      const usagePath = path.join(path.dirname(jp), 'usage_cache.json');
+      store.migrateFromJson({ videoCacheJson: jp, usageCacheJson: usagePath });
+      const after = store.loadVideoMap();
+      let ok = Object.keys(after).length >= keys.length;
+      if (ok) {
+        for (const k of keys) {
+          const a = after[k];
+          if (!a || this._ticksToStr(a.LastWriteTime) !== this._ticksToStr(before[k] && before[k].LastWriteTime)) { ok = false; break; }
+        }
+      }
+      if (!ok) { try { store.replaceVideoMap({}); } catch (e) {} return; }
+      store.setMeta('migrated_from', jp);
+      store.setMeta('migrated_at', String(Date.now()));
+      this._recycleFile(jp); // 旧 JSON 移入回收站（可从回收站还原）
+      console.log('[video_cache] 已迁移 ' + keys.length + ' 条至 cache.db（旧 JSON 已移入回收站）');
+    } catch (e) { /* 迁移失败：JSON 仍在，行为与迁移前一致 */ }
+  }
+
+  // legacy 回退期间 PS1 只写 JSON：切回 sqlite 时把 JSON 增量并入库（以 mtime 判定是否有新内容）
+  _syncJsonIntoDb() {
+    const store = this._cacheStore, jp = this.videoCachePath;
+    if (!store || !jp || !fs.existsSync(jp)) return;
+    try {
+      const st = fs.statSync(jp);
+      const mark = Number(store.getMeta('json_synced_mtime') || 0);
+      if (st.mtimeMs <= mark) return;
+      const before = JSON.parse(fs.readFileSync(jp, 'utf-8'));
+      if (!before || typeof before !== 'object' || Array.isArray(before)) return;
+      store.applyVideoDelta(before, null);
+      store.setMeta('json_synced_mtime', String(st.mtimeMs));
+    } catch (e) {}
+  }
+
+  // 强制 JSON 模式时保证 legacy 有缓存可用：JSON 缺失或落后于库时从库导出（空库不导出）
+  _exportDbToJsonIfNeeded() {
+    const store = this._cacheStore, jp = this.videoCachePath;
+    if (!store || !jp) return;
+    try {
+      if (store.countVideos() <= 0) return;
+      const dbStat = fs.statSync(this.cacheDbPath);
+      const need = !fs.existsSync(jp) || fs.statSync(jp).mtimeMs < dbStat.mtimeMs;
+      if (!need) return;
+      const n = store.exportVideoJson(jp);
+      if (n > 0) console.log('[video_cache] 已从 cache.db 导出 ' + n + ' 条供 legacy 引擎使用');
+    } catch (e) {}
+  }
+
+  // 移入系统回收站（可还原）；Electron 不可用时降级为重命名备份，绝不静默删除
+  _recycleFile(p) {
+    if (!p || !fs.existsSync(p)) return false;
+    try {
+      const { shell } = require('electron');
+      if (shell && typeof shell.trashItem === 'function') {
+        shell.trashItem(p).catch(() => { try { fs.renameSync(p, p + '.bak'); } catch (e) {} });
+        return true;
+      }
+    } catch (e) {}
+    try { fs.renameSync(p, p + '.bak'); return true; } catch (e) { return false; }
+  }
+
+  // 标记缓存变更：记录具体键，sqlite 模式据此做增量写（避免每次全量 upsert）
+  _markVideoCacheDirty(vPath) {
+    this._videoCacheDirty = true;
+    if (vPath) this._videoCacheDirtyKeys.add(String(vPath));
+  }
+
+  _markVideoCacheRemoved(vPath) {
+    this._videoCacheDirty = true;
+    const k = String(vPath);
+    this._videoCacheDirtyKeys.delete(k);
+    this._videoCacheRemovedKeys.add(k);
+  }
+
   _loadVideoCache() {
     if (this._videoCache !== null) return this._videoCache;
     let cache = {};
-    const p = this.videoCachePath || '';
-    try {
-      // 清理上次中断遗留的未完成临时缓存（原子替换失败/取消时残留），原缓存文件不受影响
-      if (p) { const tmp = p + '.tmp'; if (fs.existsSync(tmp)) { try { fs.unlinkSync(tmp); } catch (e) {} } }
-      if (p && fs.existsSync(p)) {
-        const data = JSON.parse(fs.readFileSync(p, 'utf-8'));
-        if (data && typeof data === 'object' && !Array.isArray(data)) cache = data;
-      }
-    } catch (e) { cache = {}; }
+    if (this._useDbCache()) {
+      try {
+        this._syncJsonIntoDb();
+        cache = this._cacheStore.loadVideoMap();
+      } catch (e) { cache = {}; }
+    } else {
+      this._exportDbToJsonIfNeeded(); // 回退模式：先按需从库补齐 JSON，再读取
+      const p = this.videoCachePath || '';
+      try {
+        // 清理上次中断遗留的未完成临时缓存（原子替换失败/取消时残留），原缓存文件不受影响
+        if (p) {
+          const dir = path.dirname(p), base = path.basename(p);
+          try {
+            for (const n of fs.readdirSync(dir)) {
+              if (n === base + '.tmp' || (n.startsWith(base + '.') && n.endsWith('.tmp'))) {
+                try { fs.unlinkSync(path.join(dir, n)); } catch (e) {}
+              }
+            }
+          } catch (e) {}
+        }
+        if (p && fs.existsSync(p)) {
+          const data = JSON.parse(fs.readFileSync(p, 'utf-8'));
+          if (data && typeof data === 'object' && !Array.isArray(data)) cache = data;
+        }
+      } catch (e) { cache = {}; }
+    }
     this._videoCache = cache;
+    this._videoCacheDirty = false;
+    this._videoCacheDirtyKeys.clear();
+    this._videoCacheRemovedKeys.clear();
     return cache;
   }
 
@@ -944,7 +1143,7 @@ class Api {
       this._videoInfoCache.set(videoPath, info);
       return info;
     }
-    if (cached) delete cache[videoPath]; // 指纹变化，丢弃旧缓存交由重新探测
+    if (cached) { delete cache[videoPath]; this._markVideoCacheRemoved(videoPath); } // 指纹变化，丢弃旧缓存交由重新探测
     return null;
   }
 
@@ -968,58 +1167,117 @@ class Api {
       cache[p] = { LastWriteTime: this._ticksToStr(this._mtimeToTicks(p)), Duration: info.duration, Valid: info.valid, Width: info.width, Height: info.height };
       this._videoInfoCache.set(p, info);
       result.set(p, info);
+      this._markVideoCacheDirty(p);
     }
     return result;
   }
 
-  // 预检测缓存落盘：先写临时文件再原子替换（rename），完成才覆盖原缓存；
-  // 写入/替换失败时清理临时文件，原缓存文件保持有效可复用
-  _saveVideoCache() {
+  // 缓存落盘：sqlite 模式只写脏键（增量事务）；JSON 模式（回退通道）走唯一临时文件 + 原子替换。
+  // 刻意不做同步写：大缓存下 stringify + write 可达数十毫秒，同步执行会推迟同期 IPC 响应，
+  // 前端表现为行内徽章长时间停在「检测中…」。唯一临时名避免并发写互相踩（GC 与行内预检测可能同时落盘）。
+  // full=true 用于「重置后整体替换」——此时内存对象即全量，脏键集合不代表全量。
+  async _saveVideoCache(full) {
+    const snapshot = this._videoCache;
+    if (this._cacheBackendMode === 'db' && this._cacheStore) {
+      const upserts = {};
+      if (snapshot) for (const k of this._videoCacheDirtyKeys) if (snapshot[k]) upserts[k] = snapshot[k];
+      const deletes = Array.from(this._videoCacheRemovedKeys);
+      if (!full && !Object.keys(upserts).length && !deletes.length) { this._videoCacheDirty = false; return; }
+      try {
+        if (full) this._cacheStore.replaceVideoMap(snapshot || {});
+        else this._cacheStore.applyVideoDelta(upserts, deletes);
+      } catch (e) { return; } // 写入失败保留脏标记，下次再试
+      if (this._videoCache === snapshot) {
+        this._videoCacheDirty = false;
+        this._videoCacheDirtyKeys.clear();
+        this._videoCacheRemovedKeys.clear();
+      }
+      return;
+    }
+    const p = this.videoCachePath || '';
+    if (!p) return;
+    const tmp = p + '.' + process.pid + '.' + (++this._saveSeq) + '.tmp';
     try {
-      const p = this.videoCachePath || '';
-      if (!p) return;
-      const tmp = p + '.tmp';
-      fs.writeFileSync(tmp, JSON.stringify(this._videoCache), 'utf-8');
-      fs.renameSync(tmp, p); // 同盘原子替换；目标被占用等异常时原文件仍在
+      const text = JSON.stringify(snapshot);
+      await fs.promises.writeFile(tmp, text, 'utf-8');
+      await fs.promises.rename(tmp, p);
+      if (this._videoCache === snapshot) {
+        this._videoCacheDirty = false;
+        this._videoCacheDirtyKeys.clear();
+        this._videoCacheRemovedKeys.clear();
+      }
     } catch (e) {
-      try { const p = (this.videoCachePath || '') + '.tmp'; if (p && fs.existsSync(p)) fs.unlinkSync(p); } catch (e2) {}
+      try { await fs.promises.unlink(tmp); } catch (e2) {}
     }
   }
 
-  // video_cache 失效清理：删除「文件已不存在」与「非当前工作目录」的条目，确有删除才原子写盘。
+  // 失效清理「判定分区」：分出「当场可判」与「需核验文件是否存在」两组。
+  // 免 IO 是本函数的意义：本轮刚枚举过的路径（knownPaths）必然存在，无需再 stat；
+  // 非当前 root 的残留条目直接判删，同样无需 stat。只有两者都不适用（手动清理、目录已从配置移除）
+  // 才落到 verify —— 这正是把「数千次同步 stat」压缩成「通常为零」的关键。
+  _videoCacheGcPlan(knownPaths) {
+    const c = this._videoCache;
+    const drop = [], verify = [];
+    if (!c) return { drop, verify };
+    const prefix = String(this.root || '').replace(/[\\/]+$/, '');
+    for (const f of Object.keys(c)) {
+      if (prefix && !String(f).startsWith(prefix)) { drop.push(f); continue; } // 切工作目录后旧 root 残留
+      if (knownPaths && knownPaths.has(f)) continue;                            // 刚枚举到 → 文件必然存在
+      verify.push(f);
+    }
+    return { drop, verify };
+  }
+
+  // video_cache 失效清理（异步分批）：删除「文件已不存在」与「非当前工作目录」的条目。
   // 不依赖全量重建即可自由收回失效缓存；mtime 变化不归此类（由增量刷新处理）。
-  _gcVideoCache() {
+  // 每 YIELD 条让出一次事件循环：主线程始终能响应 IPC，前端不再出现长时间「检测中…」。
+  // 判定分区由持久层给出（sqlite 走 gcPlan，JSON 走 _videoCacheGcPlan），语义一致。
+  async _gcVideoCache(knownPaths) {
     if (!this.videoCachePath) return 0;
+    const store = (this._cacheBackendMode === 'db' && this._cacheStore) ? this._cacheStore : null;
     this._loadVideoCache();
     const c = this._videoCache;
     if (!c) return 0;
-    let removed = 0;
-    const prefix = String(this.root || '').replace(/[\\/]+$/, '');
-    for (const f of Object.keys(c)) {
-      if (String(f).startsWith(prefix)) {
-        try { if (!fs.existsSync(f)) { delete c[f]; removed++; } } catch (e) { delete c[f]; removed++; }
-      } else {
-        delete c[f]; removed++; // 切工作目录后旧 root 残留
-      }
+    let plan;
+    try { plan = store ? store.gcPlan(knownPaths) : this._videoCacheGcPlan(knownPaths); }
+    catch (e) { if (store) return 0; plan = this._videoCacheGcPlan(knownPaths); }
+    const gone = [];
+    const YIELD = 256;
+    for (let i = 0; i < plan.verify.length; i++) {
+      // 让路期间缓存可能已被重置/重载（取消预检测、切工作目录）→ 放弃本次清理，避免写回陈旧快照
+      if (this._videoCache !== c) return 0;
+      let missing = false;
+      try { await fs.promises.stat(plan.verify[i]); } catch (e) { missing = true; }
+      if (missing) gone.push(plan.verify[i]);
+      if ((i + 1) % YIELD === 0) await new Promise((r) => setImmediate(r));
     }
-    if (removed) { try { this._saveVideoCache(); } catch (e) {} }
-    return removed;
+    if (this._videoCache !== c) return 0;
+    const all = plan.drop.concat(gone);
+    if (!all.length) return 0;
+    if (store) {
+      let removed = 0;
+      try { removed = store.deleteVideos(all); } catch (e) { return 0; }
+      for (const f of all) delete c[f];
+      return removed;
+    }
+    for (const f of all) delete c[f];
+    this._videoCacheDirty = true;
+    await this._saveVideoCache();
+    return all.length;
   }
 
   // 后台节流失效清理：距上次 ≥1h 才执行（防高频扫盘）；force 忽略节流（启动/手动触发）
-  _gcVideoCacheThrottled(force) {
+  async _gcVideoCacheThrottled(force) {
     if (!this.videoCachePath) return 0;
     const now = Date.now();
     if (!force && this._lastVideoGc && now - this._lastVideoGc < 3600000) return 0;
     this._lastVideoGc = now;
-    let removed = 0;
-    try { removed = this._gcVideoCache(); } catch (e) {}
-    return removed;
+    try { return await this._gcVideoCache(); } catch (e) { return 0; }
   }
 
   // 前台接口：清理 video_cache 失效条目（手动入口，返回删除数）
-  cleanVideoCache() {
-    const removed = this._gcVideoCacheThrottled(true);
+  async cleanVideoCache() {
+    const removed = await this._gcVideoCacheThrottled(true);
     return { ok: true, removed: removed || 0 };
   }
 
@@ -1033,13 +1291,10 @@ class Api {
     return false;
   }
 
-  // 批量解析 .lnk 快捷方式目标（与视频批量脚本语义一致）：返回 { lnkPath: targetPath }；
-  // 解析失败/失效返回空对象降级，不影响预检测其余流程。
-  // 实现：临时 .ps1 + pwsh -File；JSON 经 base64 进出（argv/控制台代码页会破坏中文，base64 全 ASCII 免疫）
-  _resolveShortcutTargets(paths) {
-    if (!paths || !paths.length) return {};
-    const { spawnSync } = require('child_process');
-    const scriptLines = [
+  // 解析 .lnk 的 PowerShell 片段：临时 .ps1 + pwsh -File；JSON 经 base64 进出
+  // （argv/控制台代码页会破坏中文，base64 全 ASCII 免疫）
+  _lnkResolveScript() {
+    return [
       '$ErrorActionPreference = "SilentlyContinue"',
       '$json = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($args[0]))',
       '$l = ConvertFrom-Json -InputObject $json',
@@ -1056,23 +1311,89 @@ class Api {
       '$out = $o | ConvertTo-Json -Compress',
       '[Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($out))',
     ].join('\n');
-    const inputB64 = Buffer.from(JSON.stringify(paths), 'utf8').toString('base64');
-    const tmp = require('path').join(process.env.TEMP || '.', 'lnk_resolve_' + process.pid + '_' + Date.now() + '.ps1');
+  }
+
+  // 解析结果缓存读取：命中且 lnk 文件未变（mtime 相同）直接复用；未缓存返回 null，缓存了「无目标」返回 ''
+  _lnkCached(lnk) {
+    const c = this._lnkCache.get(lnk);
+    if (!c) return null;
+    let mtimeMs = null;
+    try { mtimeMs = fs.statSync(lnk).mtimeMs; } catch (e) { mtimeMs = null; }
+    if (mtimeMs === null || mtimeMs === c.mtimeMs) return c.target;
+    this._lnkCache.delete(lnk);
+    return null;
+  }
+
+  _lnkStore(lnk, target) {
+    let mtimeMs = null;
+    try { mtimeMs = fs.statSync(lnk).mtimeMs; } catch (e) { mtimeMs = null; }
+    this._lnkCache.set(lnk, { mtimeMs, target: String(target || '') });
+  }
+
+  // 分流：命中缓存的直接给结果，其余交给解析器
+  _lnkSplit(paths) {
+    const out = {};
+    const todo = [];
+    for (const p of paths) {
+      const hit = this._lnkCached(p);
+      if (hit !== null) { if (hit) out[p] = hit; continue; }
+      todo.push(p);
+    }
+    return { out, todo };
+  }
+
+  // 批量解析 .lnk 快捷方式目标（与视频批量脚本语义一致）：返回 { lnkPath: targetPath }；
+  // 解析失败/失效返回空对象降级，不影响预检测其余流程。同步版（掩罩列表等同步 IPC 入口使用）。
+  _resolveShortcutTargets(paths) {
+    if (!paths || !paths.length) return {};
+    const { out, todo } = this._lnkSplit(paths);
+    if (!todo.length) return out;
+    const { spawnSync } = require('child_process');
+    const tmp = path.join(process.env.TEMP || '.', 'lnk_resolve_' + process.pid + '_' + Date.now() + '.ps1');
     try {
-      fs.writeFileSync(tmp, scriptLines, 'utf8');
+      fs.writeFileSync(tmp, this._lnkResolveScript(), 'utf8');
       try {
-        const r = spawnSync('pwsh.exe', ['-NoProfile', '-NonInteractive', '-File', tmp, inputB64],
+        const b64 = Buffer.from(JSON.stringify(todo), 'utf8').toString('base64');
+        const r = spawnSync('pwsh.exe', ['-NoProfile', '-NonInteractive', '-File', tmp, b64],
           { encoding: 'utf8', windowsHide: true, timeout: 10000 });
-        if (r.error || r.status !== 0 || !r.stdout) return {};
-        const json = Buffer.from(String(r.stdout).trim(), 'base64').toString('utf8');
-        const map = JSON.parse(json);
-        return map && typeof map === 'object' ? map : {};
+        if (r.error || r.status !== 0 || !r.stdout) { for (const p of todo) this._lnkStore(p, ''); return out; }
+        const map = JSON.parse(Buffer.from(String(r.stdout).trim(), 'base64').toString('utf8'));
+        const safe = (map && typeof map === 'object') ? map : {};
+        for (const p of todo) this._lnkStore(p, safe[p] ? safe[p] : '');
+        return Object.assign(out, safe);
       } finally {
         try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (e2) {}
       }
     } catch (e) {
       try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (e2) {}
-      return {};
+      return out;
+    }
+  }
+
+  // 异步版：预检测/重置等「检测中」路径专用 —— 解析快捷方式不再同步占住主线程（spawnSync 最坏阻塞 10s）
+  async _resolveShortcutTargetsAsync(paths) {
+    if (!paths || !paths.length) return {};
+    const { out, todo } = this._lnkSplit(paths);
+    if (!todo.length) return out;
+    const { execFile } = require('child_process');
+    const tmp = path.join(process.env.TEMP || '.', 'lnk_resolve_' + process.pid + '_' + Date.now() + '.ps1');
+    try {
+      await fs.promises.writeFile(tmp, this._lnkResolveScript(), 'utf8');
+      const stdout = await new Promise((resolve) => {
+        execFile('pwsh.exe', ['-NoProfile', '-NonInteractive', '-File', tmp,
+          Buffer.from(JSON.stringify(todo), 'utf8').toString('base64')],
+        { encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 8 * 1024 * 1024 },
+        (err, so) => resolve(err ? '' : String(so || '')));
+      });
+      if (!stdout) { for (const p of todo) this._lnkStore(p, ''); return out; }
+      const map = JSON.parse(Buffer.from(String(stdout).trim(), 'base64').toString('utf8'));
+      const safe = (map && typeof map === 'object') ? map : {};
+      for (const p of todo) this._lnkStore(p, safe[p] ? safe[p] : '');
+      return Object.assign(out, safe);
+    } catch (e) {
+      return out;
+    } finally {
+      try { await fs.promises.unlink(tmp); } catch (e2) {}
     }
   }
 
@@ -1097,7 +1418,7 @@ class Api {
       let rootCandsExtra = null;
       const lnkGroups = [];
       if (lnks.length) {
-        const map = this._resolveShortcutTargets(lnks);
+        const map = await this._resolveShortcutTargetsAsync(lnks);
         if (map) {
           const extra = [];
           for (const l of lnks) {
@@ -1180,6 +1501,7 @@ class Api {
                 const cc = this._loadVideoCache();
                 cc[key] = { LastWriteTime: this._ticksToStr(this._mtimeToTicks(key)), Duration: info.duration, Valid: info.valid, Width: info.width, Height: info.height };
                 this._videoInfoCache.set(key, info);
+                this._markVideoCacheDirty(key);
               } finally { this._inlineProbing--; }
             }
             const valid = !this._isExcludedPath(key, excludes) && info.valid;
@@ -1190,13 +1512,15 @@ class Api {
       results.push(r);
       dedup.set(key, r);
     }
-    this._saveVideoCache();
+    // 仅在有实际变更时落盘：常态（全部命中缓存）下预检测完全不写盘，行内徽章立即出结果
+    if (this._videoCacheDirty) await this._saveVideoCache();
     return results;
   }
 
   // 重置预检测：清除物理缓存，收集所有配置指向的路径并全量探测（跨路径去重），可实时回报进度
   // 收集所有配置指向的视频候选：跨配置路径去重、目录递归收集、跳过非视频扩展名
-  _gatherAllVideos() {
+  // 异步：快捷方式解析走非阻塞通道，避免「检测中」期间主线程被 pwsh 启动阻塞
+  async _gatherAllVideos() {
     const all = this._collectAllTxt();
     const pathSet = new Set();
     for (const t of all) {
@@ -1221,7 +1545,7 @@ class Api {
         const lnks = [];
         for (const ent of items) if (ent.isFile() && path.extname(ent.name).toLowerCase() === '.lnk') lnks.push(path.join(p, ent.name));
         if (lnks.length) {
-          const map = this._resolveShortcutTargets(lnks);
+          const map = await this._resolveShortcutTargetsAsync(lnks);
           if (map) for (const l of lnks) {
             const t = map[l];
             if (!t) continue;
@@ -1245,7 +1569,7 @@ class Api {
     // 若中途取消/异常，原缓存文件保持有效可复用，未完成的探测结果不落盘。
 
     // 收集所有配置指向的素材路径（跨路径去重）
-    const allVideos = this._gatherAllVideos();
+    const allVideos = await this._gatherAllVideos();
 
     const report = (s) => { if (onProgress) { try { onProgress(s); } catch (e) {} } };
     const total = allVideos.length;
@@ -1267,7 +1591,7 @@ class Api {
     if (cancelled) { // 取消/中断：丢弃本次内存探测结果，下次从原缓存文件重新加载（不覆盖原文件）
       this._videoCache = null;
       this._videoInfoCache = new Map();
-    } else this._saveVideoCache(); // 全部完成才原子覆盖原缓存；取消/中断时保留原文件
+    } else { await this._saveVideoCache(true); } // 全部完成才整体替换缓存；取消/中断时保留原缓存
     report({ done: probed, total, finished: true, cancelled });
     return { ok: true, total, valid, invalid: total - probed, cancelled };
   }
@@ -1276,7 +1600,7 @@ class Api {
   // 命中（缓存有效）的路径直接跳过，进度按全量候选回报（起始即跳过数）
   async refreshPrecache(onProgress) {
     const report = (s) => { if (onProgress) { try { onProgress(s); } catch (e) {} } };
-    const allVideos = this._gatherAllVideos();
+    const allVideos = await this._gatherAllVideos();
     const total = allVideos.length;
     const cache = this._loadVideoCache();
     const toProbe = [];
@@ -1295,28 +1619,26 @@ class Api {
       const info = await this._probeVideoAsync(f);
       cache[f] = { LastWriteTime: this._ticksToStr(this._mtimeToTicks(f)), Duration: info.duration, Valid: info.valid, Width: info.width, Height: info.height };
       this._videoInfoCache.set(f, info);
+      this._markVideoCacheDirty(f);
       probed++;
       if (info.valid) valid++;
       report({ done: base + probed, total });
     }, this.probeConcurrency, () => token !== this._precheckToken);
 
     const cancelled = token !== this._precheckToken;
-    if (cancelled) { // 取消/中断：丢弃本次内存增量，下次从原缓存文件重新加载（不覆盖原文件）
+    if (cancelled) { // 取消/中断：丢弃本次内存增量，下次从原缓存重新加载（不覆盖原缓存）
       this._videoCache = null;
       this._videoInfoCache = new Map();
-    } else this._saveVideoCache(); // 已完成的增量结果才原子覆盖原缓存；取消/中断保留原文件
+    } else { await this._saveVideoCache(); } // 已完成的增量结果才写入缓存；取消/中断保留原缓存
     report({ done: base + probed, total, finished: true, cancelled });
-    // 失效清理放到后台执行（用户主动点刷新即清，不受后台 1h 节流限制）：
-    // 全量清理要对每条缓存做一次 fs.existsSync，耗时随条目数线性增长（数千条可达数秒～数十秒）；
-    // 若同步放在返回之前，前端「正在预检测」遮罩（Promise.finally 里才隐藏）会被一直挂住。
-    // 故先上报 finished 并立即返回，清理在事件循环下一轮完成，结果通过缓存 GC 事件回传前端提示。
+    // 失效清理放到后台执行（用户主动点刷新即清，不受后台 1h 节流限制）。
+    // 传入本次刚枚举出的路径集合：这些文件必然存在，GC 直接判「保留」，不再逐条 fs.stat
+    // （原先数千条同步 existsSync 会占住主线程数秒～数十秒，把紧随其后的行内预检测 IPC 一起堵住，
+    //  前端表现为刷新完成后徽章仍长时间停在「检测中…」）；剩余候选项也已异步分批并让路事件循环。
     if (!cancelled) {
-      setImmediate(() => {
-        try {
-          const n = this._gcVideoCache();
-          if (n > 0) console.log('[video_cache] 后台清理失效条目 ' + n + ' 条');
-        } catch (e) { /* 后台清理失败不影响刷新结果 */ }
-      });
+      this._gcVideoCache(new Set(allVideos))
+        .then((n) => { if (n > 0) console.log('[video_cache] 后台清理失效条目 ' + n + ' 条'); })
+        .catch(() => { /* 后台清理失败不影响刷新结果 */ });
     }
     return { ok: true, total, updated: probed, valid, cancelled, removed: 0 };
   }
@@ -2736,20 +3058,42 @@ class Api {
     return { ok: true };
   }
 
-  _spawnPowerShell(script, env, task) {
-    // 以 pwsh 启动脚本（绕过 cmd /c start 中转，避免中文路径被代码页转码导致脚本无法加载）。
-    // 实时捕获 stdout/stderr 并通过任务管理器推送，供任务窗口显示。
+  // Node 引擎子进程：以 Electron 自带 Node（ELECTRON_RUN_AS_NODE）运行引擎，
+  // 既不依赖系统安装 Node，也不依赖 pwsh；stdio 形态与 pwsh 分支完全一致，协议行解析无需改动。
+  _spawnNodeEngineChild(task) {
     const { spawn } = require('child_process');
+    return spawn(process.execPath, [this._engineRunnerPath(), '--module', task.type], {
+      env: Object.assign({}, process.env, task.env, { ELECTRON_RUN_AS_NODE: '1' }),
+      cwd: this.enginesDir,
+      windowsHide: true,
+      detached: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  }
+
+  _spawnPowerShell(script, env, task) {
+    // 引擎分发：Node 引擎可用（且未被开关关掉）即走引擎，否则以 pwsh 启动 legacy 脚本
+    // （绕过 cmd /c start 中转，避免中文路径被代码页转码导致脚本无法加载）。
+    // 两条路径的 stdout/stderr 形态一致，实时捕获与协议行解析完全复用，供任务窗口显示。
+    const { spawn } = require('child_process');
+    const useNode = !!(task && this.shouldUseNodeEngine(task.type));
     return new Promise((resolve) => {
-      const child = spawn('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script], {
-        env: Object.assign({}, process.env, env),
-        cwd: this.scriptsDir,
-        windowsHide: true,   // 不弹黑窗，输出由任务窗口实时展示
-        detached: false,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+      const child = useNode
+        ? this._spawnNodeEngineChild(task)
+        : spawn('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script], {
+            env: Object.assign({}, process.env, env),
+            cwd: (script ? path.dirname(script) : this.scriptsDir),
+            windowsHide: true,   // 不弹黑窗，输出由任务窗口实时展示
+            detached: false,
+            stdio: ['ignore', 'pipe', 'pipe'],
+          });
       if (task) {
         task.pid = child.pid;
+        task.engine = useNode ? 'node' : 'pwsh';
+        task.log.push(useNode
+          ? '[引擎] Node 引擎（module=' + task.type + '）'
+          : '[引擎] legacy PowerShell（' + path.basename(script || '未指定') + '）');
+        this._emitTasks();
         // 任务真正开始：创建任务标记（含 env 快照，供失败重开精确还原）
         this._touchMarker(task);
         const decodeLine = (buf) => {
@@ -3217,8 +3561,9 @@ class Api {
   }
 
   runBatch(filePath, count, group) {
-    const script = path.join(this.scriptsDir, 'video_batch.ps1');
-    if (!fs.existsSync(script)) return { ok: false, error: '未找到脚本：' + script };
+    const script = this._legacyScriptPath('video_batch.ps1');
+    // 走 Node 引擎时不再要求 legacy 脚本存在（引擎为执行路径，legacy 仅回退用）
+    if (!this.shouldUseNodeEngine('batch') && !fs.existsSync(script)) return { ok: false, error: '未找到脚本：' + script };
     const notSet = this._settingsError('batch');
     if (notSet.length) return { ok: false, error: '批量拼接参数未设置：' + notSet.join('、') + '，请到 设置-批量拼接 中配置后再启动' };
     const b = this.config.batch || {};
@@ -3248,8 +3593,9 @@ class Api {
   }
 
   runReplica(logPath, mode = 1, entryVideo) {
-    const script = path.join(this.scriptsDir, 'video_replica.ps1');
-    if (!fs.existsSync(script)) return { ok: false, error: '未找到脚本：' + script };
+    const script = this._legacyScriptPath('video_replica.ps1');
+    // 走 Node 引擎时不再要求 legacy 脚本存在（引擎为执行路径，legacy 仅回退用）
+    if (!this.shouldUseNodeEngine('replica') && !fs.existsSync(script)) return { ok: false, error: '未找到脚本：' + script };
     const notSet = this._settingsError('replica');
     if (notSet.length) return { ok: false, error: '视频复刻参数未设置：' + notSet.join('、') + '，请到 设置-视频复刻 中配置后再启动' };
     const r = this.config.replica || {};
@@ -3317,12 +3663,16 @@ class Api {
     const namesArr = [...failNames].filter(Boolean);
     // 构造续跑环境：复用原任务环境变量，仅追加过滤变量
     const env = Object.assign({}, t.env || {});
-    const src = env.REPLICA_TXT ? String(env.REPLICA_TXT) : '';
+    let src = env.REPLICA_TXT ? String(env.REPLICA_TXT) : '';
     if (!src) return { ok: false, error: '原任务缺少 TXT 配置，无法继续制作' };
     this.tasks.delete(id);
     this._removeMarker(t);
     let task;
     if (t.type === 'batch') {
+      // 配置 TXT 在首次运行时已被移入成片目录作为正本（引擎与 PS1 同语义），
+      // 续跑必须按成片目录重定位，否则旧路径已失效 → 引擎报「未通过环境变量 REPLICA_TXT 提供 TXT 文件」
+      const relocated = this._locateBatchConfig(src, t);
+      if (relocated) { src = relocated; env.REPLICA_TXT = relocated; }
       // batch：只重做失败成片对应的「序号」，其余逻辑（命名/分组）仍按原始 BATCH_COUNT/BATCH_GROUP 计算；
       // 提交时刻刻意不刷新 → 成片命名前缀、输出目录、拼接日志均与首次一致（续跑即补做同一批的缺片）
       env.BATCH_ONLY_NAMES = namesArr.join(';');
@@ -3336,11 +3686,56 @@ class Api {
     return { ok: true, taskId: task.id, count: namesArr.length };
   }
 
+  // 批量任务续跑的配置重定位。
+  // 背景：配置正本在首次运行时被移入成片目录归档（引擎与 PS1 同语义），续跑沿用旧路径必然失效。
+  // 关键约束：成片名里含「配置所在目录名」（引擎以 baseDir 名作命名基准），若直接改用归档路径，
+  // 续跑产物名会多出一段目录名而与首次不一致 → 必须先复制回原路径，再以原路径运行。
+  // 复制是幂等的：引擎读到该副本后会再次把它移回归档位置（覆盖同名）。
+  _locateBatchConfig(oldPath, t) {
+    const cur = String(oldPath || '');
+    try { if (cur && fs.existsSync(cur)) return cur; } catch (e) {}
+    const found = this._findArchivedConfig(cur, t);
+    if (!found) return '';
+    if (cur) {
+      try {
+        fs.mkdirSync(path.dirname(cur), { recursive: true });
+        fs.copyFileSync(found, cur);
+        return cur; // 命名基准保持不变
+      } catch (e) { /* 原位置不可写 → 退回归档路径（名字可能带上目录名，但任务能跑通） */ }
+    }
+    return found;
+  }
+
+  // 归档配置三级查找：成片目录下同名 → 原目录下同名 → 成片目录内唯一非日志 TXT
+  _findArchivedConfig(oldPath, t) {
+    const cur = String(oldPath || '');
+    const base = cur ? path.basename(cur) : '';
+    const dirs = [];
+    if (t && t.outDir) dirs.push(t.outDir);
+    if (cur) dirs.push(path.dirname(cur));
+    for (const d of dirs) {
+      if (!d) continue;
+      if (base) {
+        const p = path.join(d, base);
+        try { if (fs.existsSync(p)) return p; } catch (e) {}
+      }
+      try {
+        if (!fs.existsSync(d) || !fs.statSync(d).isDirectory()) continue;
+        for (const n of fs.readdirSync(d)) {
+          if (!n.toLowerCase().endsWith('.txt') || /日志/.test(n)) continue;
+          return path.join(d, n);
+        }
+      } catch (e) {}
+    }
+    return '';
+  }
+
   // 遮罩叠加任务：payload 来自主窗口遮罩叠加模式（mode/rawDirs/videos/maskDirs/watermark/outputDir），
   // 经环境变量 MASK_* 驱动 Scripts\video_mask.ps1；无设置页配置组，参数随任务提交
   runMask(p) {
-    const script = path.join(this.scriptsDir, 'video_mask.ps1');
-    if (!fs.existsSync(script)) return { ok: false, error: '未找到脚本：' + script };
+    const script = this._legacyScriptPath('video_mask.ps1');
+    // 走 Node 引擎时不再要求 legacy 脚本存在（引擎为执行路径，legacy 仅回退用）
+    if (!this.shouldUseNodeEngine('mask') && !fs.existsSync(script)) return { ok: false, error: '未找到脚本：' + script };
     const errs = [];
     const dirs = Array.isArray(p && p.rawDirs) ? p.rawDirs.filter((d) => String(d).trim()) : [];
     if (!dirs.length) errs.push('原片文件夹');
@@ -3972,14 +4367,24 @@ let themes = [];
 
   resolvePath(filePath) { return path.resolve(filePath); }
 
-  // 检测应用运行所需的外部环境是否可用（pwsh / ffmpeg / ffprobe）
+  // 检测应用运行所需的外部环境是否可用（pwsh / ffmpeg / ffprobe / Node 引擎）
+  // P6 起 pwsh 不再是硬要求：Node 引擎可用即由引擎执行任务，pwsh 仅用于 legacy 回退与 .lnk 解析
   checkEnv() {
     const { spawnSync } = require('child_process');
     const have = (name) => {
       try { const r = spawnSync('where', [name], { windowsHide: true, encoding: 'utf8' }); return r.status === 0; }
       catch (e) { return false; }
     };
-    return { pwsh: have('pwsh'), ffmpeg: have('ffmpeg'), ffprobe: have('ffprobe') };
+    const engine = !!this._engineRunnerPath();
+    const pwsh = have('pwsh');
+    return {
+      pwsh,
+      ffmpeg: have('ffmpeg'),
+      ffprobe: have('ffprobe'),
+      engine,
+      // pwsh 是否仍为必需：引擎不可用（或开关强制 legacy）时才需要
+      pwshRequired: !this._nodeEnginePrimary(),
+    };
   }
 }
 

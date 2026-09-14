@@ -107,6 +107,22 @@ function writeFileAtomic(file, text) {
   }
 }
 
+/** video_cache 持久层：优先 sqlite（Cache\cache.db，P5 生产形态），不存在/不可用时返回 null 回退 JSON。
+ *  收益：全量读从「解析整个 JSON」变为库内全表读（数千条约 3ms），写回只落本次新探测的条目而非重写全量。 */
+function openVideoStore(cacheDir) {
+  if (!cacheDir) return null;
+  try {
+    const dbPath = path.join(cacheDir, 'cache.db');
+    if (!fs.existsSync(dbPath)) return null;
+    const CacheStore = require('../../base/cache-store');
+    const store = new CacheStore(dbPath, { root: '' });
+    store.open();
+    return store;
+  } catch (e) {
+    return null; // sqlite 不可用：静默回退 JSON，不影响任务
+  }
+}
+
 /** 读 JSON（容忍 BOM；损坏则返回兜底值） */
 function readJson(file, fallback = {}) {
   try {
@@ -521,6 +537,16 @@ function selectVideo({ srcPath, track, folderData, excludedPaths, excludedSubGro
 }
 
 // ────────────────────────── 分组重命名 ──────────────────────────
+/** 从成片名反解序号（续跑过滤 BATCH_ONLY_NAMES 用）：容忍分组后缀 A/B/C。
+ *  分组任务的成片名形如 <配置名>-<序号><组后缀>.mp4（如 ...-2A.mp4），
+ *  若只用 -(\d+)$ 匹配，带后缀的名字全部解析失败 → 分组任务的续跑永不命中。 */
+function parseOnlyNameIndex(name) {
+  const s = String(name || '');
+  const base = path.basename(s, path.extname(s));
+  const m = /-(\d+)[A-Z]?$/.exec(base);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
 /** 组后缀：第 idx（1 起）个成片属于第几组 → A/B/C…（对齐 PS 的分桶公式） */
 function groupSuffixFor(idx, total, groupCount) {
   if (groupCount <= 1) return '';
@@ -546,8 +572,9 @@ async function run(ctx, env = process.env) {
   const fail = (msg, step) => { logger.error(step, msg); return 1; };
 
   // ── 缓存载入：video_cache 只读复用（避免 Ticks 精度回写风险），usage_cache 保留「≥1 降为 1」的内存重置语义 ──
-  // 用精确读取：写回时未被触碰的条目能保留原始 18 位 Ticks，不被 JSON.parse 的 double 降精度
-  const diskVideoCache = readJsonExact(videoCacheFile, {});
+  // 持久层优先 sqlite（cache.db）；不存在时回退 JSON（精确读取：未被触碰的条目保留原始 18 位 Ticks）
+  const videoStore = openVideoStore(cacheDir);
+  const diskVideoCache = videoStore ? videoStore.loadVideoMap() : readJsonExact(videoCacheFile, {});
   const memInfo = new Map();          // 本次任务内的探测结果缓存
   // 本次真正探测过的条目 → 任务结束后合并写回（只增/更新，不删；GC 仍归 backend）
   // 目的：让执行期现场探测的新文件沉淀进 video_cache，供预检测/PS1 复用，避免重复 ffprobe
@@ -1016,9 +1043,8 @@ async function run(ctx, env = process.env) {
     if (cfg.onlyNames) {
       const onlyIdx = [];
       for (const nm of String(cfg.onlyNames).split(';').map((x) => x.trim()).filter(Boolean)) {
-        const base = path.basename(nm, path.extname(nm));
-        const m = /-(\d+)$/.exec(base);
-        if (m) onlyIdx.push(parseInt(m[1], 10));
+        const idx = parseOnlyNameIndex(nm);
+        if (idx > 0) onlyIdx.push(idx);
       }
       if (onlyIdx.length === 0) {
         return fail(`续跑过滤未从成片名解析出序号：${cfg.onlyNames}（应为 <成片名>-<序号>.mp4）`, '续跑过滤');
@@ -1343,11 +1369,21 @@ async function run(ctx, env = process.env) {
     // 供预检测/PS1 复用，避免每次重探。写失败不影响任务结果，保持静默（与 PS 一致，不额外输出）。
     if (probedForWriteBack.size > 0) {
       try {
-        const merged = Object.assign({}, diskVideoCache);
-        for (const [p, v] of probedForWriteBack) merged[p] = v;
-        writeFileAtomic(videoCacheFile, serializeVideoCache(merged));
+        if (videoStore) {
+          // sqlite：只写本次新探测的条目（增量事务），无需读全量再整份重写
+          const rows = {};
+          for (const [p, v] of probedForWriteBack) {
+            rows[p] = { LastWriteTime: String(v.LastWriteTime), Duration: v.Duration, Valid: v.Valid, Width: v.Width, Height: v.Height };
+          }
+          videoStore.applyVideoDelta(rows, null);
+        } else {
+          const merged = Object.assign({}, diskVideoCache);
+          for (const [p, v] of probedForWriteBack) merged[p] = v;
+          writeFileAtomic(videoCacheFile, serializeVideoCache(merged));
+        }
       } catch (e) { /* 忽略：缓存写回失败不应影响成片产出 */ }
     }
+    if (videoStore) { try { videoStore.close(); } catch (e) { /* 忽略 */ } }
     if (lock) { try { lock.release(); } catch (e) { /* 忽略 */ } }
     logger.lockReleased();
   }
@@ -1394,5 +1430,6 @@ module.exports = {
     findIndexInTree, findIndexFile, folderSuffix, loadBatchIndex,
     resolveFolderFromIndex, resolveFolderBySuffix,
     selectVideo, selectVideoCandidate, registerPickedClip, groupSuffixFor, exportUsageCache,
+    openVideoStore, parseOnlyNameIndex,
   },
 };

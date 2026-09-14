@@ -3300,7 +3300,8 @@
     call('check_env').then(function (r) {
       r = r || {};
       var miss = [];
-      if (!r.pwsh) miss.push('pwsh');
+      // pwsh 仅在「引擎不可用/被开关强制 legacy」时才是必需项（P6 起引擎为默认执行路径）
+      if (!r.pwsh && r.pwshRequired !== false) miss.push('pwsh');
       if (!r.ffmpeg) miss.push('ffmpeg');
       if (!r.ffprobe) miss.push('ffprobe');
       state.envMissing = miss;

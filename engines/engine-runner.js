@@ -4,6 +4,15 @@
 // 用法：node engine-runner.js --module mask [--dry]
 'use strict';
 
+// 抑制 node:sqlite 的实验性警告：缓存库是本项目内置驱动的唯一实现（无原生依赖），
+// 而警告经 stderr 被 backend 收集后会混入任务日志，干扰前端任务窗口显示。
+const _emitWarning = process.emitWarning;
+process.emitWarning = function (warning, ...rest) {
+  const text = typeof warning === 'string' ? warning : ((warning && warning.message) || '');
+  if (/SQLite is an experimental feature/i.test(String(text))) return;
+  return _emitWarning.call(process, warning, ...rest);
+};
+
 const Logger = require('./base/logger');
 const { registerModule, getModule, listModules } = require('./registry');
 

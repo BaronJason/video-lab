@@ -30,6 +30,7 @@
       "preload.js",
       "backend.js",
       "server.js",
+      "engines/**/*",
       "frontend/**/*",
       "icon/**/*",
       "README.md",
@@ -40,6 +41,13 @@
       {
         "from": "scripts",
         "to": "Scripts",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "engines",
+        "to": "Engines",
         "filter": [
           "**/*"
         ]

@@ -80,21 +80,30 @@ const PARSEABLE = [
   /成片预计时长/, /共 \d+ 个/, /(?:生成|复刻)第 \d+ \/ \d+ 个成片/,
   /✅ 成片完成/, /✅ 创建输出目录：/, /❌ 失败成片：/, /互斥锁/, /错误信息/,
 ];
-const baseDir = 'E:\\3-批量成片\\P0-基线\\baseline\\v1';
+// 基线来源：tests/fixtures 下随仓库固定存放的协议行夹具（PS1 真实输出、路径已归一化）；
+// 兼容旧 P0 捕获目录（体积大、可能被清理，仅作补充）。两者都没有才是真异常。
+const fixDir = path.join(__dirname, 'fixtures');
+const baseFiles = [];
+if (fs.existsSync(fixDir)) {
+  for (const n of fs.readdirSync(fixDir)) if (n.endsWith('.txt')) baseFiles.push(path.join(fixDir, n));
+}
+const legacyBase = 'E:\\3-批量成片\\P0-基线\\baseline\\v1';
+if (fs.existsSync(legacyBase)) {
+  for (const sub of fs.readdirSync(legacyBase)) {
+    const f = path.join(legacyBase, sub, 'stdout.txt');
+    if (fs.existsSync(f)) baseFiles.push(f);
+  }
+}
 let baseLines = 0, baseMatched = 0;
 const uncovered = [];
-if (fs.existsSync(baseDir)) {
-  for (const sub of fs.readdirSync(baseDir)) {
-    const f = path.join(baseDir, sub, 'stdout.txt');
-    if (!fs.existsSync(f)) continue;
-    for (const raw of fs.readFileSync(f, 'utf8').split(/\r?\n/)) {
-      const l = raw.replace(/\r$/, '').trim();
-      if (!l || /^frame=/.test(l)) continue;
-      if (!PARSEABLE.some((re) => re.test(l))) continue;
-      baseLines++;
-      const hit = Object.values(RE).some((re) => { re.lastIndex = 0; return re.test(l); });
-      if (hit) baseMatched++; else uncovered.push(`[${sub}] ${l}`);
-    }
+for (const f of baseFiles) {
+  for (const raw of fs.readFileSync(f, 'utf8').split(/\r?\n/)) {
+    const l = raw.replace(/\r$/, '').trim();
+    if (!l || l.startsWith('#') || /^frame=/.test(l)) continue;
+    if (!PARSEABLE.some((re) => re.test(l))) continue;
+    baseLines++;
+    const hit = Object.values(RE).some((re) => { re.lastIndex = 0; return re.test(l); });
+    if (hit) baseMatched++; else uncovered.push(`[${path.basename(f)}] ${l}`);
   }
 }
 check(`PS1 基线「可解析协议行」被契约正则完整覆盖（${baseMatched}/${baseLines}）`,

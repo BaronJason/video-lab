@@ -235,6 +235,7 @@ class Api {
     this._clipIndex = null;        // Map<baseDir, {mtime, entries}>
     this._clipIndexRoot = '';
     this._clipIndexDirty = false;
+    this._clipDb = null;         // node:sqlite 连接（clip_cache.db），惰性打开
     this._rebuildingClip = false; // 成片索引后台分批重建进行中标志（防并发重复触发）
     this.onScanProgress = null;   // 各扫描/重建环节进度回调（main 注入，推送主窗口渲染实时状态）
     this._precheckToken = 0;      // 预检测取消令牌：token 变化即中断旧探测（重置/换路径/手动取消）
@@ -300,6 +301,7 @@ class Api {
     this._clipIndex = new Map();
     this._clipIndexRoot = '';
     this._clipIndexDirty = false;
+    this._clipDb = null; // 关闭 sqlite 连接，下次按新 root 重新打开
     this._rebuildingClip = false;
     // 预检测随工作目录取消：旧路径的探测结果不写入新目录缓存
     this._precheckToken++;
@@ -1346,30 +1348,76 @@ class Api {
 
   // ── 成片名搜索索引：仅索引日志解析出的成片条目（video/clips/watermark/log_path）。
   //    以「配置目录」为单位按目录 mtime 失效，命中直接读内存，未命中重扫该目录；
-  //    有变更时落盘到 Cache\clip_cache.json，冷启动直接复用，避免每次搜索全量读盘解析。
+  //    有变更时落库到 Cache\clip_cache.db（node:sqlite 内置驱动，无原生模块），
+  //    冷启动直接复用，避免每次搜索全量读盘解析。旧版 clip_cache.json 首次接管后自动迁移并删除。
+  // 打开 sqlite 连接（惰性）；失败返回 null 时索引退化为纯内存模式
+  _openClipDb() {
+    try {
+      if (this._clipDb && !this._clipDb.closed) return this._clipDb;
+      if (!this.clipIndexCachePath) return null;
+      fs.mkdirSync(path.dirname(this.clipIndexCachePath), { recursive: true });
+      const { DatabaseSync } = require('node:sqlite');
+      this._clipDb = new DatabaseSync(this.clipIndexCachePath);
+      this._clipDb.exec('CREATE TABLE IF NOT EXISTS clip_index(dir TEXT PRIMARY KEY, mtime INTEGER NOT NULL, entries TEXT NOT NULL)');
+      return this._clipDb;
+    } catch (e) {
+      this._clipDb = null;
+      return null;
+    }
+  }
+
   _loadClipIndex() {
     if (this._clipIndex && this._clipIndexRoot === this.root) return;
     this._clipIndexRoot = this.root;
     this._clipIndex = new Map();
-    if (!this.clipIndexCachePath) return;
-    cleanupTmp(this.clipIndexCachePath); // 清理上次中断遗留的未完成临时索引
+    const db = this._openClipDb();
+    if (!db) return;
     try {
-      const data = JSON.parse(fs.readFileSync(this.clipIndexCachePath, 'utf-8'));
+      const rows = db.prepare('SELECT dir, mtime, entries FROM clip_index').all();
+      const prefix = String(this.root || '').replace(/[\\/]+$/, '');
+      for (const r of rows) {
+        if (!String(r.dir).startsWith(prefix)) continue; // 仅载入当前工作目录下的条目
+        try { this._clipIndex.set(r.dir, { mtime: r.mtime, entries: JSON.parse(r.entries) }); } catch (e) {}
+      }
+    } catch (e) {}
+    this._migrateClipIndexJson(); // 首次切换到 sqlite：旧 json 数据读入内存并待落库
+  }
+
+  // 旧版 clip_cache.json 一次性迁移：db 表为空且 json 存在时读入内存，并标记待落库
+  _migrateClipIndexJson() {
+    if (this._clipIndex.size > 0) return;
+    const legacy = this.clipIndexCachePath.replace(/\.db$/i, '.json');
+    if (!legacy || legacy === this.clipIndexCachePath || !fs.existsSync(legacy)) return;
+    try {
+      const data = JSON.parse(fs.readFileSync(legacy, 'utf-8'));
+      const prefix = String(this.root || '').replace(/[\\/]+$/, '');
       if (data && data.root === this.root && data.dirs && typeof data.dirs === 'object') {
         for (const k in data.dirs) {
           const v = data.dirs[k];
           if (v && typeof v.mtime === 'number' && Array.isArray(v.entries)) this._clipIndex.set(k, { mtime: v.mtime, entries: v.entries });
         }
+        if (this._clipIndex.size) this._clipIndexDirty = true;
       }
     } catch (e) {}
   }
 
   _saveClipIndex() {
-    if (!this.clipIndexCachePath || !this._clipIndexDirty) return;
-    const dirs = {};
-    this._clipIndex.forEach((v, k) => { if (Array.isArray(v.entries)) dirs[k] = { mtime: v.mtime, entries: v.entries }; });
-    // 原子写：重建/渐进落盘只认完整结果，中断不写坏原索引
-    if (atomicWrite(this.clipIndexCachePath, JSON.stringify({ root: this.root, dirs }))) this._clipIndexDirty = false;
+    const db = this._openClipDb();
+    if (!db || !this._clipIndexDirty) return;
+    try {
+      db.exec('BEGIN');
+      const ins = db.prepare('INSERT INTO clip_index(dir, mtime, entries) VALUES (?, ?, ?) ON CONFLICT(dir) DO UPDATE SET mtime=excluded.mtime, entries=excluded.entries');
+      this._clipIndex.forEach((v, k) => { if (Array.isArray(v.entries)) ins.run(k, v.mtime, JSON.stringify(v.entries)); });
+      db.exec('COMMIT');
+      this._clipIndexDirty = false;
+      // 首次接管成功即删除旧版 json（内容已迁入/可被重建覆盖，避免双份并存）
+      try {
+        const legacy = this.clipIndexCachePath.replace(/\.db$/i, '.json');
+        if (legacy !== this.clipIndexCachePath && fs.existsSync(legacy)) fs.unlinkSync(legacy);
+      } catch (e) {}
+    } catch (e) {
+      try { db.exec('ROLLBACK'); } catch (e2) {}
+    }
   }
 
   // 某配置目录的成片条目：目录 mtime 未变直接命中索引，否则重扫该目录并重建索引条目

@@ -166,7 +166,7 @@ function moveCaches() {
   scanCachePath = path.join(cacheDir, app.isPackaged ? 'scan_cache.json' : 'video_lab_scan_cache.json');
   videoCachePath = path.join(cacheDir, 'video_cache.json');
   logCachePath = path.join(cacheDir, app.isPackaged ? 'log_cache.json' : 'video_lab_log_cache.json');
-  clipCachePath = path.join(cacheDir, app.isPackaged ? 'clip_cache.json' : 'video_lab_clip_cache.json');
+  clipCachePath = path.join(cacheDir, 'clip_cache.db');
   taskStatePath = path.join(cacheDir, app.isPackaged ? 'task_cache.json' : 'video_lab_task_cache.json');
   // 水印设置跟随 config 同级存放（不进 Cache）：Cache 整体复制时会把旧 Cache 版一并带过来，这里将其搬到设置侧并清理 Cache 副本
   const wmTarget = path.join(path.dirname(configFilePath()), watermarkCacheName);
@@ -292,7 +292,7 @@ let scanCachePath = path.join(cacheDir, app.isPackaged ? 'scan_cache.json' : 'vi
 let videoCachePath = path.join(cacheDir, app.isPackaged ? 'video_cache.json' : 'video_lab_video_cache.json');
 let logCachePath = path.join(cacheDir, app.isPackaged ? 'log_cache.json' : 'video_lab_log_cache.json');
 // 成片名搜索缓存（仅存成片条目精简字段，目录 mtime 变化自动失效重建）
-let clipCachePath = path.join(cacheDir, app.isPackaged ? 'clip_cache.json' : 'video_lab_clip_cache.json');
+let clipCachePath = path.join(cacheDir, 'clip_cache.db');
 let taskStatePath = path.join(cacheDir, app.isPackaged ? 'task_cache.json' : 'video_lab_task_cache.json');
 // 水印项目设置缓存：项目默认分组数和主流水印启用/选择结果，属于设置而非缓存，放在 config.json 同级，不随 Cache 清空
 const watermarkCacheName = app.isPackaged ? 'watermark_cache.json' : 'video_lab_watermark_cache.json';

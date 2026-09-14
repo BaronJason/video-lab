@@ -70,6 +70,7 @@ function loadVideoCache(cacheDir) {
     if (fs.existsSync(dbPath)) {
       const CacheStore = require('../../base/cache-store');
       const store = new CacheStore(dbPath, { root: '' });
+      store.open({ readOnly: true }); // 只读用途：不建表、不写 meta（replica 仅消费缓存）
       const map = store.loadVideoMap();
       store.close();
       if (map && Object.keys(map).length) return map;

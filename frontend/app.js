@@ -1855,9 +1855,7 @@
       el.classList.add('log-entry--open');
       precheckClips(el);
     }
-    el.classList.add('log-entry--highlight');
     el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    setTimeout(function () { el.classList.remove('log-entry--highlight'); }, 2500);
     jumpLogRightByVideo(el.dataset.video, el.getAttribute('data-log-path'));
     return true;
   }

@@ -141,6 +141,17 @@ class CacheStore {
     db.prepare('UPDATE video_cache SET usage_count = usage_count + ? WHERE path = ?').run(inc, String(vPath));
   }
 
+  // 累加使用计数，行不存在时也能建立计数行。与 bumpVideoUsage 的差别是不要求素材已在缓存表中——
+  // 引擎现场探测到的新素材可能尚未入库，用这条能保证计数不丢。
+  // 用途：与 usage_cache.json 同步演进，为 legacy 退役后的「usage_cache 并库」提前铺路（届时只需丢掉 JSON）。
+  addVideoUsage(vPath, inc = 1) {
+    const db = this.open();
+    db.prepare(`INSERT INTO video_cache (path, last_write, duration, width, height, valid, usage_count)
+                VALUES (?, '', 0, 0, 0, 0, ?)
+                ON CONFLICT(path) DO UPDATE SET usage_count = usage_count + excluded.usage_count`)
+      .run(String(vPath), Number(inc) || 0);
+  }
+
   // 全量读出为 backend 的缓存结构（与 video_cache.json 同形，键为视频路径）
   loadVideoMap() {
     const rows = this.open().prepare('SELECT path, last_write, duration, width, height, valid FROM video_cache').all();

@@ -1181,6 +1181,7 @@ function registerIpc() {
   ipcMain.handle('reset_precheck', (e) => { const sender = e.sender; return api.resetPrecheck((s) => { try { sender.send('reset_progress', s); } catch (err) {} if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('reset_progress', s); }); });
   // 仅刷新预缓存：不删缓存，只对缺失/变化的视频增量更新（与重置同通道回报进度）
   ipcMain.handle('refresh_precache', (e) => { const sender = e.sender; return api.refreshPrecache((s) => { try { sender.send('reset_progress', s); } catch (err) {} if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('reset_progress', s); }); });
+  ipcMain.handle('clean_video_cache', (e) => api.cleanVideoCache());
   ipcMain.handle('list_logs', (e, project, name, versionPath) => api.listLogs(project, name, versionPath));
   ipcMain.handle('search_logs', (e, query) => api.searchLogs(query));
   ipcMain.handle('get_log_content', (e, fromPath, configName) => api.logContent(fromPath, configName));

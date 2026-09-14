@@ -2191,19 +2191,33 @@
       resetPrecheckAll();
     });
   }
-  // 刷新预缓存菜单：点击后弹窗二选一；「全部重置」走原流程（内部仍保留二次确认）
+  // 刷新预缓存菜单：点击后弹窗三选一；「全部重置」走原流程（内部仍保留二次确认）
   function refreshPrecacheMenu() {
     showDialog({
       title: '刷新预缓存',
-      message: '仅刷新：更新缺失或已变化的视频，不重置缓存；\n全部重置：清空缓存后重新检测（视频较多时较耗时）。',
+      message: '仅刷新：更新缺失或已变化的视频，不重置缓存；\n全部重置：清空缓存后重新检测（视频较多时较耗时）；\n清理失效：删除已失效（文件已删除/换工作目录残留）的缓存条目。',
       buttons: [
         { label: '仅刷新', value: 'refresh', primary: true },
+        { label: '清理失效', value: 'clean' },
         { label: '全部重置', value: 'reset', danger: true }
       ]
     }).then(function (v) {
       if (!v) { setStatus('已取消刷新预缓存'); return; }
       if (v === 'refresh') refreshPrecacheFlow();
+      else if (v === 'clean') cleanVideoCacheFlow();
       else resetPrecheckFlow(); // 内部含「确认重置」二次确认
+    });
+  }
+  // 清理 video_cache 失效条目（手动入口）：仅删已失效缓存，不触发任何探测
+  function cleanVideoCacheFlow() {
+    showBusy('正在清理失效缓存…');
+    call('clean_video_cache').then(function (r) {
+      hideBusy();
+      setStatusDone('已清理失效缓存条目 ' + ((r && r.removed) || 0) + ' 个');
+      if (state.activeTxt && state.activeVersion) runPrecheck();
+    }).catch(function (e) {
+      hideBusy();
+      setStatus('清理失效缓存失败：' + e.message);
     });
   }
   // 仅刷新预缓存：不删缓存、不重置，只对缺失/变化的视频增量更新（进度与取消/缩后台同「重置预检测」）
@@ -2220,7 +2234,7 @@
     call('refresh_precache').then(function (r) {
       if (state.precheckBackground) hideProbeMini(); else hideBusy();
       cleanup();
-      setStatus('预缓存已刷新：更新 ' + ((r && r.updated) || 0) + ' / ' + ((r && r.total) || 0) + ' 个视频' + ((r && r.cancelled) ? '（已中断）' : ''));
+      setStatus('预缓存已刷新：更新 ' + ((r && r.updated) || 0) + ' / ' + ((r && r.total) || 0) + ' 个视频' + (((r && r.removed) > 0) ? '，清理失效 ' + r.removed + ' 条' : '') + ((r && r.cancelled) ? '（已中断）' : ''));
       if (state.activeTxt && state.activeVersion) runPrecheck();
     }).catch(function (e) {
       hideBusy();

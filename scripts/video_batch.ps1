@@ -261,11 +261,6 @@ function Test-ExcludePath {
     return $false
 }
 
-function Get-SortKey {
-    param([string]$str)
-    return [regex]::Replace($str, '\d+', { param($m) $m.Value.PadLeft(8, '0') })
-}
-
 # ==================== 分组重命名函数（静默） ====================
 function Invoke-GroupRename {
     param([string]$FolderPath, [int]$X)
@@ -494,39 +489,6 @@ function Export-UsageCache {
         }
     }
     $globalCache | ConvertTo-Json -Compress | Set-Content $UsageCacheFile -Encoding UTF8
-}
-
-# ------------------------------ 生成报告函数 ------------------------------
-function Export-UsageReport {
-    param([string]$UsageCacheFile, [string]$ReportFile)
-    if (-not (Test-Path $UsageCacheFile)) { return }
-    $data = Get-Content $UsageCacheFile -Encoding UTF8 | ConvertFrom-Json -AsHashtable
-    if ($data.Count -eq 0) { return }
-
-    $sortedEntries = $data.Keys | Sort-Object { Get-SortKey $_ } | ForEach-Object {
-        [PSCustomObject]@{
-            Path  = $_
-            Count = $data[$_].UsageCount
-            Leaf  = Split-Path (Split-Path $_ -Parent) -Leaf
-        }
-    }
-
-    $lines = @()
-    $currentLeaf = $null
-    $firstEntry = $true
-
-    foreach ($entry in $sortedEntries) {
-        if ($entry.Leaf -ne $currentLeaf) {
-            if (-not $firstEntry) {
-                $lines += "-" * 60
-            }
-            $currentLeaf = $entry.Leaf
-            $firstEntry = $false
-        }
-        $lines += "$($entry.Path) : $($entry.Count)"
-    }
-
-    $lines | Out-File -FilePath $ReportFile -Encoding UTF8
 }
 
 # ------------------------------ 索引辅助（批量路径自动修复） ------------------------------
@@ -1508,10 +1470,8 @@ try {
                 $logContent | Out-File -Path $logFilePath -Encoding UTF8 -Append
         }
         
-        # 生成报告（缓存使用情况）
-        $reportFile = Join-Path $scriptCacheDir "usage_report.txt"
-        Export-UsageReport -UsageCacheFile $usageCacheFile -ReportFile $reportFile
-        
+        # 生成报告（缓存使用情况）已移除：usage_report 为 ps1 时代产物，本项目不再需要
+
         Write-Host "`n================================================" -ForegroundColor Green
         
     }

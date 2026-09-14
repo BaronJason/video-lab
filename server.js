@@ -88,6 +88,7 @@ const PURE_BACKEND_ROUTES = {
   get_root: { m: 'getRoot', a: () => [] },
   check_env: { m: 'checkEnv', a: () => [] },
   cancel_precheck: { m: 'cancelPrecheck', a: () => [] },
+  clean_video_cache: { m: 'cleanVideoCache', a: () => [] },
 };
 
 function startHttpServer(opts) {

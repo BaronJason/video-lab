@@ -245,6 +245,8 @@ class Api {
     this._videoCache = null;
     this._videoInfoCache = new Map();
     this._txtTree = null;
+    // 启动后空闲期执行一次 video_cache 失效清理（文件已删除/旧工作目录残留回收）
+    setImmediate(() => { try { this._gcVideoCacheThrottled(true); } catch (e) {} });
     this._txtTreeRoot = null;
     this._projectsCache = null;
     this._versionsCache = new Map();
@@ -984,6 +986,43 @@ class Api {
     }
   }
 
+  // video_cache 失效清理：删除「文件已不存在」与「非当前工作目录」的条目，确有删除才原子写盘。
+  // 不依赖全量重建即可自由收回失效缓存；mtime 变化不归此类（由增量刷新处理）。
+  _gcVideoCache() {
+    if (!this.videoCachePath) return 0;
+    this._loadVideoCache();
+    const c = this._videoCache;
+    if (!c) return 0;
+    let removed = 0;
+    const prefix = String(this.root || '').replace(/[\\/]+$/, '');
+    for (const f of Object.keys(c)) {
+      if (String(f).startsWith(prefix)) {
+        try { if (!fs.existsSync(f)) { delete c[f]; removed++; } } catch (e) { delete c[f]; removed++; }
+      } else {
+        delete c[f]; removed++; // 切工作目录后旧 root 残留
+      }
+    }
+    if (removed) { try { this._saveVideoCache(); } catch (e) {} }
+    return removed;
+  }
+
+  // 后台节流失效清理：距上次 ≥1h 才执行（防高频扫盘）；force 忽略节流（启动/手动触发）
+  _gcVideoCacheThrottled(force) {
+    if (!this.videoCachePath) return 0;
+    const now = Date.now();
+    if (!force && this._lastVideoGc && now - this._lastVideoGc < 3600000) return 0;
+    this._lastVideoGc = now;
+    let removed = 0;
+    try { removed = this._gcVideoCache(); } catch (e) {}
+    return removed;
+  }
+
+  // 前台接口：清理 video_cache 失效条目（手动入口，返回删除数）
+  cleanVideoCache() {
+    const removed = this._gcVideoCacheThrottled(true);
+    return { ok: true, removed: removed || 0 };
+  }
+
   _isExcludedPath(target, excludes) {
     if (!excludes || excludes.length === 0) return false;
     for (const ex of excludes) {
@@ -1266,8 +1305,10 @@ class Api {
       this._videoCache = null;
       this._videoInfoCache = new Map();
     } else this._saveVideoCache(); // 已完成的增量结果才原子覆盖原缓存；取消/中断保留原文件
+    // 刷新完成后顺带回收失效条目（文件已删除/旧工作目录残留；1h 节流防高频全盘扫描）
+    const gcRemoved = cancelled ? 0 : this._gcVideoCacheThrottled();
     report({ done: base + probed, total, finished: true, cancelled });
-    return { ok: true, total, updated: probed, valid, cancelled };
+    return { ok: true, total, updated: probed, valid, cancelled, removed: gcRemoved };
   }
 
   // 收集某配置目录下的日志候选并解析为成片条目（按目录 mtime 缓存）

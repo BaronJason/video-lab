@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('txapi', {
   precheck: (paths, excludes) => invoke('precheck', paths, excludes),
   reset_precheck: () => invoke('reset_precheck'),
   refresh_precache: () => invoke('refresh_precache'),
+  clean_video_cache: () => invoke('clean_video_cache'),
   cancel_precheck: () => invoke('cancel_precheck'),
   get_autostart: () => invoke('get_autostart'),
   set_autostart: (en) => invoke('set_autostart', !!en),

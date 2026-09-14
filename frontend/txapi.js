@@ -121,6 +121,7 @@
     precheck: function (paths, excludes) { return invokeArgs('precheck', paths, excludes); },
     reset_precheck: function () { return invoke('reset_precheck', []); },
     refresh_precache: function () { return invoke('refresh_precache', []); },
+    clean_video_cache: function () { return invoke('clean_video_cache', []); },
     cancel_precheck: function () { return invoke('cancel_precheck', []); },
     get_autostart: function () { return invoke('get_autostart', []); },
     set_autostart: function (en) { return invoke('set_autostart', [!!en]); },

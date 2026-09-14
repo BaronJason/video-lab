@@ -16,6 +16,7 @@ const VIDEO_EXT_SET = new Set(VIDEO_EXTS);
 // PS 的 LastWriteTimeUtc.Ticks 是 .NET DateTime.Ticks（0001-01-01 基准），
 // 偏移为 621355968000000000（**不是** FILETIME 的 1601 基准 116444736000000000）
 const DOTNET_EPOCH_TICKS = 621355968000000000;
+const DOTNET_EPOCH_TICKS_BIG = 621355968000000000n;
 // Ticks 在 JS Number 下超出 2^53 会丢精度（ulp≈128 ticks）：容差 1ms（10000 ticks）内视为同一时刻
 const TICKS_TOLERANCE = 10000;
 
@@ -24,6 +25,54 @@ const isVideoFile = (p) => VIDEO_EXT_SET.has(path.extname(String(p || '')).toLow
 /** 文件最后写入的 .NET Ticks（对齐 PS 的 $fileInfo.LastWriteTimeUtc.Ticks） */
 function ticksOf(stat) {
   return stat.mtimeMs * 10000 + DOTNET_EPOCH_TICKS;
+}
+
+/**
+ * 精确 .NET Ticks（BigInt）。
+ * video_cache 写回必须与 PS 的 `$cached.LastWriteTime -eq $fileInfo.LastWriteTimeUtc.Ticks`
+ * 精确相等，Number 精度不够；实测 statSync(p,{bigint:true}).mtimeNs/100n + 偏移
+ * 与 PS 计算值逐 tick 一致（差 0），故写回统一走本函数。
+ */
+function ticksBigOfFile(videoPath) {
+  try {
+    const st = fs.statSync(videoPath, { bigint: true });
+    return st.mtimeNs / 100n + DOTNET_EPOCH_TICKS_BIG;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * video_cache 专用序列化：LastWriteTime 是 18 位大整数，JSON.stringify 遇 BigInt 会抛错、
+ * 转 Number 又会丢精度，故手工拼装数字字面量，保证 PS 侧读到精确 Int64。
+ */
+function serializeVideoCache(obj) {
+  const parts = [];
+  for (const k of Object.keys(obj)) {
+    const v = obj[k] || {};
+    const lw = v.LastWriteTime != null ? String(v.LastWriteTime) : '0';
+    parts.push(
+      JSON.stringify(k) + ':{"LastWriteTime":' + lw +
+      ',"Duration":' + (Number(v.Duration) || 0) +
+      ',"Width":' + (Number(v.Width) || 0) +
+      ',"Height":' + (Number(v.Height) || 0) +
+      ',"Valid":' + (v.Valid ? 'true' : 'false') + '}'
+    );
+  }
+  return '{' + parts.join(',') + '}';
+}
+
+/** 原子写：先写临时文件再 rename（与 PS 的"确有变更才落盘 + 原子覆盖"一致，避免写坏共用缓存） */
+function writeFileAtomic(file, text) {
+  const tmp = file + '.tmp' + process.pid;
+  try {
+    fs.writeFileSync(tmp, text, 'utf8');
+    fs.renameSync(tmp, file);
+    return true;
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch (e2) { /* 忽略 */ }
+    return false;
+  }
 }
 
 /** 读 JSON（容忍 BOM；损坏则返回兜底值） */
@@ -465,6 +514,9 @@ async function run(ctx, env = process.env) {
   // ── 缓存载入：video_cache 只读复用（避免 Ticks 精度回写风险），usage_cache 保留「≥1 降为 1」的内存重置语义 ──
   const diskVideoCache = readJson(videoCacheFile, {});
   const memInfo = new Map();          // 本次任务内的探测结果缓存
+  // 本次真正探测过的条目 → 任务结束后合并写回（只增/更新，不删；GC 仍归 backend）
+  // 目的：让执行期现场探测的新文件沉淀进 video_cache，供预检测/PS1 复用，避免重复 ffprobe
+  const probedForWriteBack = new Map();
   const usageCacheMap = readJson(usageCacheFile, {});
   for (const k of Object.keys(usageCacheMap)) {
     const e = usageCacheMap[k];
@@ -511,6 +563,17 @@ async function run(ctx, env = process.env) {
     const r = await probe(videoPath);
     const info = { valid: !!r.valid, duration: r.duration || 0, width: r.width || 0, height: r.height || 0, ticks: ticksOf(stat) };
     memInfo.set(videoPath, info);
+    // 精确 Ticks（BigInt）用于写回：PS 侧 `-eq` 是精确比较，Number 精度不足会永不命中
+    const bigTicks = ticksBigOfFile(videoPath);
+    if (bigTicks !== null) {
+      probedForWriteBack.set(videoPath, {
+        LastWriteTime: bigTicks,
+        Duration: info.duration,
+        Width: info.width,
+        Height: info.height,
+        Valid: info.valid,
+      });
+    }
     return info;
   };
 
@@ -1217,6 +1280,16 @@ async function run(ctx, env = process.env) {
     logger.info('');
     logger.info('================================================');
   } finally {
+    // video_cache 写回：把本次现场探测到的条目合并进磁盘缓存（只增/更新，不删；GC 仍归 backend）。
+    // 与 PS batch 的 IsCacheUpdated 合并写回语义一致，使执行期新扫描到的素材沉淀下来，
+    // 供预检测/PS1 复用，避免每次重探。写失败不影响任务结果，保持静默（与 PS 一致，不额外输出）。
+    if (probedForWriteBack.size > 0) {
+      try {
+        const merged = Object.assign({}, diskVideoCache);
+        for (const [p, v] of probedForWriteBack) merged[p] = v;
+        writeFileAtomic(videoCacheFile, serializeVideoCache(merged));
+      } catch (e) { /* 忽略：缓存写回失败不应影响成片产出 */ }
+    }
     if (lock) { try { lock.release(); } catch (e) { /* 忽略 */ } }
     logger.lockReleased();
   }

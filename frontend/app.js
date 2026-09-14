@@ -2648,12 +2648,42 @@
           { label: '打开文件', action: function () { call('open_path', mfp); } },
           { label: '打开路径', action: function () { call('open_folder_select', mfp); } },
           { label: '移除该日志', action: function () {
-              showDialog({ title: '移除遮罩日志', message: '确定删除遮罩日志：\n' + mfp + '\n\n（移入回收站）', buttons: [ { label: '取消', value: 0 }, { label: '删除', value: 1, danger: true } ] }).then(function (v) {
-                if (v !== 1) return;
-                call('remove_branch', mfp, 'txt').then(function (r) {
-                  if (!(r && r.ok)) { setStatus('移除失败：' + ((r && r.error) || '未知错误')); return; }
-                  setStatus('已移除遮罩日志'); buildMaskLogView();
-                }).catch(function (err) { setStatus('移除失败：' + err.message); });
+              // 与批量日期分支弹窗同款分级：仅移日志 / 连同成片移除
+              showDialog({
+                title: '移除遮罩日志',
+                message: mfp + '\n\n请选择移除方式：\n' +
+                  '· 仅移除该日志：只删除当前【日志】文件\n' +
+                  '· 连同成片移除：删除日志文件及其中全部成片视频',
+                buttons: [
+                  { label: '仅移除该日志', value: 'txt', primary: true },
+                  { label: '连同成片移除', value: 'videos', danger: true }
+                ]
+              }).then(function (v) {
+                if (!v) return;
+                if (v === 'txt') {
+                  call('remove_branch', mfp, 'txt').then(function (r) {
+                    if (!(r && r.ok)) { setStatus('移除失败：' + ((r && r.error) || '未知错误')); return; }
+                    setStatus('已移除遮罩日志'); buildMaskLogView();
+                  }).catch(function (err) { setStatus('移除失败：' + err.message); });
+                  return;
+                }
+                // 连同成片：取该日志全部成片名一并删除（成片文件 + 日志条目块），日志清空会自动删文件
+                call('list_mask_logs', maskState.project.path).then(function (logs) {
+                  var lg = (Array.isArray(logs) ? logs : []).find(function (x) { return x.path === mfp; });
+                  var names = (lg && Array.isArray(lg.entries) ? lg.entries : []).map(function (e) { return e.video; }).filter(Boolean);
+                  if (!names.length) {
+                    call('remove_branch', mfp, 'txt').then(function (r2) {
+                      if (!(r2 && r2.ok)) { setStatus('移除失败：' + ((r2 && r2.error) || '未知错误')); return; }
+                      setStatus('已移除遮罩日志'); buildMaskLogView();
+                    }).catch(function (err) { setStatus('移除失败：' + err.message); });
+                    return;
+                  }
+                  call('delete_mask_videos', maskState.project.path, names).then(function (r) {
+                    if (!(r && r.ok)) { setStatus('删除失败：' + ((r && r.error) || '未知错误')); return; }
+                    setStatus('已删除 ' + ((r.deleted || []).length) + ' 个成片及其日志');
+                    buildMaskLogView();
+                  }).catch(function (err) { setStatus('删除失败：' + err.message); });
+                }).catch(function () { setStatus('读取遮罩日志失败'); });
               });
           } }
         ]);
@@ -4531,7 +4561,7 @@
             '<span class="log-entry__arrow">' + icon('chevron-right', 14) + '</span>' + icon('video', 14) +
             '<span class="log-entry__video-name" title="' + escapeHtml(e.outPath || e.video) + '">' + escapeHtml(e.video || '（未命名成片）') + '</span>' +
             '<span class="log-entry__clip-count">' + clips.length + ' 素材</span>' +
-            '<button type="button" class="mask-log-entry__del" data-delone="' + escapeHtml(e.video) + '" title="删除该成片">' + icon('x', 12) + '</button></div>';
+            '<button type="button" class="log-entry__replica mask-log-entry__del" data-delone="' + escapeHtml(e.video) + '" title="删除该成片">' + icon('trash-2', 13) + '删除成片</button></div>';
           html += '<div class="log-entry__clips" style="display:none">';
           clips.forEach(function (c) {
             html += '<div class="log-entry__clip" data-clip="' + escapeHtml(c) + '" title="删除所有使用该素材的成片：' + escapeHtml(baseNameNoExt(c)) + '">' + icon('layers', 12) + '<span class="log-entry__clip-path" title="' + escapeHtml(c) + '">' + escapeHtml(baseNameNoExt(c)) + '</span></div>';

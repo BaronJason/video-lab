@@ -2234,8 +2234,8 @@ class Api {
         const out = [];
         for (let i = 0; i < lines.length; i++) if (!delIdx.has(i)) out.push(lines[i]);
         while (out.length && !(out[out.length - 1] || '').trim()) out.pop();
-        // 日志只剩空行则删除文件，否则重写
-        if (!out.some((l) => (l || '').trim())) { try { fs.unlinkSync(logPath); } catch (e) {} }
+        // 仅剩分隔线/空行视为已空 → 删除日志文件，否则重写
+        if (!out.some((l) => (l || '').trim() && !/^=+$/.test((l || '').trim()))) { try { fs.unlinkSync(logPath); } catch (e) {} }
         else fs.writeFileSync(logPath, out.join('\n'), 'utf-8');
       } catch (e) {}
     }
@@ -2281,7 +2281,8 @@ class Api {
         const out = [];
         for (let i = 0; i < lines.length; i++) if (!delIdx.has(i)) out.push(lines[i]);
         while (out.length && !(out[out.length - 1] || '').trim()) out.pop();
-        if (!out.some((l) => (l || '').trim())) { try { fs.unlinkSync(lp); } catch (e) {} }
+        // 仅剩分隔线/空行视为已空 → 删除遮罩日志文件，否则重写
+        if (!out.some((l) => (l || '').trim() && !/^=+$/.test((l || '').trim()))) { try { fs.unlinkSync(lp); } catch (e) {} }
         else fs.writeFileSync(lp, out.join('\n'), 'utf-8');
       } catch (e) {}
     }
@@ -3670,8 +3671,10 @@ let themes = [];
           if (op && fs.existsSync(op)) { try { fs.unlinkSync(op); } catch (e) {} deleted.push(op); }
         }
         // 写回日志（原子写）
+        // 仅剩分隔线/空行时视为已空，删除日志文件；否则原子写回
         const outText = keep.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
-        if (outText.replace(/\s/g, '').length) atomicWrite(fp, outText);
+        const hasContent = keep.some((l) => (l || '').trim() && !/^=+$/.test((l || '').trim()));
+        if (hasContent) atomicWrite(fp, outText);
         else { try { fs.unlinkSync(fp); } catch (e) {} }
       }
     }
@@ -3722,8 +3725,10 @@ let themes = [];
           const op = this._maskOutFromLog(fp, vn) || this._findMaskOut(vn);
           if (op && fs.existsSync(op)) { try { fs.unlinkSync(op); } catch (e) {} deleted.push(op); }
         }
+        // 仅剩分隔线/空行时视为已空，删除日志文件；否则原子写回
         const outText = keep.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
-        if (outText.replace(/\s/g, '').length) atomicWrite(fp, outText);
+        const hasContent = keep.some((l) => (l || '').trim() && !/^=+$/.test((l || '').trim()));
+        if (hasContent) atomicWrite(fp, outText);
         else { try { fs.unlinkSync(fp); } catch (e) {} }
       }
     }
@@ -3826,8 +3831,10 @@ let themes = [];
           const op = path.join(logDir, vn);
           if (fs.existsSync(op)) { try { fs.unlinkSync(op); } catch (e) {} deleted.push(op); }
         }
+        // 仅剩分隔线/空行时视为已空，删除日志文件；否则原子写回
         const outText = keep.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
-        if (outText.replace(/\s/g, '').length) atomicWrite(fp, outText);
+        const hasContent = keep.some((l) => (l || '').trim() && !/^=+$/.test((l || '').trim()));
+        if (hasContent) atomicWrite(fp, outText);
         else { try { fs.unlinkSync(fp); } catch (e) {} }
       }
     }

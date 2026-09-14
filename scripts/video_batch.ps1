@@ -14,6 +14,10 @@ if ($env:BATCH_SPEED_LIMIT) { try { $SpeedThreshold = [double]$env:BATCH_SPEED_L
 if ($env:BATCH_TXT_PREFIX) { $TxtNamePrefix = $env:BATCH_TXT_PREFIX }
 if ($env:BATCH_PRODUCER) { $ProducerName = $env:BATCH_PRODUCER }
 if ($null -ne $env:BATCH_SUFFIX_MARK) { $SuffixMark = [string]$env:BATCH_SUFFIX_MARK }
+# 续跑过滤：BATCH_ONLY_NAMES 为失败成片名（分号分隔）。脚本据此反解出「序号」并只重做这些序号；
+# 命名与分组仍按原始 BATCH_COUNT/BATCH_GROUP 计算，保证续跑产物与首次完全一致
+$OnlyNames = ""
+if ($env:BATCH_ONLY_NAMES) { $OnlyNames = [string]$env:BATCH_ONLY_NAMES }
 
 # 任务提交时刻优先（BATCH_SUBMIT_TS 由应用在任务提交时注入）：排队跨天运行时，
 # 成片命名/日志/输出目录一律按提交日期，不回退到实际运行日期
@@ -92,6 +96,13 @@ function Invoke-ErrorAction {
     Write-Host "错误详情: $ErrorMessage" -ForegroundColor Red
     Write-Host "==========================================`n" -ForegroundColor Red
     Invoke-ErrorBeep
+}
+
+# 机器可读失败行：`❌ 失败成片：<成片名>|<原因>`，供 Video Lab 记录 failedVideos 与「继续制作」续跑
+function Write-BatchFail {
+    param([string]$Name, [string]$Reason)
+    $reason = ($Reason -replace '[|\r\n]+', ' ').Trim()
+    Write-Host "❌ 失败成片：$Name|$reason" -ForegroundColor Red
 }
 
 function Invoke-FFmpegWithProgress {
@@ -1092,13 +1103,30 @@ try {
         
         $logFileName = "$timeTag-$txtName-拼接日志.txt"
         $logFilePath = Join-Path $outDir $logFileName
-        Set-Content -Path $logFilePath -Value @() -Encoding UTF8
+        # 续跑时日志已存在 → 保留并追加，不清空（否则会抹掉首次记录）；写入处为 -Append
+        if (-not (Test-Path $logFilePath)) { Set-Content -Path $logFilePath -Value @() -Encoding UTF8 }
         
         Write-Host "`n开始批量生成（共 $totalOutput 个）" -ForegroundColor Cyan
         $datePrefix = (Get-TaskDate).ToString("yyMMdd")
         $parentFolder = Split-Path $baseDir -Leaf
         
-        for ($outIndex = 1; $outIndex -le $totalOutput; $outIndex++) {
+        # 续跑：仅重做 BATCH_ONLY_NAMES 指定的序号；$totalOutput/$groupCount 保持原始值不动，
+        # 使成片命名（-序号）与分组后缀（A/B/C）与首次运行完全一致
+        $indexList = @(1..$totalOutput)
+        if ($OnlyNames) {
+            $onlyIdx = @()
+            foreach ($n in @($OnlyNames -split ';' | Where-Object { $_ -and $_.Trim() } | ForEach-Object { $_.Trim() })) {
+                $b = [System.IO.Path]::GetFileNameWithoutExtension($n)
+                if ($b -match '-(\d+)$') { $onlyIdx += [int]$Matches[1] }
+            }
+            if ($onlyIdx.Count -eq 0) {
+                Invoke-ErrorAction -ErrorMessage "续跑过滤未从成片名解析出序号：$OnlyNames（应为 <成片名>-<序号>.mp4）" -ErrorStep "续跑过滤"
+                [Environment]::Exit(1)
+            }
+            $indexList = @($onlyIdx | Sort-Object -Unique)
+            Write-Host "🔁 续跑模式：仅重做 $($indexList.Count) 个成片（序号 $(($indexList -join ', '))）" -ForegroundColor Cyan
+        }
+        foreach ($outIndex in $indexList) {
             Write-Host "`n------------------------------------------------" -ForegroundColor Cyan
             Write-Host "生成第 $outIndex / $totalOutput 个成片" -ForegroundColor Cyan
             
@@ -1304,6 +1332,7 @@ try {
             }
             if (-not $allExist) {
                 Invoke-ErrorAction -ErrorMessage "部分输入文件不存在" -ErrorStep "第 $outIndex 个成片-文件检查"
+                Write-BatchFail -Name $finalOutName -Reason "部分输入文件不存在"
                 continue
             }
             
@@ -1326,6 +1355,7 @@ try {
             $n = $currentParts.Count
             if ($n -eq 0) {
                 Invoke-ErrorAction -ErrorMessage "无有效视频片段" -ErrorStep "第 $outIndex 个成片-片段数检查"
+                Write-BatchFail -Name $finalOutName -Reason "无有效视频片段"
                 continue
             }
             
@@ -1360,6 +1390,7 @@ try {
             
             if ($code -ne 0) {
                 Invoke-ErrorAction -ErrorMessage "一次性编码失败" -ErrorStep "第 $outIndex 个成片"
+                Write-BatchFail -Name $finalOutName -Reason "ffmpeg 编码失败"
                 continue
             }
             

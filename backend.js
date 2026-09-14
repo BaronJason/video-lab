@@ -1305,8 +1305,10 @@ class Api {
       this._videoCache = null;
       this._videoInfoCache = new Map();
     } else this._saveVideoCache(); // 已完成的增量结果才原子覆盖原缓存；取消/中断保留原文件
-    // 刷新完成后顺带回收失效条目（文件已删除/旧工作目录残留；1h 节流防高频全盘扫描）
-    const gcRemoved = cancelled ? 0 : this._gcVideoCacheThrottled();
+    // 刷新完成后顺带回收失效条目（文件已删除/旧工作目录残留）：
+    // 「仅刷新」已整合清理失效（用户主动点刷新即清，不受后台 1h 节流限制），
+    // 后台空闲清理仍走 _gcVideoCacheThrottled 的节流
+    const gcRemoved = cancelled ? 0 : this._gcVideoCache(true);
     report({ done: base + probed, total, finished: true, cancelled });
     return { ok: true, total, updated: probed, valid, cancelled, removed: gcRemoved };
   }
@@ -2833,7 +2835,7 @@ class Api {
           // 结算对账（复刻）：脚本内单条失败会 continue 并置 HasError → 退出码 1；
           // 若 exit 0 但存在失败记录（异常场景），也归为 error 并提示续跑，避免误判为全部成功
           let status = task._stopRequested ? 'stopped' : (code === 0 ? 'done' : 'error');
-          if (code === 0 && Array.isArray(task.failedVideos) && task.failedVideos.length && (task.type === 'replica' || task.type === 'mask')) {
+          if (code === 0 && Array.isArray(task.failedVideos) && task.failedVideos.length && (task.type === 'replica' || task.type === 'mask' || task.type === 'batch')) {
             status = 'error';
             task.failReason = '存在失败成片，可点击「继续制作」续跑';
           }
@@ -3267,7 +3269,10 @@ class Api {
     const t = this.tasks.get(id);
     if (!t) return { ok: false, error: '任务不存在' };
     if (t.status !== 'error' && t.status !== 'interrupted' && t.status !== 'stopped') return { ok: false, error: '仅失败/中断/停止的任务可继续制作' };
-    if (t.type !== 'replica') return { ok: false, error: '仅复刻任务支持继续制作' };
+    // 续跑入口（replica / batch 共用；mask 走 continueMask）：
+    // batch 的成片名含日期前缀、输出目录含提交时刻，故续跑必须复用原环境变量（尤其 BATCH_SUBMIT_TS），
+    // 否则续跑产物会落到新日期目录、名字前缀也变，无法与首次归为同一批
+    if (t.type !== 'replica' && t.type !== 'batch') return { ok: false, error: '仅复刻/批量任务支持继续制作' };
     // 收集失败成片名：优先 failedVideos（运行时逐条记录），回退日志行解析
     const failNames = new Set();
     if (Array.isArray(t.failedVideos)) {
@@ -3302,15 +3307,23 @@ class Api {
     }
     if (!failNames.size) return { ok: false, error: '没有发现需要续跑的成片，请检查任务日志' };
     const namesArr = [...failNames].filter(Boolean);
-    // 构造续跑环境：复用原任务环境变量，仅追加 REPLICA_ONLY_NAMES 过滤
+    // 构造续跑环境：复用原任务环境变量，仅追加过滤变量
     const env = Object.assign({}, t.env || {});
-    env.REPLICA_ONLY_NAMES = namesArr.join(';');
-    env.REPLICA_SUBMIT_TS = String(Date.now()); // 刷新提交时刻，续跑产物按当前日期输出
     const src = env.REPLICA_TXT ? String(env.REPLICA_TXT) : '';
     if (!src) return { ok: false, error: '原任务缺少 TXT 配置，无法继续制作' };
     this.tasks.delete(id);
     this._removeMarker(t);
-    const task = this._createTask('replica', (t.title || '') + '（续跑）', t.script, env, src);
+    let task;
+    if (t.type === 'batch') {
+      // batch：只重做失败成片对应的「序号」，其余逻辑（命名/分组）仍按原始 BATCH_COUNT/BATCH_GROUP 计算；
+      // 提交时刻刻意不刷新 → 成片命名前缀、输出目录、拼接日志均与首次一致（续跑即补做同一批的缺片）
+      env.BATCH_ONLY_NAMES = namesArr.join(';');
+      task = this._createTask('batch', (t.title || '') + '（续跑）', t.script, env, src);
+    } else {
+      env.REPLICA_ONLY_NAMES = namesArr.join(';');
+      env.REPLICA_SUBMIT_TS = String(Date.now()); // 刷新提交时刻，续跑产物按当前日期输出
+      task = this._createTask('replica', (t.title || '') + '（续跑）', t.script, env, src);
+    }
     this._enqueueTask(task);
     return { ok: true, taskId: task.id, count: namesArr.length };
   }

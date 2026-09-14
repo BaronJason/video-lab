@@ -2293,7 +2293,7 @@
     call('get_skin').then(function (id) { applySkin(id, false); }).catch(function () { applySkin(SKINS[0].id, false); });
     // 设置页修改主题后，主界面即时跟随
     if (window.txapi && window.txapi.on_settings_saved) {
-      window.txapi.on_settings_saved(function (cfg) { if (cfg && typeof cfg === 'object') applySkin(cfg.skin, false); });
+      window.txapi.on_settings_saved(function (cfg) { if (cfg && typeof cfg === 'object') applySkin(cfg.skin, false); checkEnv(); });
     }
     // 设置窗口打开/关闭时显示/隐藏主窗口模糊遮罩
     if (window.txapi && window.txapi.on_settings_window_opened) window.txapi.on_settings_window_opened(showSettingsDim);

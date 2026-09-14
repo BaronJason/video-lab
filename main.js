@@ -1075,6 +1075,7 @@ function buildHttpExtraRoutes() {
         config_path_appdata: path.dirname(appdataConfigPath()),
         autostart: c.autostart === true,
         close_behavior: c.close_behavior === 'exit' ? 'exit' : 'tray',
+      use_node_engine: c.use_node_engine === 'off' ? 'off' : 'auto',
         http_port: parseInt(c.http_port, 10) || 9527,
         http_token: String(c.http_token || ''),
         http_url: httpUrl(),
@@ -1095,6 +1096,7 @@ function buildHttpExtraRoutes() {
         if (s.check_update_hour !== undefined && s.check_update_hour !== null) { const h = parseInt(s.check_update_hour, 10); if (h >= 0 && h <= 23) cfg.check_update_hour = h; }
         if (typeof s.autostart === 'boolean') cfg.autostart = s.autostart;
         if (s.close_behavior === 'exit' || s.close_behavior === 'tray') cfg.close_behavior = s.close_behavior;
+      if (s.use_node_engine === 'auto' || s.use_node_engine === 'off') cfg.use_node_engine = s.use_node_engine;
         if (s.update_source === 'github' || s.update_source === 'gitee') cfg.update_source = s.update_source;
         if (s.update_mode === 'auto' || s.update_mode === 'notify') cfg.update_mode = s.update_mode;
         if (s.http_port !== undefined && s.http_port !== null) { const p = parseInt(s.http_port, 10); if (p > 0 && p < 65536) cfg.http_port = p; }
@@ -1325,6 +1327,7 @@ function registerIpc() {
       config_path_appdata: path.dirname(appdataConfigPath()),
       autostart: c.autostart === true,
       close_behavior: c.close_behavior === 'exit' ? 'exit' : 'tray',
+      use_node_engine: c.use_node_engine === 'off' ? 'off' : 'auto',
       http_port: parseInt(c.http_port, 10) || 9527,
       http_token: String(c.http_token || ''),
       http_url: httpUrl(),
@@ -1345,6 +1348,7 @@ function registerIpc() {
       if (s.check_update_hour !== undefined && s.check_update_hour !== null) { const h = parseInt(s.check_update_hour, 10); if (h >= 0 && h <= 23) cfg.check_update_hour = h; }
       if (typeof s.autostart === 'boolean') cfg.autostart = s.autostart;
       if (s.close_behavior === 'exit' || s.close_behavior === 'tray') cfg.close_behavior = s.close_behavior;
+      if (s.use_node_engine === 'auto' || s.use_node_engine === 'off') cfg.use_node_engine = s.use_node_engine;
       if (s.update_source === 'github' || s.update_source === 'gitee') cfg.update_source = s.update_source;
       if (s.update_mode === 'auto' || s.update_mode === 'notify') cfg.update_mode = s.update_mode;
       if (s.http_port !== undefined && s.http_port !== null) { const p = parseInt(s.http_port, 10); if (p > 0 && p < 65536) cfg.http_port = p; }

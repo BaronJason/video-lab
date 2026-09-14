@@ -3261,6 +3261,8 @@ class Api {
     if (cfg.batch && typeof cfg.batch === 'object') this.config.batch = Object.assign({}, this.config.batch, cfg.batch);
     if (cfg.replica && typeof cfg.replica === 'object') this.config.replica = Object.assign({}, this.config.replica, cfg.replica);
     if (cfg.mask && typeof cfg.mask === 'object') this.config.mask = Object.assign({}, this.config.mask, cfg.mask);
+    // 任务执行引擎（设置页调试项）：更改后立即生效，新提交的任务按新选择分发，无需重启
+    if (cfg.use_node_engine === 'auto' || cfg.use_node_engine === 'off') this.config.use_node_engine = cfg.use_node_engine;
   }
 
   // 水印归属校验：以本项目「主流水印」为基准做一致性判定；仅在用户启用判定时参与判断。

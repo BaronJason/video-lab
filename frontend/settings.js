@@ -227,6 +227,18 @@
       if (as) as.checked = s.autostart === true;
       var cbv = s.close_behavior === 'exit' ? 'exit' : 'tray';
       document.querySelectorAll('input[name="closeBehavior"]').forEach(function (r) { r.checked = r.value === cbv; });
+      var emv = s.use_node_engine === 'off' ? 'off' : 'auto';
+      document.querySelectorAll('input[name="engineMode"]').forEach(function (r) { r.checked = r.value === emv; });
+      // 引擎调试项：显示当前实际执行路径，切换后可立即确认是否生效
+      if (api.check_env) {
+        api.check_env().then(function (ev) {
+          var hint = $('engineStateHint');
+          if (!hint || !ev) return;
+          hint.textContent = ev.nodeEngineActive === false
+            ? '当前：已回退 PowerShell（' + (ev.fallbackReason || '未知原因') + '）'
+            : '当前：内置 Node 引擎';
+        }).catch(function () {});
+      }
       document.querySelectorAll('input[name="updateSource"]').forEach(function (r) { r.checked = r.value === s.update_source; });
       var um = s.update_mode === 'auto' ? 'auto' : 'notify';
       document.querySelectorAll('input[name="updateMode"]').forEach(function (r) { r.checked = r.value === um; });
@@ -418,6 +430,7 @@
         check_update_hour: parseInt($('checkUpdateHour').value, 10) || 9,
         autostart: !!$('autoStart').checked,
         close_behavior: cbEl ? cbEl.value : 'tray',
+        use_node_engine: (function () { var e = document.querySelector('input[name="engineMode"]:checked'); return e ? e.value : 'auto'; })(),
         update_source: srcEl ? srcEl.value : 'gitee',
         update_mode: umEl ? umEl.value : 'notify',
         config_storage: storageEl ? storageEl.value : 'program',

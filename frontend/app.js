@@ -3307,7 +3307,12 @@
       state.envMissing = miss;
       var mark = $('envWarnMark');
       if (mark) {
-        if (miss.length) {
+        if (r.nodeEngineActive === false) {
+          // 回退告警优先：正常走内置引擎时状态栏不打扰，一旦回退就明确显示原因与当前执行者
+          mark.textContent = '已回退 PowerShell 引擎：' + (r.fallbackReason || '未知原因');
+          mark.className = 'status-bar__envwarn';
+          mark.style.display = '';
+        } else if (miss.length) {
           mark.textContent = '缺少环境: ' + miss.join('、') + '（见 README 安装）';
           mark.className = 'status-bar__envwarn';
           mark.style.display = '';

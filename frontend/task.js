@@ -500,11 +500,12 @@
     var rerunBtn = rec.header.querySelector('.task-card__rerun');
     var canRerun = t.status === 'error' || t.status === 'interrupted' || t.status === 'stopped';
     rerunBtn.style.display = (canRerun && state.tab !== 'running') ? '' : 'none';
-    // 继续制作按钮：仅复刻任务失败/中断/停止且存在失败记录时显示（不删除已成功产物）
+    // 继续制作按钮：复刻/批量任务失败、中断、停止且存在失败记录时显示（不删除已成功产物）
+    // 批量任务的续跑按「失败成片名的序号」补做，命名前缀/输出目录/拼接日志与首次一致
     var continueBtn = rec.header.querySelector('.task-card__continue');
     var hasFail = (Array.isArray(t.failedVideos) && t.failedVideos.length > 0)
       || (t.log || []).some(function (l) { return /❌ 失败成片/.test(String(l)); });
-    var canContinue = t.type === 'replica' && canRerun && hasFail;
+    var canContinue = (t.type === 'replica' || t.type === 'batch') && canRerun && hasFail;
     continueBtn.style.display = (canContinue && state.tab !== 'running') ? '' : 'none';
     // 进度条：数字行（当前/总）+ 下方进度条，仅解析到总进度后显示；
     // 排队任务也显示预计成片数（后端创建时预填 total）；分组数>0 时追加「分 N 组」

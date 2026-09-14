@@ -216,6 +216,8 @@ function readEnv(env = process.env) {
     txtNamePrefix: s('BATCH_TXT_PREFIX'),
     producerName: s('BATCH_PRODUCER', '默认'),
     suffixMark: s('BATCH_SUFFIX_MARK'),
+    // 续跑过滤：失败成片名（分号分隔）。据此反解序号只重做这些，其余按原始 totalOutput/groupCount 计算
+    onlyNames: s('BATCH_ONLY_NAMES'),
     count: intOrNull('BATCH_COUNT'),
     group: intOrNull('BATCH_GROUP'),
     submitTs: parseInt(s('BATCH_SUBMIT_TS', '0'), 10) || 0,
@@ -998,7 +1000,8 @@ async function run(ctx, env = process.env) {
     }
 
     const logFilePath = path.join(outDir, `${tag}-${txtName}-拼接日志.txt`);
-    fs.writeFileSync(logFilePath, '', 'utf8');
+    // 续跑时日志已存在 → 保留并追加，不清空（否则会抹掉首次记录）
+    if (!exists(logFilePath)) fs.writeFileSync(logFilePath, '', 'utf8');
 
     logger.info('');
     logger.info(`开始批量生成（共 ${totalOutput} 个）`);
@@ -1006,7 +1009,25 @@ async function run(ctx, env = process.env) {
     const parentFolder = path.basename(baseDir);
     const maxAllowedEstimate = cfg.maxTotalDuration * cfg.speedThreshold;
 
-    for (let outIndex = 1; outIndex <= totalOutput; outIndex++) {
+    // 续跑：仅重做 BATCH_ONLY_NAMES 指定的序号；totalOutput / groupCount 保持原始值不动，
+    // 使成片命名（-序号）与分组后缀（A/B/C）与首次运行完全一致
+    let indexList = [];
+    for (let i = 1; i <= totalOutput; i++) indexList.push(i);
+    if (cfg.onlyNames) {
+      const onlyIdx = [];
+      for (const nm of String(cfg.onlyNames).split(';').map((x) => x.trim()).filter(Boolean)) {
+        const base = path.basename(nm, path.extname(nm));
+        const m = /-(\d+)$/.exec(base);
+        if (m) onlyIdx.push(parseInt(m[1], 10));
+      }
+      if (onlyIdx.length === 0) {
+        return fail(`续跑过滤未从成片名解析出序号：${cfg.onlyNames}（应为 <成片名>-<序号>.mp4）`, '续跑过滤');
+      }
+      indexList = Array.from(new Set(onlyIdx)).sort((a, b) => a - b);
+      logger.info(`🔁 续跑模式：仅重做 ${indexList.length} 个成片（序号 ${indexList.join(', ')}）`);
+    }
+
+    for (const outIndex of indexList) {
       logger.info('');
       logger.info('-'.repeat(48));
       logger.progress('生成', outIndex, totalOutput);
@@ -1191,6 +1212,7 @@ async function run(ctx, env = process.env) {
       }
       if (!allExist) {
         logger.error(`第 ${outIndex} 个成片-文件检查`, '部分输入文件不存在');
+        logger.fail(finalOutName, '部分输入文件不存在');
         hasError = true;
         continue;
       }
@@ -1207,6 +1229,7 @@ async function run(ctx, env = process.env) {
       const n = currentParts.length;
       if (n === 0) {
         logger.error(`第 ${outIndex} 个成片-片段数检查`, '无有效视频片段');
+        logger.fail(finalOutName, '无有效视频片段');
         hasError = true;
         continue;
       }
@@ -1239,6 +1262,7 @@ async function run(ctx, env = process.env) {
       const { code } = await runFfmpeg(inputArgs.concat(encArgs), { onProgress: (line) => logger.raw(line) });
       if (code !== 0) {
         logger.error(`第 ${outIndex} 个成片`, '一次性编码失败');
+        logger.fail(finalOutName, 'ffmpeg 编码失败');
         hasError = true;
         continue;
       }

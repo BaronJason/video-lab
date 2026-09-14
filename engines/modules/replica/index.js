@@ -63,6 +63,18 @@ const TICKS_TOLERANCE = 10000;
 
 function loadVideoCache(cacheDir) {
   if (!cacheDir) return {};
+  // 持久层优先 sqlite（cache.db，P5 生产形态）：全表读且 Ticks 为精确字符串；
+  // 库不存在/为空/不可用时回退 video_cache.json（legacy 形态）
+  try {
+    const dbPath = path.join(cacheDir, 'cache.db');
+    if (fs.existsSync(dbPath)) {
+      const CacheStore = require('../../base/cache-store');
+      const store = new CacheStore(dbPath, { root: '' });
+      const map = store.loadVideoMap();
+      store.close();
+      if (map && Object.keys(map).length) return map;
+    }
+  } catch (e) { /* 回退 JSON */ }
   const f = path.join(cacheDir, 'video_cache.json');
   try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch (e) { return {}; }
 }
@@ -731,5 +743,6 @@ module.exports = {
   _internals: {
     readEnv, taskDate, parseJobs, sameDirCandidates, selectReplacementVideo, videoFromDirectory,
     buildCacheByNameIndex, resolveFromVideoCache, selectVariancePaths, mtimeToTicks, round1, round2,
+    loadVideoCache,
   },
 };

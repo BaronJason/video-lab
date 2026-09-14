@@ -1,4 +1,4 @@
-# ------------------------------ 全局参数 -------------------------------------
+﻿# ------------------------------ 全局参数 -------------------------------------
 $MaxTotalDurationSec = 179
 $MaxRetry = 45
 $SpeedThreshold = 1.2
@@ -1117,7 +1117,8 @@ try {
             $onlyIdx = @()
             foreach ($n in @($OnlyNames -split ';' | Where-Object { $_ -and $_.Trim() } | ForEach-Object { $_.Trim() })) {
                 $b = [System.IO.Path]::GetFileNameWithoutExtension($n)
-                if ($b -match '-(\d+)$') { $onlyIdx += [int]$Matches[1] }
+                # 分组任务的成片名形如 <配置名>-<序号><组后缀>（如 ...-2A.mp4）：只用 '-(\d+)$' 会漏掉全部带后缀的名字，续跑永不命中
+                if ($b -match '-(\d+)[A-Z]?$') { $onlyIdx += [int]$Matches[1] }
             }
             if ($onlyIdx.Count -eq 0) {
                 Invoke-ErrorAction -ErrorMessage "续跑过滤未从成片名解析出序号：$OnlyNames（应为 <成片名>-<序号>.mp4）" -ErrorStep "续跑过滤"

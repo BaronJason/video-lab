@@ -4624,25 +4624,37 @@
           var openPath = out || ((fname && logDir) ? logDir + '\\' + fname : '');
           var outDir = out ? String(out).replace(/[\\/]+/g, '\\').replace(/\\[^\\]*$/, '') : '';
           var items3 = [
-            { label: '打开成片', disableIfMissing: true, action: function () { call('open_path', openPath); } },
-            { label: '打开成片文件夹', action: function () {
+            { label: '打开成片', disableIfMissing: true, action: function () { if (openPath) call('open_path', openPath); } },
+            { label: '打开成片文件夹', disableIfMissing: true, action: function () {
                 if (openPath) call('open_folder_select', openPath).catch(function () { call('open_path', outDir || logDir); });
                 else if (outDir || logDir) call('open_path', outDir || logDir);
               } }
           ];
           var finish3 = function () {
-            items3.push({ label: '迁移该成片', action: function () { if (video) doMoveOne(video); } });
+            // 成片缺失时迁移也置灰（无源文件可迁移）；重新定位仅在缺失时可用
+            items3.push({ label: '迁移该成片', disableIfMissing: true, action: function () { if (video && openPath) doMoveOne(video); } });
+            items3.push({ label: '重新定位', disabled: !!openPath, title: openPath ? '成片已可定位' : '', action: function () { if (!openPath && video) relocateMaskVideo(lp, video); } });
             items3.push({ label: '删除该成片', action: function () { if (video) doDeleteOne(video); } });
             showMenu(e.clientX, e.clientY, items3);
           };
           if (openPath) {
             call('check_exists', [openPath]).then(function (map) {
               map = map || {};
-              if (map[openPath] === false) { items3[0].disabled = true; items3[0].title = '成片文件不存在'; }
+              if (map[openPath] === false) {
+                items3[0].disabled = true; items3[0].title = '成片文件不存在';
+                items3[1].disabled = true; items3[1].title = '成片文件不存在';
+                items3[2].disabled = true; items3[2].title = '成片文件不存在';
+                items3[3].disabled = false; items3[3].title = ''; // 重新定位可用
+              } else {
+                items3[3].disabled = true; items3[3].title = '成片已可定位';
+              }
               finish3();
             }).catch(finish3);
           } else {
             items3[0].disabled = true; items3[0].title = '无法定位成片文件';
+            items3[1].disabled = true; items3[1].title = '无法定位成片文件';
+            items3[2].disabled = true; items3[2].title = '无法定位成片文件';
+            items3[3].disabled = false; items3[3].title = ''; // 重新定位可用
             finish3();
           }
           return;
@@ -4733,35 +4745,37 @@
     }).catch(function () {});
   }
 
-  // 遮罩日志日期分支右键菜单：打开成片路径（找不到成片置灰禁用）/ 打开日志文件 / 迁移全部成片 / 移除该日志（仅日志或连同成片）
+  // 遮罩日志日期分支右键菜单：打开成片路径（找不到成片置灰禁用）/ 打开日志文件 / 迁移全部成片 / 重新定位 / 移除该日志
   function openMaskBranchMenu(x, y, mfp) {
-    var items = [];
-    // 成片路径：取该日志第一条成片的 @out 实际路径（缺失再回退日志目录 + 成片名兜底）
     call('list_mask_logs', maskState.project.path).then(function (logs) {
       var lg = (Array.isArray(logs) ? logs : []).find(function (l) { return l.path === mfp; });
-      var outPath = '';
       var entries = (lg && Array.isArray(lg.entries)) ? lg.entries : [];
-      for (var i = 0; i < entries.length; i++) {
-        if (entries[i].outPath) { outPath = entries[i].outPath; break; }
-      }
-      var show = function () { showMenu(x, y, items); };
-      // 「打开成片路径」：存在成片文件 → 打开其所在文件夹；否则置灰禁用
-      var openOut = { label: '打开成片路径', disabled: true, title: '', action: function () { if (outPath) call('open_folder_select', outPath); } };
-      items.push(openOut);
-      items.push({ label: '打开日志文件', action: function () { call('open_path', mfp); } });
-      items.push({ label: '打开日志文件夹', action: function () { call('open_folder_select', mfp); } });
-      items.push({ label: '迁移该日志全部成片', action: function () { doMoveLogAll(mfp); } });
-      items.push({ label: '移除该日志', action: function () { removeMaskLog(mfp); } });
-      if (!outPath) { openOut.title = '找不到成片'; show(); return; }
-      call('check_exists', [outPath]).then(function (map) {
-        if (!(map && map[outPath])) { openOut.title = '成片文件不存在'; }
-        else { openOut.disabled = false; }
-        show();
-      }).catch(function () { openOut.title = '成片文件不存在'; show(); });
+      var outPaths = entries.map(function (en) { return en.outPath; }).filter(Boolean);
+      // 成片存在性：任一 @out 存在即可打开/迁移；全部缺失则置灰并启用重新定位
+      var shown = false;
+      var show = function (anyExists) {
+        if (shown) return; shown = true;
+        var openOut = { label: '打开成片路径', disabled: !anyExists, title: anyExists ? '' : '找不到成片', action: function () {
+            for (var i = 0; i < entries.length; i++) { if (entries[i].outPath) { call('open_folder_select', entries[i].outPath); return; } }
+          } };
+        showMenu(x, y, [
+          openOut,
+          { label: '打开日志文件', action: function () { call('open_path', mfp); } },
+          { label: '打开日志文件夹', action: function () { call('open_folder_select', mfp); } },
+          { label: '迁移该日志全部成片', disabled: !anyExists, title: anyExists ? '' : '找不到成片，无法迁移', action: function () { doMoveLogAll(mfp); } },
+          { label: '重新定位该日志全部成片', disabled: anyExists, title: anyExists ? '成片均已定位' : '', action: function () { relocateMaskBranch(mfp); } },
+          { label: '移除该日志', action: function () { removeMaskLog(mfp); } }
+        ]);
+      };
+      if (!outPaths.length) { show(false); return; } // 无任何 @out：打开/迁移置灰，重新定位可用
+      var exist = 0;
+      call('check_exists', outPaths).then(function (map) {
+        map = map || {};
+        for (var i = 0; i < outPaths.length; i++) { if (map[outPaths[i]]) exist++; }
+        show(exist > 0);
+      }).catch(function () { show(false); });
     }).catch(function () {
-      showMenu(x, y, [
-        { label: '移除该日志', action: function () { removeMaskLog(mfp); } }
-      ]);
+      showMenu(x, y, [ { label: '移除该日志', action: function () { removeMaskLog(mfp); } } ]);
     });
   }
 
@@ -4803,6 +4817,47 @@
         }).catch(function (err) { setStatus('删除失败：' + err.message); });
       }).catch(function () { setStatus('读取遮罩日志失败'); });
     });
+  }
+
+  // 重新定位单个成片（列表行右键）：成片被外部移动后选新目录，按文件名在目录内（含子目录）重新查找并写回日志 @out
+  function relocateMaskVideo(lp, videoName) {
+    if (!maskOn() || !maskState.project) return;
+    call('pick_single_folder').then(function (nd) {
+      if (!nd) return;
+      call('relocate_mask_out', maskState.project.path, videoName, nd).then(function (r) {
+        if (!r || !r.ok) { setStatus('重新定位失败：' + ((r && r.error) || '未知错误')); return; }
+        setStatus('已重新定位成片：' + baseNameNoExt(r.path || videoName) + (r.noLog ? '（日志中无该成片记录，未改写 @out）' : ''));
+        buildMaskLogView();
+      }).catch(function (err) { setStatus('重新定位失败：' + err.message); });
+    }).catch(function () {});
+  }
+
+  // 重新定位某日期分支下全部缺失成片（分支右键）：一次选择新目录，缺失成片按文件名逐一在目录内查找并写回日志 @out
+  function relocateMaskBranch(lp) {
+    if (!maskOn() || !maskState.project) return;
+    call('list_mask_logs', maskState.project.path).then(function (logs) {
+      var lg = (Array.isArray(logs) ? logs : []).find(function (x) { return x.path === lp; });
+      var entries = (lg && Array.isArray(lg.entries)) ? lg.entries : [];
+      var missing = entries.filter(function (en) { return !en.outPath; }).map(function (en) { return en.video; }).filter(Boolean);
+      if (!missing.length) { setStatus('该日志全部成片均已定位'); return; }
+      call('pick_single_folder').then(function (nd) {
+        if (!nd) return;
+        var okN = 0, failN = 0;
+        var k = 0;
+        (function next() {
+          if (k >= missing.length) {
+            setStatus('重新定位完成：成功 ' + okN + ' / 失败 ' + failN + (failN ? '（失败可手动选择对应目录）' : ''));
+            buildMaskLogView();
+            return;
+          }
+          var vn3 = missing[k++];
+          call('relocate_mask_out', maskState.project.path, vn3, nd).then(function (r) {
+            if (r && r.ok) okN++; else failN++;
+            next();
+          }).catch(function () { failN++; next(); });
+        })();
+      }).catch(function () {});
+    }).catch(function () { setStatus('读取遮罩日志失败'); });
   }
 
   // 生效的输出目录：显式输入 > 项目默认 > 项目路径

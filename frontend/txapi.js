@@ -157,6 +157,7 @@
     delete_mask_related: function (projectPath, targets) { return invokeArgs('delete_mask_related', projectPath, targets); },
     delete_mask_videos: function (projectPath, names) { return invokeArgs('delete_mask_videos', projectPath, names); },
     move_mask_out: function (projectPath, videoName, newDir) { return invokeArgs('move_mask_out', projectPath, videoName, newDir); },
+    relocate_mask_out: function (projectPath, videoName, newDir) { return invokeArgs('relocate_mask_out', projectPath, videoName, newDir); },
     delete_mask_log: function (projectPath, logPath) { return invokeArgs('delete_mask_log', projectPath, logPath); },
     delete_secondary_products: function (projectPath, maskOutPaths) { return invokeArgs('delete_secondary_products', projectPath, maskOutPaths); },
     choose_mask_file: function (prev) { return invokeArgs('choose_mask_file', prev); },

@@ -1217,15 +1217,13 @@ class Api {
   // 才落到 verify —— 这正是把「数千次同步 stat」压缩成「通常为零」的关键。
   _videoCacheGcPlan(knownPaths) {
     const c = this._videoCache;
-    const drop = [], verify = [];
-    if (!c) return { drop, verify };
-    const prefix = String(this.root || '').replace(/[\\/]+$/, '');
+    const verify = [];
+    if (!c) return { drop: [], verify };
     for (const f of Object.keys(c)) {
-      if (prefix && !String(f).startsWith(prefix)) { drop.push(f); continue; } // 切工作目录后旧 root 残留
-      if (knownPaths && knownPaths.has(f)) continue;                            // 刚枚举到 → 文件必然存在
+      if (knownPaths && knownPaths.has(f)) continue; // 刚枚举到 → 文件必然存在
       verify.push(f);
     }
-    return { drop, verify };
+    return { drop: [], verify };
   }
 
   // video_cache 失效清理（异步分批）：删除「文件已不存在」与「非当前工作目录」的条目。

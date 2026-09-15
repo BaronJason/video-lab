@@ -220,19 +220,20 @@ class CacheStore {
   }
 
   // 失效清理「判定分区」（纯内存，无磁盘调用）：
-  //   drop   —— 非当前 root 的残留，直接删；
-  //   verify —— 既不在本轮枚举结果（knownPaths）里、也非残留的条目，需由调用方核验文件是否存在。
+  //   verify —— 本轮未枚举到（knownPaths 未覆盖）的条目，由调用方核验文件是否仍存在；
+  //   drop   —— 恒为空（保留该字段以兼容调用方）。
   // 把「数千次磁盘调用」压缩到「通常为零次」的关键就在 knownPaths。
+  // ⚠ 刻意【不按工作目录(root)前缀删除】：素材位于工作目录之外是常态，
+  //   曾因此把正常素材条目判为「旧 root 残留」整批清掉，导致重启后首次预检测全量重探（实测 7.7s）。
   gcPlan(knownPaths) {
     const rows = this.open().prepare('SELECT path FROM video_cache').all();
-    const drop = [], verify = [];
+    const verify = [];
     for (const r of rows) {
       const p = String(r.path);
-      if (this.root && !p.startsWith(this.root)) { drop.push(p); continue; }
       if (knownPaths && knownPaths.has(p)) continue;
       verify.push(p);
     }
-    return { drop, verify };
+    return { drop: [], verify };
   }
 
   deleteVideos(paths) {

@@ -4623,38 +4623,36 @@
           var logDir = String(lp).replace(/[\\/]+/g, '\\').replace(/\\[^\\]*$/, '');
           var openPath = out || ((fname && logDir) ? logDir + '\\' + fname : '');
           var outDir = out ? String(out).replace(/[\\/]+/g, '\\').replace(/\\[^\\]*$/, '') : '';
-          var items3 = [
-            { label: '打开成片', disableIfMissing: true, action: function () { if (openPath) call('open_path', openPath); } },
-            { label: '打开成片文件夹', disableIfMissing: true, action: function () {
-                if (openPath) call('open_folder_select', openPath).catch(function () { call('open_path', outDir || logDir); });
-                else if (outDir || logDir) call('open_path', outDir || logDir);
-              } }
-          ];
-          var finish3 = function () {
-            // 成片缺失时迁移也置灰（无源文件可迁移）；重新定位仅在缺失时可用
-            items3.push({ label: '迁移该成片', disableIfMissing: true, action: function () { if (video && openPath) doMoveOne(video); } });
-            items3.push({ label: '重新定位', disabled: !!openPath, title: openPath ? '成片已可定位' : '', action: function () { if (video) relocateMaskVideo(lp, video); } });
-            items3.push({ label: '删除该成片', action: function () { if (video) doDeleteOne(video); } });
-            showMenu(e.clientX, e.clientY, items3);
-          };
+          var itemOpen = { label: '打开成片', disabled: false, title: '', action: function () { if (openPath) call('open_path', openPath); } };
+          var itemFolder = { label: '打开成片文件夹', disabled: false, title: '', action: function () {
+              if (openPath) call('open_folder_select', openPath).catch(function () { call('open_path', outDir || logDir); });
+              else if (outDir || logDir) call('open_path', outDir || logDir);
+            } };
+          var itemMove = { label: '迁移该成片', disabled: false, title: '', action: function () { if (video && openPath) doMoveOne(video); } };
+          var itemRelocate = { label: '重新定位', disabled: !!openPath, title: openPath ? '成片已可定位' : '', action: function () { if (video) relocateMaskVideo(lp, video); } };
+          var itemDelete = { label: '删除该成片', action: function () { if (video) doDeleteOne(video); } };
+          var items3 = [itemOpen, itemFolder, itemMove, itemRelocate, itemDelete];
+          var finish3 = function () { showMenu(e.clientX, e.clientY, items3); };
           if (openPath) {
             call('check_exists', [openPath]).then(function (map) {
               map = map || {};
               if (map[openPath] === false) {
-                items3[0].disabled = true; items3[0].title = '成片文件不存在';
-                items3[1].disabled = true; items3[1].title = '成片文件不存在';
-                items3[2].disabled = true; items3[2].title = '成片文件不存在';
-                items3[3].disabled = false; items3[3].title = ''; // 重新定位可用
+                // 成片缺失：打开/文件夹/迁移置灰（无源文件），重新定位可用
+                itemOpen.disabled = true; itemOpen.title = '成片文件不存在';
+                itemFolder.disabled = true; itemFolder.title = '成片文件不存在';
+                itemMove.disabled = true; itemMove.title = '成片文件不存在';
+                itemRelocate.disabled = false; itemRelocate.title = '';
               } else {
-                items3[3].disabled = true; items3[3].title = '成片已可定位';
+                itemRelocate.disabled = true; itemRelocate.title = '成片已可定位';
               }
               finish3();
-            }).catch(function () { items3[3].disabled = false; items3[3].title = ''; finish3(); });
+            }).catch(function () { itemRelocate.disabled = false; itemRelocate.title = ''; finish3(); });
           } else {
-            items3[0].disabled = true; items3[0].title = '无法定位成片文件';
-            items3[1].disabled = true; items3[1].title = '无法定位成片文件';
-            items3[2].disabled = true; items3[2].title = '无法定位成片文件';
-            items3[3].disabled = false; items3[3].title = ''; // 重新定位可用
+            // 无 @out 也无日志目录兜底：打开/文件夹/迁移置灰，重新定位可用
+            itemOpen.disabled = true; itemOpen.title = '无法定位成片文件';
+            itemFolder.disabled = true; itemFolder.title = '无法定位成片文件';
+            itemMove.disabled = true; itemMove.title = '无法定位成片文件';
+            itemRelocate.disabled = false; itemRelocate.title = '';
             finish3();
           }
           return;

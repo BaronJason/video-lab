@@ -8,9 +8,9 @@
 
 <br>
 
-[![版本](https://img.shields.io/badge/版本-1.9.0-0078D7?style=flat-square)](https://github.com/BaronJason/video-lab/releases)
+[![版本](https://img.shields.io/badge/版本-2.0.0-0078D7?style=flat-square)](https://github.com/BaronJason/video-lab/releases)
 ![Platform](https://img.shields.io/badge/平台-Windows%2010%2F11-00A4EF?style=flat-square)
-![PowerShell](https://img.shields.io/badge/运行时-PowerShell%207-5391FE?style=flat-square)
+![Engine](https://img.shields.io/badge/任务引擎-内置%20Node-5391FE?style=flat-square)
 ![FFmpeg](https://img.shields.io/badge/FFmpeg-必需-FF7F2A?style=flat-square)
 
 </div>
@@ -21,12 +21,13 @@
 
 | 类别 | 说明 |
 | --- | --- |
+| 内置任务引擎 | 遮罩 / 复刻 / 批量任务由随包分发的 Node 引擎执行，无需系统安装 PowerShell（旧脚本保留为一键回退通道） |
 | 遮罩叠加 | 多原片 × 多遮罩自由组合（遮罩+水印 / 仅水印 / 仅遮罩），GPU 硬件编码，失败任务断点续跑 |
 | 复刻与续跑 | 完全复刻 / 去重复刻双模式，失败成片可「继续制作」从断点恢复 |
 | 日期分支管理 | TXT 配置按日期分支归档，历史版本随时比对与跳转 |
 | 水印体系 | 归属校验、跨项目保存、主流水印一键递归替换 |
 | 深度定制界面 | 多皮肤主题（含 Maid Atelier 女仆皮肤）、自制标题栏、托盘菜单自绘 |
-| 后台化体验 | 预检测与成片索引后台运行不阻塞、开机自启静默到托盘、冷启动提速 |
+| 后台化体验 | 预检测与成片索引后台运行不阻塞、缓存失效后台清理、开机自启静默到托盘、冷启动提速 |
 
 ## 目录结构
 
@@ -41,8 +42,12 @@ Video Lab/
 │  ├─ app.js / icons.js / styles.css / titlebar.js / txapi.js
 │  ├─ skins/            # 皮肤（Black_Orange / white_blue / Maid_Atelier + assets）
 │  └─ assets/           # 前端静态资源（内置字体等）
+├─ engines/             # 内置任务引擎（base 底座 + modules 遮罩/复刻/批量），构建时复制为产物 resources\Engines
+│  ├─ engine-runner.js / registry.js
+│  ├─ base/             # 共享底座（ffmpeg/ffprobe/缓存/锁/日志/路径等）
+│  └─ modules/          # batch / mask / replica 三个任务引擎
 ├─ icon/                # 应用图标
-├─ scripts/             # 成片处理脚本（唯一源：源码形态直接运行此份，构建时 extraResources 复制为产物 resources\Scripts）
+├─ scripts/             # 旧版成片脚本（legacy 回退通道，extraResources 复制为产物 resources\Scripts）
 ├─ main.js              # Electron 主进程
 ├─ preload.js           # 渲染进程桥接
 ├─ backend.js           # 后端业务逻辑
@@ -63,14 +68,6 @@ Video Lab/
   视频编码使用 NVIDIA NVENC 硬件编码器，必须配备 NVIDIA 独立显卡才能生成成片；
   暂不支持 CPU 回退编码，也不支持 AMD / Intel 等其他显卡的硬件编码。
 
-- **PowerShell 7（pwsh）**
-
-  ```bash
-  winget install --id Microsoft.PowerShell
-  ```
-
-  或前往官方发布页下载：<https://github.com/PowerShell/PowerShell/releases>
-
 - **FFmpeg / FFprobe（Gyan 官方 full build）**
 
   - 下载页：<https://www.gyan.dev/ffmpeg/builds/>
@@ -81,6 +78,17 @@ Video Lab/
   ```bash
   winget install --id Gyan.FFmpeg
   ```
+
+- **PowerShell 7（可选，仅旧脚本回退通道需要）**
+
+  任务执行默认使用随包分发的内置 Node 引擎，不依赖系统安装 PowerShell；
+  仅当任务执行引擎切换至「旧脚本」回退通道时，才需要 PowerShell 7：
+
+  ```bash
+  winget install --id Microsoft.PowerShell
+  ```
+
+  或前往官方发布页下载：<https://github.com/PowerShell/PowerShell/releases>
 
 ## 首次运行
 
@@ -95,10 +103,17 @@ Video Lab/
 ```bash
 npm install
 npm start        # 开发运行
-npm run dist     # 打包
 ```
 
-> 成片处理脚本（`video_batch.ps1` / `video_mask.ps1` / `video_replica.ps1`）唯一托管于仓库 `scripts/` 目录，是脚本的唯一源：源码共存形态运行时直接执行这一份；构建/分发形态由 electron-builder `extraResources` 自动复制为产物 `resources\Scripts`。运行时自动按形态解析脚本目录，不依赖多余副本。
+打包（portable + 安装包）由项目根目录的打包脚本完成，不使用 npm run dist：
+
+```bash
+pwsh 打包exe.ps1                      # 全量构建（portable + nsis）
+pwsh 打包exe.ps1 -Target dir          # 仅构建 win-unpacked（快速验证）
+pwsh 打包exe.ps1 -CheckOnly           # 预检与现有产物校验
+```
+
+> 任务引擎（`engines/`）与旧脚本回退通道（`scripts/legacy`）均随构建内置：引擎复制为产物 `resources\Engines`，旧脚本复制为产物 `resources\Scripts`。任务执行默认走内置 Node 引擎，引擎缺失或切换「旧脚本」时回退 PowerShell。
 
 ## 皮肤素材来源与许可
 

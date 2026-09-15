@@ -83,6 +83,7 @@ const PURE_BACKEND_ROUTES = {
   delete_mask_related: { m: 'deleteMaskRelated', a: (args) => [args[0], args[1]] },
   delete_mask_videos: { m: 'deleteMaskVideos', a: (args) => [args[0], args[1]] },
   move_mask_out: { m: 'moveMaskOut', a: (args) => [args[0], args[1], args[2]] },
+  delete_mask_log: { m: 'deleteMaskLog', a: (args) => [args[0], args[1]] },
   delete_secondary_products: { m: 'deleteSecondaryProducts', a: (args) => [args[0], args[1]] },
   clean_duplicate_star: { m: 'cleanDuplicateStar', a: (args) => [!!args[0]] },
   get_root: { m: 'getRoot', a: () => [] },

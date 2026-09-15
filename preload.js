@@ -64,6 +64,7 @@ contextBridge.exposeInMainWorld('txapi', {
   delete_mask_related: (projectPath, targets) => invoke('delete_mask_related', projectPath, targets),
   delete_mask_videos: (projectPath, names) => invoke('delete_mask_videos', projectPath, names),
   move_mask_out: (projectPath, videoName, newDir) => invoke('move_mask_out', projectPath, videoName, newDir),
+  delete_mask_log: (projectPath, logPath) => invoke('delete_mask_log', projectPath, logPath),
   delete_secondary_products: (projectPath, maskOutPaths) => invoke('delete_secondary_products', projectPath, maskOutPaths),
   choose_mask_file: (prev) => invoke('choose_mask_file', prev),
   list_tasks: () => invoke('list_tasks'),

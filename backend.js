@@ -4328,6 +4328,71 @@ let themes = [];
     this._maskLogCache = null; // 日志缓存失效，下次 listMaskLogs 重读
     return { ok: true };
   }
+
+  // 重新定位遮罩成片：成片可能被外部移走（@out 路径失效/不在原输出目录），
+  // 用户在列表/分支右键选择新目录后，在本目录（含子目录）按「文件名完全一致」查找同名成片；
+  // 找到则把该成片所在日志块 @out 行改写成新路径并返回，前端据此刷新视图
+  relocateMaskOut(projectPath, videoName, newDir) {
+    const pdir = String(projectPath || '').trim();
+    const logDir = this._maskLogDir(pdir);
+    const vn = String(videoName || '').trim().replace(/^"|"$/g, '');
+    const nd = String(newDir || '').trim().replace(/^"|"$/g, '');
+    if (!pdir || !logDir || !fs.existsSync(logDir)) return { ok: false, error: '项目无遮罩日志' };
+    if (!vn) return { ok: false, error: '未指定成片名' };
+    if (!nd || !fs.existsSync(nd) || !fs.statSync(nd).isDirectory()) return { ok: false, error: '所选目录无效' };
+    if (!/\.mp4$/i.test(vn)) vn += '.mp4';
+    // 目录递归查找同名文件（与外部手动迁移的「文件名=同一成片」语义一致）
+    const found = this._findVideoByName(nd, vn);
+    if (!found) return { ok: false, error: '所选目录中未找到同名成片：' + path.basename(vn) };
+    // 改写日志块 @out：遍历日志文件，命中该成片名行后在其块内替换 @out
+    let written = false;
+    let files = [];
+    try { files = fs.readdirSync(logDir).filter((n) => n.endsWith('.txt')); } catch (e) { return { ok: false, error: '读取日志失败' }; }
+    for (const f of files) {
+      const fp = path.join(logDir, f);
+      const text = readText(fp);
+      const lines = text.split(/\r?\n/);
+      let changed = false;
+      const vnLow = vn.toLowerCase();
+      for (let i = 0; i < lines.length; i++) {
+        const nameLine = lines[i].replace(/\r$/, '').trim();
+        if (nameLine.toLowerCase() !== vnLow) continue;
+        // 块内 8 行内找 @out（遇 === 止；「使用片段列表：」允许越过，与 _maskOutFromLog 同口径）
+        for (let j = i + 1; j < Math.min(i + 8, lines.length); j++) {
+          const t = lines[j].replace(/\r$/, '');
+          if (t.startsWith('===')) break;
+          const m = /^@out:\s*(.+)$/.exec(t);
+          if (m) { if (String(m[1]).trim().replace(/^"|"$/g, '') !== found) { lines[j] = '@out: ' + found; changed = true; } break; }
+        }
+        break; // 同名成片只对应一个块
+      }
+      if (changed) { atomicWrite(fp, lines.join('\n')); written = true; }
+    }
+    if (!written) {
+      // 日志中无该成片记录：仍返回 ok，前端提示已定位但未改写日志
+      return { ok: true, path: found, noLog: true };
+    }
+    this._maskLogCache = null;
+    return { ok: true, path: found };
+  }
+
+  // 目录内（含子目录）按文件名（含扩展名，大小写不敏感）查找视频；找到返回完整路径，否则空串
+  _findVideoByName(dir, fileName) {
+    const target = String(fileName || '').toLowerCase();
+    const walk = (d) => {
+      let ents = [];
+      try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return ''; }
+      for (const en of ents) {
+        const full = path.join(d, en.name);
+        if (en.isDirectory()) { const r = walk(full); if (r) return r; }
+        else if (en.isFile() && en.name.toLowerCase() === target && /\.(mp4|mov|avi|mkv|m4v)$/i.test(en.name)) return full;
+      }
+      return '';
+    };
+    return walk(dir);
+  }
+
+  // 迁移指定遮罩叠加成片到新文件夹：移动文件并同步更新遮罩日志块的 @out 路径
   moveMaskOut(projectPath, videoName, newDir) {
     const pdir = String(projectPath || '').trim();
     const logDir = this._maskLogDir(pdir);

@@ -4304,7 +4304,30 @@ let themes = [];
     return { ok: true, deleted };
   }
 
-  // 迁移指定遮罩叠加成片到新文件夹：移动文件并同步更新遮罩日志块的 @out 路径
+  // 删除指定遮罩日志文件（整份 TXT，非单块）：限定在「项目遮罩日志目录」内，
+  // 不依赖批量工作路径（遮罩项目可位于任意路径，removeBranch 的 this.root 校验会误拒）；
+  // 删除后若该日志目录为空则一并清理（以遮罩日志目录为边界，不越界）
+  deleteMaskLog(projectPath, logPath) {
+    const pdir = String(projectPath || '').trim();
+    const logDir = this._maskLogDir(pdir);
+    if (!pdir || !logDir || !fs.existsSync(logDir)) return { ok: false, error: '项目无遮罩日志' };
+    const lp = String(logPath || '').trim();
+    if (!lp) return { ok: false, error: '未指定日志文件' };
+    const rl = path.resolve(lp);
+    const rdir = path.resolve(logDir);
+    if (rl !== rdir && !rl.startsWith(rdir + path.sep)) return { ok: false, error: '日志不在项目遮罩日志目录内' };
+    if (!rl.toLowerCase().endsWith('.txt')) return { ok: false, error: '仅支持移除遮罩日志 TXT' };
+    try {
+      if (!fs.existsSync(rl)) return { ok: false, error: '日志文件不存在：' + lp };
+      fs.unlinkSync(rl);
+      try {
+        const rest = fs.readdirSync(rdir);
+        if (!rest.length) { try { fs.rmdirSync(rdir); } catch (e) {} }
+      } catch (e) {}
+    } catch (e) { return { ok: false, error: String(e) }; }
+    this._maskLogCache = null; // 日志缓存失效，下次 listMaskLogs 重读
+    return { ok: true };
+  }
   moveMaskOut(projectPath, videoName, newDir) {
     const pdir = String(projectPath || '').trim();
     const logDir = this._maskLogDir(pdir);

@@ -2656,57 +2656,15 @@
       var label = btn.getAttribute('data-label'); var v = state.versions.find(function (x) { return x.label === label; }); if (v) call('open_folder_select', v.path);
     });
     document.addEventListener('contextmenu', function (e) {
-      // 遮罩模式日志日期分支：右键打开/移除该遮罩日志（样式与操作参考批量日志分支）
+      // 遮罩模式日志日期分支右键：打开成片路径（找不到成片置灰）/ 打开日志文件 / 迁移全部成片 / 移除该日志（仅日志或连同成片）
       var mb = $('maskDateBranches');
       if (mb && mb.contains(e.target)) {
         var mbtn = e.target.closest('.date-branch-btn');
         if (!mbtn) return;
         e.preventDefault();
         var mfp = mbtn.getAttribute('data-masklog');
-        if (!mfp) return;
-        showMenu(e.clientX, e.clientY, [
-          { label: '打开文件', action: function () { call('open_path', mfp); } },
-          { label: '打开路径', action: function () { call('open_folder_select', mfp); } },
-          { label: '移除该日志', action: function () {
-              // 与批量日期分支弹窗同款分级：仅移日志 / 连同成片移除
-              showDialog({
-                title: '移除遮罩日志',
-                message: mfp + '\n\n请选择移除方式：\n' +
-                  '· 仅移除该日志：只删除当前【日志】文件\n' +
-                  '· 连同成片移除：删除日志文件及其中全部成片视频',
-                buttons: [
-                  { label: '仅移除该日志', value: 'txt', primary: true },
-                  { label: '连同成片移除', value: 'videos', danger: true }
-                ]
-              }).then(function (v) {
-                if (!v) return;
-                if (v === 'txt') {
-                  call('remove_branch', mfp, 'txt').then(function (r) {
-                    if (!(r && r.ok)) { setStatus('移除失败：' + ((r && r.error) || '未知错误')); return; }
-                    setStatus('已移除遮罩日志'); buildMaskLogView();
-                  }).catch(function (err) { setStatus('移除失败：' + err.message); });
-                  return;
-                }
-                // 连同成片：取该日志全部成片名一并删除（成片文件 + 日志条目块），日志清空会自动删文件
-                call('list_mask_logs', maskState.project.path).then(function (logs) {
-                  var lg = (Array.isArray(logs) ? logs : []).find(function (x) { return x.path === mfp; });
-                  var names = (lg && Array.isArray(lg.entries) ? lg.entries : []).map(function (e) { return e.video; }).filter(Boolean);
-                  if (!names.length) {
-                    call('remove_branch', mfp, 'txt').then(function (r2) {
-                      if (!(r2 && r2.ok)) { setStatus('移除失败：' + ((r2 && r2.error) || '未知错误')); return; }
-                      setStatus('已移除遮罩日志'); buildMaskLogView();
-                    }).catch(function (err) { setStatus('移除失败：' + err.message); });
-                    return;
-                  }
-                  call('delete_mask_videos', maskState.project.path, names).then(function (r) {
-                    if (!(r && r.ok)) { setStatus('删除失败：' + ((r && r.error) || '未知错误')); return; }
-                    setStatus('已删除 ' + ((r.deleted || []).length) + ' 个成片及其日志');
-                    buildMaskLogView();
-                  }).catch(function (err) { setStatus('删除失败：' + err.message); });
-                }).catch(function () { setStatus('读取遮罩日志失败'); });
-              });
-          } }
-        ]);
+        if (!mfp || !maskOn() || !maskState.project) return;
+        openMaskBranchMenu(e.clientX, e.clientY, mfp);
         return;
       }
       var db = $('dateBranches'); if (!db || !db.contains(e.target)) return;
@@ -3782,18 +3740,6 @@
         var fp = btn.getAttribute('data-masklog');
         if (fp) call('open_folder_select', fp).catch(function (err) { setStatus('打开失败：' + err.message); });
       });
-      // 分支右键菜单（原文件头菜单整体迁入）：打开日志文件夹 / 迁移该日志全部成片
-      if (mb) mb.addEventListener('contextmenu', function (e) {
-        var btn = e.target.closest('.date-branch-btn');
-        if (!btn) return;
-        e.preventDefault();
-        var fp = btn.getAttribute('data-masklog');
-        if (!fp) return;
-        showMenu(e.clientX, e.clientY, [
-          { label: '打开日志文件夹', action: function () { call('open_folder_select', fp).catch(function (err) { setStatus('打开失败：' + err.message); }); } },
-          { label: '迁移该日志全部成片', action: function () { doMoveLogAll(fp); } }
-        ]);
-      });
       top.querySelector('[data-maskview="config"]').addEventListener('click', function () { maskState.view = 'config'; buildMaskCenterHeader(); buildMaskCenter(); });
       top.querySelector('[data-maskview="log"]').addEventListener('click', function () { maskState.view = 'log'; buildMaskCenterHeader(); buildMaskCenter(); });
     }
@@ -4786,6 +4732,79 @@
       }).catch(function () {});
     }).catch(function () {});
   }
+
+  // 遮罩日志日期分支右键菜单：打开成片路径（找不到成片置灰禁用）/ 打开日志文件 / 迁移全部成片 / 移除该日志（仅日志或连同成片）
+  function openMaskBranchMenu(x, y, mfp) {
+    var items = [];
+    // 成片路径：取该日志第一条成片的 @out 实际路径（缺失再回退日志目录 + 成片名兜底）
+    call('list_mask_logs', maskState.project.path).then(function (logs) {
+      var lg = (Array.isArray(logs) ? logs : []).find(function (l) { return l.path === mfp; });
+      var outPath = '';
+      var entries = (lg && Array.isArray(lg.entries)) ? lg.entries : [];
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i].outPath) { outPath = entries[i].outPath; break; }
+      }
+      var show = function () { showMenu(x, y, items); };
+      // 「打开成片路径」：存在成片文件 → 打开其所在文件夹；否则置灰禁用
+      var openOut = { label: '打开成片路径', disabled: true, title: '', action: function () { if (outPath) call('open_folder_select', outPath); } };
+      items.push(openOut);
+      items.push({ label: '打开日志文件', action: function () { call('open_path', mfp); } });
+      items.push({ label: '打开日志文件夹', action: function () { call('open_folder_select', mfp); } });
+      items.push({ label: '迁移该日志全部成片', action: function () { doMoveLogAll(mfp); } });
+      items.push({ label: '移除该日志', action: function () { removeMaskLog(mfp); } });
+      if (!outPath) { openOut.title = '找不到成片'; show(); return; }
+      call('check_exists', [outPath]).then(function (map) {
+        if (!(map && map[outPath])) { openOut.title = '成片文件不存在'; }
+        else { openOut.disabled = false; }
+        show();
+      }).catch(function () { openOut.title = '成片文件不存在'; show(); });
+    }).catch(function () {
+      showMenu(x, y, [
+        { label: '移除该日志', action: function () { removeMaskLog(mfp); } }
+      ]);
+    });
+  }
+
+  // 移除遮罩日志：仅移除该日志（新接口 delete_mask_log，不再依赖批量工作路径）/ 连同成片移除（成片文件 + 日志条目块，日志清空自动删文件）
+  function removeMaskLog(mfp) {
+    showDialog({
+      title: '移除遮罩日志',
+      message: mfp + '\n\n请选择移除方式：\n' +
+        '· 仅移除该日志：只删除当前【日志】文件\n' +
+        '· 连同成片移除：删除日志文件及其中全部成片视频',
+      buttons: [
+        { label: '仅移除该日志', value: 'txt', primary: true },
+        { label: '连同成片移除', value: 'videos', danger: true }
+      ]
+    }).then(function (v) {
+      if (!v) return;
+      if (v === 'txt') {
+        call('delete_mask_log', maskState.project.path, mfp).then(function (r) {
+          if (!(r && r.ok)) { setStatus('移除失败：' + ((r && r.error) || '未知错误')); return; }
+          setStatus('已移除遮罩日志'); buildMaskLogView();
+        }).catch(function (err) { setStatus('移除失败：' + err.message); });
+        return;
+      }
+      // 连同成片：取该日志全部成片名一并删除（成片文件 + 日志条目块），日志清空会自动删文件
+      call('list_mask_logs', maskState.project.path).then(function (logs) {
+        var lg = (Array.isArray(logs) ? logs : []).find(function (x) { return x.path === mfp; });
+        var names = (lg && Array.isArray(lg.entries) ? lg.entries : []).map(function (e) { return e.video; }).filter(Boolean);
+        if (!names.length) {
+          call('delete_mask_log', maskState.project.path, mfp).then(function (r2) {
+            if (!(r2 && r2.ok)) { setStatus('移除失败：' + ((r2 && r2.error) || '未知错误')); return; }
+            setStatus('已移除遮罩日志'); buildMaskLogView();
+          }).catch(function (err) { setStatus('移除失败：' + err.message); });
+          return;
+        }
+        call('delete_mask_videos', maskState.project.path, names).then(function (r) {
+          if (!(r && r.ok)) { setStatus('删除失败：' + ((r && r.error) || '未知错误')); return; }
+          setStatus('已删除 ' + ((r.deleted || []).length) + ' 个成片及其日志');
+          buildMaskLogView();
+        }).catch(function (err) { setStatus('删除失败：' + err.message); });
+      }).catch(function () { setStatus('读取遮罩日志失败'); });
+    });
+  }
+
   // 生效的输出目录：显式输入 > 项目默认 > 项目路径
   function maskEffectiveOutDir() {
     var v = (maskState.outputDir || '').trim();

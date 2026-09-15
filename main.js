@@ -1282,6 +1282,7 @@ function registerIpc() {
   ipcMain.handle('delete_mask_related', (e, projectPath, targets) => api.deleteMaskRelated(projectPath, targets));
   ipcMain.handle('delete_mask_videos', (e, projectPath, names) => api.deleteMaskVideos(projectPath, names));
   ipcMain.handle('move_mask_out', (e, projectPath, videoName, newDir) => api.moveMaskOut(projectPath, videoName, newDir));
+  ipcMain.handle('delete_mask_log', (e, projectPath, logPath) => api.deleteMaskLog(projectPath, logPath));
   ipcMain.handle('delete_secondary_products', (e, projectPath, maskOutPaths) => api.deleteSecondaryProducts(projectPath, maskOutPaths));
   ipcMain.handle('choose_mask_file', async (e, prev) => {
     const win = mainWin && !mainWin.isDestroyed() ? mainWin : null;

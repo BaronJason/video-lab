@@ -30,7 +30,10 @@
       "preload.js",
       "backend.js",
       "server.js",
-      "engines/**/*",
+      "engines/engine-runner.js",
+      "engines/registry.js",
+      "engines/base/**/*",
+      "engines/modules/**/*",
       "frontend/**/*",
       "icon/**/*",
       "README.md",
@@ -49,7 +52,8 @@
         "from": "engines",
         "to": "Engines",
         "filter": [
-          "**/*"
+          "**/*",
+          "!tests/**"
         ]
       }
     ],

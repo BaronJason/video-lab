@@ -4633,7 +4633,7 @@
           var finish3 = function () {
             // 成片缺失时迁移也置灰（无源文件可迁移）；重新定位仅在缺失时可用
             items3.push({ label: '迁移该成片', disableIfMissing: true, action: function () { if (video && openPath) doMoveOne(video); } });
-            items3.push({ label: '重新定位', disabled: !!openPath, title: openPath ? '成片已可定位' : '', action: function () { if (!openPath && video) relocateMaskVideo(lp, video); } });
+            items3.push({ label: '重新定位', disabled: !!openPath, title: openPath ? '成片已可定位' : '', action: function () { if (video) relocateMaskVideo(lp, video); } });
             items3.push({ label: '删除该成片', action: function () { if (video) doDeleteOne(video); } });
             showMenu(e.clientX, e.clientY, items3);
           };
@@ -4649,7 +4649,7 @@
                 items3[3].disabled = true; items3[3].title = '成片已可定位';
               }
               finish3();
-            }).catch(finish3);
+            }).catch(function () { items3[3].disabled = false; items3[3].title = ''; finish3(); });
           } else {
             items3[0].disabled = true; items3[0].title = '无法定位成片文件';
             items3[1].disabled = true; items3[1].title = '无法定位成片文件';
@@ -4763,7 +4763,7 @@
           { label: '打开日志文件', action: function () { call('open_path', mfp); } },
           { label: '打开日志文件夹', action: function () { call('open_folder_select', mfp); } },
           { label: '迁移该日志全部成片', disabled: !anyExists, title: anyExists ? '' : '找不到成片，无法迁移', action: function () { doMoveLogAll(mfp); } },
-          { label: '重新定位该日志全部成片', disabled: anyExists, title: anyExists ? '成片均已定位' : '', action: function () { relocateMaskBranch(mfp); } },
+          { label: '重新定位', disabled: anyExists, title: anyExists ? '成片均已定位' : '', action: function () { relocateMaskBranch(mfp); } },
           { label: '移除该日志', action: function () { removeMaskLog(mfp); } }
         ]);
       };
@@ -4838,26 +4838,42 @@
     call('list_mask_logs', maskState.project.path).then(function (logs) {
       var lg = (Array.isArray(logs) ? logs : []).find(function (x) { return x.path === lp; });
       var entries = (lg && Array.isArray(lg.entries)) ? lg.entries : [];
+      // 缺失判定：@out 为空，或 @out 记录的路径不存在（文件被外部移动后仍留旧路径）→ 均需重新定位
       var missing = entries.filter(function (en) { return !en.outPath; }).map(function (en) { return en.video; }).filter(Boolean);
-      if (!missing.length) { setStatus('该日志全部成片均已定位'); return; }
-      call('pick_single_folder').then(function (nd) {
-        if (!nd) return;
-        var okN = 0, failN = 0;
-        var k = 0;
-        (function next() {
-          if (k >= missing.length) {
-            setStatus('重新定位完成：成功 ' + okN + ' / 失败 ' + failN + (failN ? '（失败可手动选择对应目录）' : ''));
-            buildMaskLogView();
-            return;
-          }
-          var vn3 = missing[k++];
-          call('relocate_mask_out', maskState.project.path, vn3, nd).then(function (r) {
-            if (r && r.ok) okN++; else failN++;
-            next();
-          }).catch(function () { failN++; next(); });
-        })();
-      }).catch(function () {});
+      var probeMissing = entries.filter(function (en) { return en.outPath; });
+      if (missing.length) {
+        relocateMaskBranchGo(lp, missing);
+        return;
+      }
+      if (!probeMissing.length) { setStatus('该日志无成片'); return; }
+      var outs = probeMissing.map(function (en) { return en.outPath; });
+      call('check_exists', outs).then(function (map) {
+        map = map || {};
+        var gone = probeMissing.filter(function (en) { return !map[en.outPath]; }).map(function (en) { return en.video; }).filter(Boolean);
+        if (!gone.length) { setStatus('该日志全部成片均已定位'); return; }
+        relocateMaskBranchGo(lp, gone);
+      }).catch(function () { setStatus('读取成片状态失败'); });
     }).catch(function () { setStatus('读取遮罩日志失败'); });
+  }
+  // 分支重新定位执行体：选目录 → 对缺失成片逐一按文件名定位
+  function relocateMaskBranchGo(lp, missingNames) {
+    call('pick_single_folder').then(function (nd) {
+      if (!nd) return;
+      var okN = 0, failN = 0;
+      var k = 0;
+      (function next() {
+        if (k >= missingNames.length) {
+          setStatus('重新定位完成：成功 ' + okN + ' / 失败 ' + failN + (failN ? '（失败可手动选择对应目录）' : ''));
+          buildMaskLogView();
+          return;
+        }
+        var vn3 = missingNames[k++];
+        call('relocate_mask_out', maskState.project.path, vn3, nd).then(function (r) {
+          if (r && r.ok) okN++; else failN++;
+          next();
+        }).catch(function () { failN++; next(); });
+      })();
+    }).catch(function () {});
   }
 
   // 生效的输出目录：显式输入 > 项目默认 > 项目路径

@@ -101,16 +101,9 @@ Video Lab/
 ## 构建与运行
 
 ```bash
-npm install
-npm start        # 开发运行
-```
-
-打包（portable + 安装包）由项目根目录的打包脚本完成，不使用 npm run dist：
-
-```bash
-pwsh 打包exe.ps1                      # 全量构建（portable + nsis）
-pwsh 打包exe.ps1 -Target dir          # 仅构建 win-unpacked（快速验证）
-pwsh 打包exe.ps1 -CheckOnly           # 预检与现有产物校验
+npm install            # 安装依赖（含 electron / electron-builder 开发依赖）
+npm start              # 开发运行
+npx electron-builder --win --x64   # 打包（产出 win-unpacked 与 Setup 安装包）
 ```
 
 > 任务引擎（`engines/`）与旧脚本回退通道（`scripts/legacy`）均随构建内置：引擎复制为产物 `resources\Engines`，旧脚本复制为产物 `resources\Scripts`。任务执行默认走内置 Node 引擎，引擎缺失或切换「旧脚本」时回退 PowerShell。

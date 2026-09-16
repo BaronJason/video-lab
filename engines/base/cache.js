@@ -309,6 +309,26 @@ class CacheStore {
       .run(String(dir), Number(mtime) || 0, JSON.stringify(entries));
   }
 
+  // ── cache_kv（零散小缓存：mask 会话 / 日志索引 / plan_seq / 未来杂项）──
+  getKv(k) {
+    const row = this.open().prepare('SELECT v FROM cache_kv WHERE k = ?').get(String(k));
+    return row ? String(row.v) : '';
+  }
+  setKv(k, v) {
+    this.open().prepare(`INSERT INTO cache_kv (k, v, updated_at) VALUES (?, ?, ?)
+                         ON CONFLICT(k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at`)
+      .run(String(k), String(v == null ? '' : v), Date.now());
+  }
+  removeKv(k) {
+    return Number(this.open().prepare('DELETE FROM cache_kv WHERE k = ?').run(String(k)).changes) || 0;
+  }
+  listKv(prefix) {
+    const rows = this.open().prepare('SELECT k, v FROM cache_kv WHERE k LIKE ?').all(String(prefix || '') + '%');
+    const out = {};
+    for (const r of rows) out[String(r.k)] = String(r.v);
+    return out;
+  }
+
   // ── 旧 JSON 一次性迁移（video_cache.json / usage_cache.json）──
   // 返回 { video, usage } 计数；由调用方负责读回校验与旧文件回收站处理。
   migrateFromJson({ videoCacheJson, usageCacheJson } = {}) {

@@ -316,7 +316,7 @@ class Api {
     try { return fs.existsSync(p) ? p : ''; } catch (e) { return ''; }
   }
 
-  // legacy 脚本路径：脚本目录下 legacy\ 子目录优先（P5 归档形态），
+  // legacy 脚本路径：脚本目录下 legacy\ 子目录优先，
   // 回退脚本目录根（旧布局/尚未同步该目录结构的分发形态）
   _legacyScriptPath(name) {
     const root = this.scriptsDir;
@@ -915,7 +915,7 @@ class Api {
     } catch (e) { return { ok: false, error: String(e), hasOther: false }; }
   }
 
-  // ── video_cache 持久层（P5：sqlite 生产接入 + JSON 回退通道）──
+  // ── video_cache 持久层 ──
   // 权威存储为 Cache\cache.db：Ticks 以 TEXT 精确承载（INTEGER 列读 Int64 会抛 RangeError）、
   // 支持增量写与 backend↔引擎跨进程并发（WAL）；legacy JSON 保留为回退通道
   // （VL_CACHE_BACKEND=json 强制，或 node:sqlite 不可用/库打开失败时自动回退）。

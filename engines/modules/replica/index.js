@@ -63,7 +63,7 @@ const TICKS_TOLERANCE = 10000;
 
 function loadVideoCache(cacheDir) {
   if (!cacheDir) return {};
-  // 持久层优先 sqlite（cache.db，P5 生产形态）：全表读且 Ticks 为精确字符串；
+  // 持久层优先 sqlite（cache.db）：全表读且 Ticks 为精确字符串；
   // 库不存在/为空/不可用时回退 video_cache.json（legacy 形态）
   try {
     const dbPath = path.join(cacheDir, 'cache.db');
@@ -740,7 +740,7 @@ module.exports = {
   envVars: ['REPLICA_*', 'VL_CACHE_DIR'],
   legacyScript: 'video_replica.ps1',
   run,
-  // 供测试与 P4 复用
+  // 供测试与调用方复用
   _internals: {
     readEnv, taskDate, parseJobs, sameDirCandidates, selectReplacementVideo, videoFromDirectory,
     buildCacheByNameIndex, resolveFromVideoCache, selectVariancePaths, mtimeToTicks, round1, round2,

@@ -85,7 +85,7 @@ function projectDir() {
     const portableFile = process.env.PORTABLE_EXECUTABLE_FILE;
     if (portableFile) return path.dirname(portableFile);
   }
-  // setup 安装版：exe 所在目录即程序根（config/Cache/Scripts 同级定位）
+  // setup 安装版：exe 所在目录即程序根（引导文件与三库、Scripts 同级定位）
   return path.dirname(process.execPath);
 }
 // 脚本目录动态解析：成片处理脚本需要真实文件系统路径（供外部 pwsh 执行，无法读 asar）。
@@ -444,8 +444,9 @@ function sendVersionsChangedToAll() {
 api.onVersionsChanged = sendVersionsChangedToAll;
 
 // ═══ 自动更新 ═══ 启动/设置页/托盘触发检查，主窗口提示条由用户确认后下载
-// 便携版：仅检查+下载，更新包放到程序根目录，由用户在资源管理器中打开后自行关闭应用解压；
-// 自动安装（apply_update / 更新器脚本）代码保留，供 setup 安装版接入使用
+// 便携版：只检查 + 下载，更新包落地后由「打开更新文件」在资源管理器中选中，用户关闭应用后自行解压覆盖；
+//         安装过程不经应用代码（早期曾实现自动安装脚本，因调试不稳定已弃用）
+// setup 安装版：electron-updater 静默升级安装并重启
 const UPDATE_ENABLED = true;
 const GITHUB_REPO = 'BaronJason/video-lab';
 const GITEE_REPO = 'hirannu/video-lab';
@@ -776,63 +777,7 @@ async function downloadUpdateParts(info, zipPath, onProgress, onStatus) {
   writeUpdateLog('分卷下载失败：' + lastErr);
   return { ok: false, error: lastErr };
 }
-// 内嵌更新器脚本：等待旧进程退出 → 解压 → 覆盖运行目录（排除用户数据）→ 重启
-const UPDATE_SCRIPT_TPL = [
-  '# -*- coding: utf-8 -*-',
-  '# Video Lab 更新器：由主进程拉起后接管安装（旧进程退出后执行）',
-  'param(',
-  '  [string]$Target,',
-  '  [string]$Zip,',
-  '  [string]$ExeName',
-  ')',
-  '$ErrorActionPreference = \'Continue\'',
-  '$logDir = Join-Path $Target \'Cache\'',
-  'New-Item -ItemType Directory -Force -Path $logDir | Out-Null',
-  '$log = Join-Path $logDir \'update.log\'',
-  'function Log($m) { try { Add-Content -Path $log -Value (\'[{0}] {1}\' -f (Get-Date -Format \'yyyy-MM-dd HH:mm:ss\'), $m) -Encoding UTF8 } catch {} }',
-  'Log (\'目标目录: \' + $Target)',
-  'Log (\'更新包: \' + $Zip)',
-  '# 1. 等待旧进程完全退出（最多 120 秒）',
-  '$base = [System.IO.Path]::GetFileNameWithoutExtension($ExeName)',
-  'for ($i = 0; $i -lt 120; $i++) {',
-  '  $any = Get-Process -Name $base -ErrorAction SilentlyContinue',
-  '  if (-not $any) { break }',
-  '  Start-Sleep -Milliseconds 1000',
-  '}',
-  'if (Get-Process -Name $base -ErrorAction SilentlyContinue) {',
-  '  Log \'旧进程未在 120 秒内退出，放弃更新\'',
-  '  [Console]::Beep(600, 400)',
-  '  exit 1',
-  '}',
-  '# 2. 解压到临时目录',
-  '$tmp = Join-Path ([System.IO.Path]::GetTempPath()) (\'vl-update-\' + [guid]::NewGuid().ToString(\'N\'))',
-  'try { Expand-Archive -Path $Zip -DestinationPath $tmp -Force } catch {',
-  '  Log (\'解压失败: \' + $_.Exception.Message)',
-  '  [Console]::Beep(400, 600)',
-  '  exit 1',
-  '}',
-  '# 3. 镜像覆盖运行目录（排除 Cache 与 config.json 用户数据）',
-  'robocopy $tmp $Target /MIR /R:3 /W:2 /XD Cache config.json /NFL /NDL /NJH /NJS /NP',
-  '$code = $LASTEXITCODE',
-  'if ($code -ge 8) {',
-  '  Log (\'复制失败 robocopy=\' + $code)',
-  '  [Console]::Beep(400, 600)',
-  '  exit 1',
-  '}',
-  '# 4. 清理临时目录',
-  'try { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue } catch {}',
-  '# 5. 重启应用',
-  '$exe = Join-Path $Target $ExeName',
-  'if (Test-Path $exe) { Start-Process -FilePath $exe } else {',
-  '  Log (\'未找到可执行文件: \' + $exe)',
-  '  [Console]::Beep(400, 600)',
-  '  exit 1',
-  '}',
-  'Log \'更新完成\'',
-  'Write-Host \'脚本完成，等待10s后退出\'',
-  'Start-Sleep -Seconds 10',
-  '[Environment]::Exit(0)'
-].join('\r\n');
+// 便携版更新包落地后由用户自行解压覆盖（早期自动安装脚本因调试不稳定已弃用，见文件头「自动更新」说明）
 let lastDownload = null; // 已下载但未安装的更新包 { zipPath, info }，等待用户二次确认（UPDATE_ENABLED 下使用）
 
 // ═══ setup 安装版更新（electron-updater）═══
@@ -952,48 +897,12 @@ async function startUpdate() {
     updateBusy = false;
   }
 }
-// 更新器脚本的临时落地目录：放系统临时目录，不落数据目录（避免污染「三库扁平」布局）
-const updateTmpDir = () => path.join(os.tmpdir(), 'video-lab-update');
-// 用户点击「更新并重启」：拉起更新器并退出应用（两步式第二步，需 UPDATE_ENABLED）
+// 用户点击「立即安装」（两步式第二步，需 UPDATE_ENABLED）：仅 setup 安装版经 electron-updater；
+// 便携版的更新包由用户自行解压覆盖，故此处直接给出指引
 async function applyUpdate() {
   if (!UPDATE_ENABLED) return { ok: false, error: '自动更新已停用' };
-  // setup 安装版：electron-updater 静默升级安装并重启
-  if (!IS_PORTABLE) return setupApplyUpdate();
-  if (!lastDownload) return { ok: false, error: '没有已下载的更新包' };
-  const { zipPath, info } = lastDownload;
-  const scriptPath = path.join(updateTmpDir(), 'apply_update.ps1');
-  try { fs.mkdirSync(path.dirname(scriptPath), { recursive: true }); fs.writeFileSync(scriptPath, UPDATE_SCRIPT_TPL, 'utf-8'); } catch (e) {
-    sendToMain('update_error', { message: '写入更新脚本失败：' + e.message });
-    return { ok: false, error: e.message };
-  }
-  const exeName = path.basename(process.execPath) || 'Video Lab.exe';
-  try {
-    // 生成 .cmd 启动器（路径全部加引号，避免空格路径被拆散）
-    const launcherPath = path.join(updateTmpDir(), 'launch_update.cmd');
-    const cmdLines = [
-      '@echo off',
-      'pwsh -NoProfile -ExecutionPolicy Bypass -File "' + scriptPath + '" -Target "' + projectDir() + '" -Zip "' + zipPath + '" -ExeName "' + exeName + '"'
-    ];
-    fs.writeFileSync(launcherPath, cmdLines.join('\r\n') + '\r\n', 'utf-8');
-    writeUpdateLog('拉起更新器：' + launcherPath);
-    // 经 explorer.exe 启动：其派生的 cmd/pwsh 不在 Electron 的 job object 内，
-    // 主进程退出不会被连带终止（直接 spawn / Start-Process 均会被杀，已验证）
-    const { spawn } = require('child_process');
-    const p = spawn('explorer.exe', [launcherPath], { detached: true, stdio: 'ignore' });
-    p.on('error', (err) => {
-      writeUpdateLog('更新器启动失败：' + (err && err.message));
-      sendToMain('update_error', { message: '启动更新器失败：' + (err && err.message) });
-    });
-    p.unref();
-  } catch (e) {
-    writeUpdateLog('spawn 抛出异常：' + (e && e.message));
-    sendToMain('update_error', { message: '启动更新器失败：' + e.message });
-    return { ok: false, error: e.message };
-  }
-  sendToMain('update_ready', info);
-  isQuitting = true;
-  setTimeout(() => { try { app.quit(); } catch (e) {} }, 2000);
-  return { ok: true };
+  if (!IS_PORTABLE) return setupApplyUpdate(); // setup 安装版：electron-updater 静默升级安装并重启
+  return { ok: false, error: '便携版请先「打开更新文件」，关闭应用后自行解压覆盖' };
 }
 
 // HTTP 服务器 extraRoutes：涉及 main.js 内部状态（config/loadConfig/saveConfig 等）的路由
@@ -1268,7 +1177,7 @@ function registerIpc() {
       update_mode: c.update_mode === 'auto' ? 'auto' : 'notify',
       config_storage: c.config_storage === 'appdata' ? 'appdata' : 'program',
       config_path: configFilePath(),
-      config_path_program: path.dirname(programConfigPath()),   // 显示目录（含配置与 Cache）
+      config_path_program: path.dirname(programConfigPath()),   // 显示目录（含引导文件与三库）
       config_path_appdata: path.dirname(appdataConfigPath()),
       autostart: c.autostart === true,
       close_behavior: c.close_behavior === 'exit' ? 'exit' : 'tray',

@@ -442,7 +442,7 @@
       }).then(function (res) {
         if (res && res.ok) {
           setStatus('已保存', true); setTimeout(statusTimer, 2000); captureOriginals(); recomputeDirty();
-          if (res.config_moved) setStatus('配置和数据位置已切换并生效，配置与 Cache 已自动迁移', true);
+          if (res.config_moved) setStatus('配置和数据位置已切换并生效，配置与缓存库已自动迁移', true);
         }
         else setStatus('保存失败', false);
       }).catch(function () { setStatus('保存失败', false); });

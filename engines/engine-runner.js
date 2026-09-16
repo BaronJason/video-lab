@@ -1,5 +1,5 @@
 // 引擎执行入口：env → 识别模块 → 运行 → 输出协议行。
-// ctx 注入底座能力（V3 §6.7）：{ logger, ffmpeg, probe, lock, paths, retry, repair, dedupe, cacheStore }
+// ctx 注入底座能力：{ logger, ffmpeg, probe, lock, paths, retry, repair, dedupe, cacheStore }
 // 业务模块实现后自动注册；未实现的模块退回占位骨架，保证空跑（--dry）始终可用。
 // 用法：node engine-runner.js --module mask [--dry]
 'use strict';
@@ -28,7 +28,7 @@ const base = {
   cacheStore: require('./base/cache'),
 };
 
-// ── 业务模块注册（P2 mask / P3 replica / P4 batch 逐个落地） ──
+// ── 业务模块注册 ──
 const MODULE_META = {
   batch: { title: '批量拼接', envs: ['BATCH_*', 'VL_CACHE_DIR'], legacy: 'video_batch.ps1' },
   mask: { title: '遮罩叠加', envs: ['MASK_*', 'VL_CACHE_DIR'], legacy: 'video_mask.ps1' },
@@ -53,7 +53,7 @@ function loadModules(logger) {
       legacyScript: meta.legacy,
       skeleton: true,
       run: async (ctx) => {
-        ctx.logger.info(`[${id}] 占位骨架：尚未迁移（P2/P3/P4）`);
+        ctx.logger.info(`[${id}] 占位骨架：模块未加载（文件缺失或加载失败）`);
         ctx.logger.raw('共 1 个');
         ctx.logger.progress('生成', 1, 1);
         return 0;

@@ -107,7 +107,7 @@ function writeFileAtomic(file, text) {
   }
 }
 
-/** video_cache 持久层：优先 sqlite（Cache\cache.db，P5 生产形态），不存在/不可用时返回 null 回退 JSON。
+/** video_cache 持久层：优先 sqlite（<storageDir>\cache.db），不存在/不可用时返回 null 回退 JSON。
  *  收益：全量读从「解析整个 JSON」变为库内全表读（数千条约 3ms），写回只落本次新探测的条目而非重写全量。 */
 function openVideoStore(cacheDir) {
   if (!cacheDir) return null;

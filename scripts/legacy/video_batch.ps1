@@ -36,7 +36,7 @@ function Get-TaskDate {
 # ------------------------------ 缓存文件路径 -------------------------------------
 $scriptDir = $PSScriptRoot
 if (-not $scriptDir) { $scriptDir = (Get-Location).Path }
-# 缓存目录：默认脚本目录；应用通过 VL_CACHE_DIR 注入，统一放到项目的 Cache 子文件夹（与应用预检测共用同一 video_cache.json）
+# 缓存目录：默认脚本目录；应用通过 VL_CACHE_DIR 注入到临时镜像目录（与应用 cache.db 分工：本脚本只读写该镜像内的 JSON）
 $scriptCacheDir = $env:VL_CACHE_DIR
 if ([string]::IsNullOrEmpty($scriptCacheDir)) { $scriptCacheDir = $scriptDir }
 $cacheFile = Join-Path $scriptCacheDir "video_cache.json"

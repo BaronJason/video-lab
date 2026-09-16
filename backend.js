@@ -934,7 +934,7 @@ class Api {
     if (forceJson && !fs.existsSync(this.cacheDbPath)) { this._cacheBackendMode = 'json'; return false; }
     let store = null;
     try {
-      const CacheStore = require(path.join(this.enginesDir, 'base', 'cache-store.js'));
+      const CacheStore = require(path.join(this.enginesDir, 'base', 'cache.js'));
       store = new CacheStore(this.cacheDbPath, { root: this.root });
       store.open();
     } catch (e) { store = null; }

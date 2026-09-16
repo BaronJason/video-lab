@@ -114,7 +114,7 @@ function openVideoStore(cacheDir) {
   try {
     const dbPath = path.join(cacheDir, 'cache.db');
     if (!fs.existsSync(dbPath)) return null;
-    const CacheStore = require('../../base/cache-store');
+    const CacheStore = require('../../base/cache');
     const store = new CacheStore(dbPath, { root: '' });
     store.open();
     return store;

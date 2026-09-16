@@ -1,10 +1,11 @@
-// sqlite 缓存单库（Cache\cache.db）：video_cache 为 P5 生产接入表；clip_index / scan_cache / log_cache
-// 为预留表（clip 索引实际仍用独立的 clip_cache.db，scan/log 维持 JSON，理由见 V3 §18）。
+// sqlite 数据单库（<storageDir>\cache.db）：唯一持久层，承载
+// video_cache / clip_index / scan_cache / log_cache / cache_kv / tasks / task_logs / task_marks / meta。
 // 关键设计：`last_write` 用 TEXT 而非 INTEGER —— .NET Ticks（0001 基准）是 18~19 位整数，
 // 超过 JS Number 安全整数范围（2^53）；node:sqlite 读 INTEGER 列会直接抛
 // RangeError: Value is too large to be represented as a JavaScript number。
 // TEXT 承载可无损往返（实测 639170274959892404 精确一致），且与 backend/脚本侧的字符串比较语义一致。
-// 目标 2 核心：Electron 内置 node:sqlite，零原生依赖；支持旧 JSON 一次性迁移。
+// 任务与标记的主键（task_id）同样用 TEXT：19 位 ID 经 Number 转换会变成科学计数法。
+// 由 Electron 内置 node:sqlite 提供，零原生依赖；支持旧 JSON 一次性迁移。
 'use strict';
 
 const fs = require('node:fs');
@@ -36,13 +37,40 @@ CREATE TABLE IF NOT EXISTS log_cache (
   mtime    INTEGER NOT NULL,
   entries  TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS cache_kv (
+  k          TEXT PRIMARY KEY,
+  v          TEXT NOT NULL,
+  updated_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS tasks (
+  id         TEXT PRIMARY KEY,
+  seq        INTEGER NOT NULL DEFAULT 0,
+  type       TEXT NOT NULL DEFAULT '',
+  status     TEXT NOT NULL DEFAULT '',
+  title      TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL DEFAULT 0,
+  payload    TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS task_logs (
+  task_id TEXT NOT NULL,
+  line_no INTEGER NOT NULL,
+  line    TEXT NOT NULL,
+  PRIMARY KEY (task_id, line_no)
+);
+CREATE TABLE IF NOT EXISTS task_marks (
+  task_id    TEXT PRIMARY KEY,
+  payload    TEXT NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS meta (
   k TEXT PRIMARY KEY,
   v TEXT NOT NULL
 );
 `;
 
-const SCHEMA_VERSION = '2';
+const SCHEMA_VERSION = '3';
 
 class CacheStore {
   // dbPath: Cache 目录下的库文件（如 cache.db）；root: 当前工作根（root 前缀隔离）
@@ -70,8 +98,30 @@ class CacheStore {
     try { this._db.exec('PRAGMA busy_timeout=5000'); } catch (e) {}
     try { this._db.exec('PRAGMA synchronous=NORMAL'); } catch (e) {}
     this._db.exec(SCHEMA);
-    this.setMeta('schema_version', SCHEMA_VERSION);
+    try {
+      this._assertSchemaVersion();
+    } catch (e) {
+      this.close(); // 拒绝打开时不留连接，避免调用方拿到已开但不可用的库
+      throw e;
+    }
     return this._db;
+  }
+
+  // 版本守卫：库由更新版本创建时拒绝打开（绝不静默重置、绝不覆盖）。
+  // E 盘与 D 盘实例共用同一份数据，只升级一侧时必须在此拦住——否则新表被旧版忽略、新数据被旧版覆盖。
+  _assertSchemaVersion() {
+    const row = this._db.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version');
+    const existing = row ? String(row.v) : '';
+    // 仅在「库内已是更高版本」时拒绝；空库（首次创建）与同版本正常放行。
+    // existing 非数字时 Number() 得 NaN，比较为 false → 放行，不因脏数据卡死启动。
+    if (existing && Number(existing) > Number(SCHEMA_VERSION)) {
+      const err = new Error('数据文件由更新版本的 Video Lab 创建（schema_version=' + existing +
+        '，当前支持 ' + SCHEMA_VERSION + '），请升级到最新版本后重试');
+      err.code = 'SCHEMA_TOO_NEW';
+      err.schemaVersion = existing;
+      throw err;
+    }
+    this.setMeta('schema_version', SCHEMA_VERSION);
   }
 
   // 显式事务助手：fn 内所有写操作包在同一事务，成功 COMMIT / 异常 ROLLBACK

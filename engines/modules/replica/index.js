@@ -68,7 +68,7 @@ function loadVideoCache(cacheDir) {
   try {
     const dbPath = path.join(cacheDir, 'cache.db');
     if (fs.existsSync(dbPath)) {
-      const CacheStore = require('../../base/cache-store');
+      const CacheStore = require('../../base/cache');
       const store = new CacheStore(dbPath, { root: '' });
       store.open({ readOnly: true }); // 只读用途：不建表、不写 meta（replica 仅消费缓存）
       const map = store.loadVideoMap();

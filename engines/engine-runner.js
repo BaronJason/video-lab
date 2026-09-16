@@ -25,7 +25,7 @@ const base = {
   retry: require('./base/retry'),
   repair: require('./base/repair'),
   dedupe: require('./base/dedupe'),
-  cacheStore: require('./base/cache-store'),
+  cacheStore: require('./base/cache'),
 };
 
 // ── 业务模块注册（P2 mask / P3 replica / P4 batch 逐个落地） ──

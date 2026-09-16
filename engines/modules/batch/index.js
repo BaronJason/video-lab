@@ -140,62 +140,9 @@ function writeJson(file, data) {
   fs.writeFileSync(file, JSON.stringify(data), 'utf8');
 }
 
-// ────────────────────────── .lnk 解析（替代 COM WScript.Shell） ──────────────────────────
-// 优先解析 LinkInfo 的 LocalBasePath；失败则在文件中扫描 UTF-16LE 形式的盘符路径兜底。
-function parseLnkTarget(lnkPath) {
-  let buf = null;
-  try { buf = fs.readFileSync(lnkPath); } catch (e) { return ''; }
-  if (!buf || buf.length < 76 || buf.readUInt32LE(0) !== 0x0000004C) return '';
-  const flags = buf.readUInt32LE(20);
-  const hasIdList = (flags & 0x01) !== 0;
-  const hasLinkInfo = (flags & 0x02) !== 0;
-  let off = 76;
-  if (hasIdList && off + 2 <= buf.length) off += 2 + buf.readUInt16LE(off);
-  if (hasLinkInfo && off + 8 <= buf.length) {
-    const liSize = buf.readUInt32LE(off);
-    const liFlags = buf.readUInt32LE(off + 4);
-    if (liSize > 0 && off + liSize <= buf.length) {
-      const localBase = (liFlags & 0x01) ? off + 8 + 4 + 16 + 4 : 0; // 有 VolumeID 时跳过其结构
-      if (localBase && localBase < off + liSize) {
-        const end = buf.indexOf(0, localBase);
-        const seg = buf.slice(localBase, end === -1 ? off + liSize : end).toString('latin1');
-        if (seg) return seg;
-      }
-    }
-  }
-  // 兜底：扫描 UTF-16LE 的 "X:\"
-  for (let i = 0; i + 6 < buf.length; i += 2) {
-    const c = buf.readUInt16LE(i);
-    if (((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) && buf.readUInt16LE(i + 2) === 0x3A && buf.readUInt16LE(i + 4) === 0x5C) {
-      let s = '';
-      for (let j = i; j + 1 < buf.length; j += 2) {
-        const ch = buf.readUInt16LE(j);
-        if (ch === 0) break;
-        s += String.fromCharCode(ch);
-      }
-      if (s.length > 3) return s;
-    }
-  }
-  return '';
-}
-
-/** 失效目标修复（对齐 PS 的 Resolve-BrokenTarget：逐级向上找同名文件） */
-function resolveBrokenTarget(targetPath, log) {
-  if (!targetPath) return null;
-  if (exists(targetPath)) return targetPath;
-  const leaf = path.basename(targetPath);
-  let dir = path.dirname(targetPath);
-  while (dir && dir !== path.dirname(dir)) {
-    try {
-      if (fs.statSync(dir).isDirectory()) {
-        const cand = path.join(dir, leaf);
-        if (exists(cand)) return cand;
-      }
-    } catch (e) { /* 目录不可读则继续向上 */ }
-    dir = path.dirname(dir);
-  }
-  return null;
-}
+// ────────────────────────── .lnk 解析 ──────────────────────────
+// 与 backend 共用同一份实现（engines/base/lnk.js）：纯 Node 读二进制解析，替代 COM（WScript.Shell）
+const { parseLnkTarget, resolveBrokenTarget } = require('../../base/lnk');
 
 /** 解析快捷方式目标（对齐 Get-ShortcutTarget；失败返回 null 并告警，不中断） */
 function getShortcutTarget(lnkPath, log) {

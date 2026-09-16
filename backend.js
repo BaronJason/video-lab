@@ -254,7 +254,8 @@ class Api {
     this._cacheStore = null;       // sqlite 缓存库（Cache\cache.db），惰性打开
     this._cacheBackendMode = '';   // 'db' | 'json'：首次使用时判定一次
     this._saveSeq = 0;             // 缓存原子写临时文件序号（并发落盘互不覆盖）
-    this._lnkCache = new Map();    // .lnk 解析结果缓存（lnk 路径 → { mtimeMs, target }），免重复启动 pwsh
+    this._lnkCache = new Map();    // .lnk 解析结果缓存（lnk 路径 → { mtimeMs, target }），lnk 未变则免重复解析
+    this._lnkParser = undefined;   // .lnk 解析器（惰性取 batch 模块的 parseLnkTarget）
     this._txtTree = null;
     // 启动后空闲期执行一次 video_cache 失效清理（文件已删除/旧工作目录残留回收）
     setImmediate(() => { this._gcVideoCacheThrottled(true).catch(() => {}); });
@@ -1290,26 +1291,15 @@ class Api {
     return false;
   }
 
-  // 解析 .lnk 的 PowerShell 片段：临时 .ps1 + pwsh -File；JSON 经 base64 进出
-  // （argv/控制台代码页会破坏中文，base64 全 ASCII 免疫）
-  _lnkResolveScript() {
-    return [
-      '$ErrorActionPreference = "SilentlyContinue"',
-      '$json = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($args[0]))',
-      '$l = ConvertFrom-Json -InputObject $json',
-      '$o = @{}',
-      'foreach ($p in $l) {',
-      '  try {',
-      '    if (Test-Path -LiteralPath $p -PathType Leaf) {',
-      '      $sh = New-Object -ComObject WScript.Shell',
-      '      $sc = $sh.CreateShortcut($p)',
-      '      if ($sc.TargetPath) { $o[$p] = $sc.TargetPath.Trim() }',
-      '    }',
-      '  } catch {}',
-      '}',
-      '$out = $o | ConvertTo-Json -Compress',
-      '[Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($out))',
-    ].join('\n');
+  // .lnk 目标解析：直接读二进制（不再 spawn pwsh —— 预检测剩余的数百毫秒主要来自这里）。
+  // 解析器与 batch 模块共用底座实现（engines/base/lnk.js）；失败一律降级为空串，不中断预检测。
+  _parseLnkTarget(lnk) {
+    if (this._lnkParser === undefined) {
+      try { this._lnkParser = require(path.join(this.enginesDir, 'base', 'lnk.js')).parseLnkTarget || null; }
+      catch (e) { this._lnkParser = null; }
+    }
+    if (typeof this._lnkParser !== 'function') return '';
+    try { return String(this._lnkParser(lnk) || '').trim(); } catch (e) { return ''; }
   }
 
   // 解析结果缓存读取：命中且 lnk 文件未变（mtime 相同）直接复用；未缓存返回 null，缓存了「无目标」返回 ''
@@ -1342,58 +1332,21 @@ class Api {
   }
 
   // 批量解析 .lnk 快捷方式目标（与视频批量脚本语义一致）：返回 { lnkPath: targetPath }；
-  // 解析失败/失效返回空对象降级，不影响预检测其余流程。同步版（掩罩列表等同步 IPC 入口使用）。
+  // 解析失败/失效返回空对象降级，不影响预检测其余流程。纯内存操作，同步即可（不再有 pwsh 进程开销）。
   _resolveShortcutTargets(paths) {
     if (!paths || !paths.length) return {};
     const { out, todo } = this._lnkSplit(paths);
-    if (!todo.length) return out;
-    const { spawnSync } = require('child_process');
-    const tmp = path.join(process.env.TEMP || '.', 'lnk_resolve_' + process.pid + '_' + Date.now() + '.ps1');
-    try {
-      fs.writeFileSync(tmp, this._lnkResolveScript(), 'utf8');
-      try {
-        const b64 = Buffer.from(JSON.stringify(todo), 'utf8').toString('base64');
-        const r = spawnSync('pwsh.exe', ['-NoProfile', '-NonInteractive', '-File', tmp, b64],
-          { encoding: 'utf8', windowsHide: true, timeout: 10000 });
-        if (r.error || r.status !== 0 || !r.stdout) { for (const p of todo) this._lnkStore(p, ''); return out; }
-        const map = JSON.parse(Buffer.from(String(r.stdout).trim(), 'base64').toString('utf8'));
-        const safe = (map && typeof map === 'object') ? map : {};
-        for (const p of todo) this._lnkStore(p, safe[p] ? safe[p] : '');
-        return Object.assign(out, safe);
-      } finally {
-        try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (e2) {}
-      }
-    } catch (e) {
-      try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (e2) {}
-      return out;
+    for (const p of todo) {
+      const target = this._parseLnkTarget(p);
+      this._lnkStore(p, target);
+      if (target) out[p] = target;
     }
+    return out;
   }
 
-  // 异步版：预检测/重置等「检测中」路径专用 —— 解析快捷方式不再同步占住主线程（spawnSync 最坏阻塞 10s）
+  // 保留异步入口：预检测/重置等调用方无需改动；内部已改为纯内存解析，不再阻塞主线程（原 spawnSync 最坏阻塞 10s）
   async _resolveShortcutTargetsAsync(paths) {
-    if (!paths || !paths.length) return {};
-    const { out, todo } = this._lnkSplit(paths);
-    if (!todo.length) return out;
-    const { execFile } = require('child_process');
-    const tmp = path.join(process.env.TEMP || '.', 'lnk_resolve_' + process.pid + '_' + Date.now() + '.ps1');
-    try {
-      await fs.promises.writeFile(tmp, this._lnkResolveScript(), 'utf8');
-      const stdout = await new Promise((resolve) => {
-        execFile('pwsh.exe', ['-NoProfile', '-NonInteractive', '-File', tmp,
-          Buffer.from(JSON.stringify(todo), 'utf8').toString('base64')],
-        { encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 8 * 1024 * 1024 },
-        (err, so) => resolve(err ? '' : String(so || '')));
-      });
-      if (!stdout) { for (const p of todo) this._lnkStore(p, ''); return out; }
-      const map = JSON.parse(Buffer.from(String(stdout).trim(), 'base64').toString('utf8'));
-      const safe = (map && typeof map === 'object') ? map : {};
-      for (const p of todo) this._lnkStore(p, safe[p] ? safe[p] : '');
-      return Object.assign(out, safe);
-    } catch (e) {
-      return out;
-    } finally {
-      try { await fs.promises.unlink(tmp); } catch (e2) {}
-    }
+    return this._resolveShortcutTargets(paths);
   }
 
   async _precheckFolder(dir, excludes, nonround) {

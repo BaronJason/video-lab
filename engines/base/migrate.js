@@ -113,6 +113,9 @@ function migrateVideoAndUsage(cache, dirs, counts) {
   const r = cache.migrateFromJson({ videoCacheJson: videoJson || undefined, usageCacheJson: usageJson || undefined });
   counts.video = r.video;
   counts.usage = r.usage;
+  // 只在 usage 侧出现（video 侧没有）的条目：没有 last_write 指纹，无法参与后续的计数认领。
+  // 单独计数以便从迁移日志判断这类无指纹条目的规模。
+  counts.usageOnly = r.usageOnly || 0;
 }
 
 function migrateScan(cache, dirs, counts) {
@@ -445,6 +448,9 @@ function migrateToFlatLayout({ configDir, log } = {}) {
       }
       out.stagingDir = staging;
       out.migrated = true;
+      const c = out.counts || {};
+      emit('[migrate] 迁移明细：video_cache ' + (c.video || 0) + ' 条'
+        + '（usage 独有、无指纹 ' + (c.usageOnly || 0) + ' 条）／usage ' + (c.usage || 0) + ' 条');
       emit('[migrate] 旧布局已迁移至三库，旧物暂存：' + staging);
     } catch (e) {
       out.errors.push('旧物暂存失败：' + ((e && e.message) || e));

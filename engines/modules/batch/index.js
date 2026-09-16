@@ -11,6 +11,18 @@ const { acquireLock } = require('../../base/lock');
 const { stripQuotes, exists, sortKey } = require('../../base/paths');
 const { pickCandidate, pickRandom, failKey, triedPathsFor } = require('../../base/retry');
 
+// 缓存作用域位掩码（与 engines/base/cache.js 的 SCOPES 同源，惰性取用：
+// 持久层不可用时不应影响任务执行，故不在模块顶层 require）。
+const SCOPES_FALLBACK = { batch: 1, replica: 2, mask: 4 };
+let _scopesCache = null;
+function scopes() {
+  if (!_scopesCache) {
+    try { _scopesCache = require('../../base/cache').SCOPES || SCOPES_FALLBACK; }
+    catch (e) { _scopesCache = SCOPES_FALLBACK; }
+  }
+  return _scopesCache;
+}
+
 const VIDEO_EXTS = ['.mp4', '.mov', '.avi', '.mkv', '.m4v'];
 const VIDEO_EXT_SET = new Set(VIDEO_EXTS);
 // PS 的 LastWriteTimeUtc.Ticks 是 .NET DateTime.Ticks（0001-01-01 基准），
@@ -522,7 +534,10 @@ async function run(ctx, env = process.env) {
   // ── 缓存载入：video_cache 只读复用（避免 Ticks 精度回写风险），usage_cache 保留「≥1 降为 1」的内存重置语义 ──
   // 持久层优先 sqlite（cache.db）；不存在时回退 JSON（精确读取：未被触碰的条目保留原始 18 位 Ticks）
   const videoStore = openVideoStore(cacheDir);
-  const diskVideoCache = videoStore ? videoStore.loadVideoMap() : readJsonExact(videoCacheFile, {});
+  // 读取范围收紧为「批量 + 复刻」：遮罩素材的探测条目不得进入批量候选
+  const diskVideoCache = videoStore
+    ? videoStore.loadVideoMap({ scopesMask: scopes().batch | scopes().replica })
+    : readJsonExact(videoCacheFile, {});
   const memInfo = new Map();          // 本次任务内的探测结果缓存
   // 本次真正探测过的条目 → 任务结束后合并写回（只增/更新，不删；GC 仍归 backend）
   // 目的：让执行期现场探测的新文件沉淀进 video_cache，供预检测/PS1 复用，避免重复 ffprobe
@@ -582,6 +597,7 @@ async function run(ctx, env = process.env) {
         Width: info.width,
         Height: info.height,
         Valid: info.valid,
+        FileSize: Number(stat.size) || 0,
       });
     }
     return info;
@@ -767,9 +783,34 @@ async function run(ctx, env = process.env) {
   const usageTracker = new Map();
   const newFiles = [];
 
+  // 计数认领：路径发生变化（改名 / 移位）的素材先尝试继承既有条目的使用计数，
+  // 避免被当作全新素材重新计数。与 app 侧预检测共用持久层的同一实现，保证两条路径行为一致。
+  // 继承的计数沿用既有语义「≥1 归为 1」（脚本只关心「是否用过」）。
+  const claimUsageFor = (vPath) => {
+    if (!videoStore) return null;
+    try {
+      const tb = ticksBigOfFile(vPath);
+      if (tb === null) return null;
+      const r = videoStore.claimUsage(vPath, String(tb), {
+        fileSize: Number(fs.statSync(vPath).size) || 0,
+        scopesMask: scopes().batch | scopes().replica,
+        scopes: scopes().batch,
+      });
+      if (!r || !(Number(r.usageCount) > 0)) return null;
+      return { usageCount: Number(r.usageCount), ticks: tb };
+    } catch (e) { return null; }
+  };
+
   const pushValid = (target, fullName, name, info) => {
     target.push({ fullName, name, duration: info.duration });
-    if (!Object.prototype.hasOwnProperty.call(usageCacheMap, fullName)) newFiles.push(fullName);
+    if (Object.prototype.hasOwnProperty.call(usageCacheMap, fullName)) return;
+    const claimed = claimUsageFor(fullName);
+    if (claimed) {
+      const c = claimed.usageCount;
+      usageCacheMap[fullName] = { UsageCount: c >= 1 ? 1 : c, LastWriteTime: claimed.ticks };
+      return;
+    }
+    newFiles.push(fullName);
   };
 
   for (const f of uniqueFolders) {
@@ -1328,7 +1369,7 @@ async function run(ctx, env = process.env) {
           // sqlite：只写本次新探测的条目（增量事务），无需读全量再整份重写
           const rows = {};
           for (const [p, v] of probedForWriteBack) {
-            rows[p] = { LastWriteTime: String(v.LastWriteTime), Duration: v.Duration, Valid: v.Valid, Width: v.Width, Height: v.Height };
+            rows[p] = { LastWriteTime: String(v.LastWriteTime), Duration: v.Duration, Valid: v.Valid, Width: v.Width, Height: v.Height, FileSize: v.FileSize };
           }
           videoStore.applyVideoDelta(rows, null);
         } else {
@@ -1375,7 +1416,7 @@ function exportUsageCache(increments, usageCacheFile) {
 module.exports = {
   id: 'batch',
   title: '批量拼接',
-  envVars: ['BATCH_*', 'VL_CACHE_DIR'],
+  envVars: ['BATCH_*', 'VL_CACHE_DIR', 'VL_CACHE_DB'],
   legacyScript: 'video_batch.ps1',
   run,
   // 供测试复用

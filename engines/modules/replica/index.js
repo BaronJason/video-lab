@@ -12,6 +12,13 @@ const { acquireLock } = require('../../base/lock');
 const { stripQuotes, getNumberSuffix, exists } = require('../../base/paths');
 const dedupe = require('../../base/dedupe');
 
+// 缓存作用域位掩码（与 engines/base/cache.js 的 SCOPES 同源）。
+// 惰性取用：持久层不可用时不影响复刻执行，故不在模块顶层 require。
+const SCOPES_FALLBACK = { batch: 1, replica: 2, mask: 4 };
+function scopes() {
+  try { return require('../../base/cache').SCOPES || SCOPES_FALLBACK; } catch (e) { return SCOPES_FALLBACK; }
+}
+
 const VIDEO_EXT_RE = /\.(mp4|mov|avi|mkv|m4v)$/i;
 const PATH_LIKE_RE = /^[A-Za-z]:\\|^\\\\/;
 const MAX_ATTEMPT = 45;          // 渐进压时长轮数上限（与 PS1 一致）
@@ -71,7 +78,9 @@ function loadVideoCache(cacheDir) {
         const CacheStore = require('../../base/cache');
         const store = new CacheStore(dbPath, { root: '' });
         store.open({ readOnly: true }); // 只读用途：不建表、不写 meta（replica 仅消费缓存）
-        const map = store.loadVideoMap();
+        // 显式声明读取范围（批量 + 复刻）：不显式放宽时看不到遮罩素材条目 ——
+        // 复刻修复依赖「同名即同一片段」，混入其它模式的素材会把修复指向错误的文件
+        const map = store.loadVideoMap({ scopesMask: scopes().batch | scopes().replica });
         store.close();
         if (map && Object.keys(map).length) return map;
       }
@@ -739,7 +748,7 @@ function escapeRegExp(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&
 module.exports = {
   id: 'replica',
   title: '复刻',
-  envVars: ['REPLICA_*', 'VL_CACHE_DIR'],
+  envVars: ['REPLICA_*', 'VL_CACHE_DIR', 'VL_CACHE_DB'],
   legacyScript: 'video_replica.ps1',
   run,
   // 供测试与调用方复用

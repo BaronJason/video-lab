@@ -254,7 +254,7 @@ class Api {
     this._lnkParser = undefined;   // .lnk 解析器（惰性取底座引擎实现）
     this._txtTree = null;
     // 启动后空闲期执行一次 video_cache 失效清理（文件已删除/旧工作目录残留回收）
-    setImmediate(() => { this._gcVideoCacheThrottled(true).catch(() => {}); });
+    setImmediate(() => { this._gcVideoCacheNow().catch(() => {}); });
     this._txtTreeRoot = null;
     this._projectsCache = null;
     this._versionsCache = new Map();
@@ -1054,6 +1054,16 @@ class Api {
   // 旧 JSON 数据由启动期的布局迁移器（engines/base/migrate.js）一次性并入，此处不做 JSON 迁移。
   // 库不可打开时（极端异常）退化为纯内存：本次会话照常出片与预检测，只是不落盘，也不产生任何回退文件。
 
+  // 作用域位掩码：与 engines/base/cache.js 的 SCOPES 同源（惰性取用，避免构造期依赖引擎目录）；
+  // 取不到时用等价内联值兜底，行为不随加载失败而改变。
+  get _scopes() {
+    if (!this._scopesCache) {
+      try { this._scopesCache = require(path.join(this.enginesDir, 'base', 'cache.js')).SCOPES; }
+      catch (e) { this._scopesCache = { batch: 1, replica: 2, mask: 4 }; }
+    }
+    return this._scopesCache;
+  }
+
   // 选择数据缓存后端（进程内只判定一次）
   _useDbCache() {
     if (this._cacheBackendMode) return this._cacheBackendMode === 'db';
@@ -1118,7 +1128,9 @@ class Api {
     if (this._videoCache !== null) return this._videoCache;
     let cache = {};
     if (this._useDbCache()) {
-      try { cache = this._cacheStore.loadVideoMap(); } catch (e) { cache = {}; }
+      // 默认作用域：批量 + 复刻。遮罩素材必须由调用方显式声明掩码才会被读到。
+      try { cache = this._cacheStore.loadVideoMap({ scopesMask: this._scopes.batch | this._scopes.replica }); }
+      catch (e) { cache = {}; }
     }
     // 库不可用时不落盘：探测结果仅在本会话内复用（重新打开应用后重探一次）
     this._videoCache = cache;
@@ -1211,6 +1223,77 @@ class Api {
     return null;
   }
 
+  // 按作用域读取探测结果：指纹（Ticks）未变才命中；命中写入内存缓存键（含作用域，避免与其它模式串用）
+  _fetchScopedVideoInfo(videoPath, scope) {
+    const key = scope + '\u0000' + videoPath;
+    if (this._videoInfoCache.has(key)) return this._videoInfoCache.get(key);
+    if (!this._useDbCache()) return null;
+    try { fs.statSync(videoPath); } catch (e) { return null; }
+    let row = null;
+    try { row = this._cacheStore.getVideo(videoPath, { scopesMask: scope }); } catch (e) { return null; }
+    if (!row) return null;
+    if (this._ticksToStr(row.last_write) !== this._ticksToStr(this._mtimeToTicks(videoPath))) return null;
+    const info = {
+      valid: !!row.valid, duration: Number(row.duration) || 0,
+      width: Number(row.width) || 0, height: Number(row.height) || 0,
+    };
+    this._videoInfoCache.set(key, info);
+    return info;
+  }
+
+  // 按作用域写入探测结果：scopes 按位或累加，不覆盖其它模式已有的来源标记
+  _saveScopedVideoInfo(videoPath, info, scope) {
+    if (!this._useDbCache()) return false;
+    try {
+      this._cacheStore.upsertVideo(videoPath, {
+        lastWrite: this._ticksToStr(this._mtimeToTicks(videoPath)),
+        duration: info.duration, width: info.width, height: info.height,
+        valid: info.valid, scopes: scope, fileSize: this._fileSize(videoPath),
+      });
+      this._videoInfoCache.set(scope + '\u0000' + videoPath, {
+        valid: !!info.valid, duration: Number(info.duration) || 0,
+        width: Number(info.width) || 0, height: Number(info.height) || 0,
+      });
+      return true;
+    } catch (e) { return false; }
+  }
+
+  // 文件字节大小（计数认领的多命中消歧依据；取不到记 0，不影响其它逻辑）
+  _fileSize(p) {
+    try { return Number(fs.statSync(p).size) || 0; } catch (e) { return 0; }
+  }
+
+  // 遮罩素材信息：先按「遮罩作用域」查缓存，命中直接用时长；未命中才 ffprobe 并写回缓存。
+  // 遮罩列表此前每次打开都全量探测，接缓存后重复打开不再重复启动 ffprobe。
+  async _maskMediaInfo(videoPath) {
+    const cached = this._fetchScopedVideoInfo(videoPath, this._scopes.mask);
+    if (cached) return cached;
+    const info = await this._probeVideoAsync(videoPath);
+    this._saveScopedVideoInfo(videoPath, info, this._scopes.mask);
+    return info;
+  }
+
+  // 计数认领：缓存未命中的路径（本轮新素材）先尝试从既有条目继承使用计数。
+  // 素材改名 / 移位后不再被当作全新素材重新计数；与任务引擎共用持久层的同一实现，
+  // 保证「刷新预检测」与「跑任务」两条路径行为一致。
+  // 认领成功后原条目的路径整体转到新路径（含计数与作用域标记），旧路径随之消失。
+  // 返回真正发生迁移的条数（已在库中的路径不算）。
+  _claimUsageForPaths(paths) {
+    if (!paths || !paths.length || !this._useDbCache()) return 0;
+    const store = this._cacheStore;
+    const mask = this._scopes.batch | this._scopes.replica;
+    let n = 0;
+    for (const p of paths) {
+      try {
+        const r = store.claimUsage(p, this._ticksToStr(this._mtimeToTicks(p)), {
+          fileSize: this._fileSize(p), scopesMask: mask, scopes: mask,
+        });
+        if (r && r.adopted && Number(r.usageCount) > 0) n++;
+      } catch (e) { /* 单条认领失败不影响预检测 */ }
+    }
+    return n;
+  }
+
   // 并发探测缺失缓存的视频并写回缓存；返回 path -> info 映射
   // onProbe(done) 可选：每完成一个视频（含缓存命中）回报累计计数
   async _resolveVideoInfos(videoPaths, onProbe) {
@@ -1223,12 +1306,17 @@ class Api {
       if (c) { result.set(p, c); tick(); }
       else needProbe.push(p);
     }
+    const claimed = this._claimUsageForPaths(needProbe); // 新路径先认领既有条目的使用计数
+    if (claimed > 0) console.log('[video_cache] 已识别 ' + claimed + ' 个素材的既有使用计数（路径变化）');
     const infos = await this._runWithLimit(needProbe, (p) => this._probeVideoAsync(p).then((info) => { tick(); return info; }), this.probeConcurrency);
     const cache = this._loadVideoCache();
     for (let i = 0; i < needProbe.length; i++) {
       const p = needProbe[i];
       const info = infos[i] || { valid: false, duration: 0, width: 0, height: 0 };
-      cache[p] = { LastWriteTime: this._ticksToStr(this._mtimeToTicks(p)), Duration: info.duration, Valid: info.valid, Width: info.width, Height: info.height };
+      cache[p] = {
+        LastWriteTime: this._ticksToStr(this._mtimeToTicks(p)), Duration: info.duration,
+        Valid: info.valid, Width: info.width, Height: info.height, FileSize: this._fileSize(p),
+      };
       this._videoInfoCache.set(p, info);
       result.set(p, info);
       this._markVideoCacheDirty(p);
@@ -1273,16 +1361,17 @@ class Api {
   _videoCacheGcPlan(knownPaths) {
     const c = this._videoCache;
     const verify = [];
-    if (!c) return { drop: [], verify };
+    if (!c) return { drop: [], verify, missing: new Set(), expired: new Set() };
     for (const f of Object.keys(c)) {
       if (knownPaths && knownPaths.has(f)) continue; // 刚枚举到 → 文件必然存在
       verify.push(f);
     }
-    return { drop: [], verify };
+    return { drop: [], verify, missing: new Set(), expired: new Set() };
   }
 
-  // video_cache 失效清理（异步分批）：删除「文件已不存在」的条目。
-  // 不依赖全量重建即可自由收回失效缓存；mtime 变化不归此类（由增量刷新处理）。
+  // video_cache 失效清理（异步分批）：核验「文件是否仍存在」，不存在只置位、不删除。
+  // 保留期内的条目仍留在库中 —— 素材移位后新路径才有机会认领它的使用计数；
+  // 到期仍不存在才真删；文件重新出现则清除置位（复活），计数一并保留。
   // 每 YIELD 条让出一次事件循环：主线程始终能响应 IPC，前端不再出现长时间「检测中…」。
   // 判定分区由持久层给出（库走 gcPlan，纯内存态走 _videoCacheGcPlan），语义一致。
   async _gcVideoCache(knownPaths) {
@@ -1292,9 +1381,9 @@ class Api {
     const c = this._videoCache;
     if (!c) return 0;
     let plan;
-    try { plan = store ? store.gcPlan(knownPaths) : this._videoCacheGcPlan(knownPaths); }
+    try { plan = store ? store.gcPlan(knownPaths, { now: Date.now() }) : this._videoCacheGcPlan(knownPaths); }
     catch (e) { if (store) return 0; plan = this._videoCacheGcPlan(knownPaths); }
-    const gone = [];
+    const gone = [], back = [];
     const YIELD = 256;
     for (let i = 0; i < plan.verify.length; i++) {
       // 让路期间缓存可能已被重置/重载（取消预检测、切工作目录）→ 放弃本次清理，避免写回陈旧快照
@@ -1302,35 +1391,40 @@ class Api {
       let missing = false;
       try { await fs.promises.stat(plan.verify[i]); } catch (e) { missing = true; }
       if (missing) gone.push(plan.verify[i]);
+      else back.push(plan.verify[i]);
       if ((i + 1) % YIELD === 0) await new Promise((r) => setImmediate(r));
     }
     if (this._videoCache !== c) return 0;
-    const all = plan.drop.concat(gone);
-    if (!all.length) return 0;
-    if (store) {
-      let removed = 0;
-      try { removed = store.deleteVideos(all); } catch (e) { return 0; }
-      for (const f of all) delete c[f];
-      return removed;
+    if (!store) {
+      // 纯内存态没有保留期概念（会话结束即消失）：核验不存在的条目直接丢弃
+      for (const f of plan.drop.concat(gone)) delete c[f];
+      if (!gone.length) return 0;
+      this._videoCacheDirty = true;
+      await this._saveVideoCache();
+      return gone.length;
     }
-    for (const f of all) delete c[f];
-    this._videoCacheDirty = true;
-    await this._saveVideoCache();
-    return all.length;
+    const expired = plan.expired || new Set();
+    const stillMissing = gone.filter((p) => !expired.has(p));
+    const remove = gone.filter((p) => expired.has(p));
+    let removed = 0;
+    try {
+      if (stillMissing.length) store.markMissing(stillMissing, Date.now());
+      if (back.length) store.clearMissing(back); // 文件已放回 → 复活并保留计数
+      if (remove.length) removed = store.deleteVideos(remove);
+    } catch (e) { return 0; }
+    for (const f of remove) delete c[f];
+    return removed;
   }
 
-  // 后台节流失效清理：距上次 ≥1h 才执行（防高频扫盘）；force 忽略节流（启动/手动触发）
-  async _gcVideoCacheThrottled(force) {
+  // 触发一次失效清理：启动时与「清理数据缓存」手动入口调用（无定时器，全部为显式触发）
+  async _gcVideoCacheNow() {
     if (!this.storageDir) return 0;
-    const now = Date.now();
-    if (!force && this._lastVideoGc && now - this._lastVideoGc < 3600000) return 0;
-    this._lastVideoGc = now;
     try { return await this._gcVideoCache(); } catch (e) { return 0; }
   }
 
   // 前台接口：清理 video_cache 失效条目（手动入口，返回删除数）
   async cleanVideoCache() {
-    const removed = await this._gcVideoCacheThrottled(true);
+    const removed = await this._gcVideoCacheNow();
     return { ok: true, removed: removed || 0 };
   }
 
@@ -1504,7 +1598,7 @@ class Api {
                 info = await this._probeVideoAsync(key);
                 // 新探测结果写入内存缓存（不落盘，后台下次保存时一并合并；避免两种探测互相覆盖）
                 const cc = this._loadVideoCache();
-                cc[key] = { LastWriteTime: this._ticksToStr(this._mtimeToTicks(key)), Duration: info.duration, Valid: info.valid, Width: info.width, Height: info.height };
+                cc[key] = { LastWriteTime: this._ticksToStr(this._mtimeToTicks(key)), Duration: info.duration, Valid: info.valid, Width: info.width, Height: info.height, FileSize: this._fileSize(key) };
                 this._videoInfoCache.set(key, info);
                 this._markVideoCacheDirty(key);
               } finally { this._inlineProbing--; }
@@ -1585,7 +1679,7 @@ class Api {
       // 行内预检测优先：后台探测遇用户操作让路（每批轮询，短暂让出 IO）
       if (this._inlineProbing > 0) await new Promise((r) => setTimeout(r, 80));
       const info = await this._probeVideoAsync(f);
-      cache[f] = { LastWriteTime: this._ticksToStr(this._mtimeToTicks(f)), Duration: info.duration, Valid: info.valid, Width: info.width, Height: info.height };
+      cache[f] = { LastWriteTime: this._ticksToStr(this._mtimeToTicks(f)), Duration: info.duration, Valid: info.valid, Width: info.width, Height: info.height, FileSize: this._fileSize(f) };
       this._videoInfoCache.set(f, info);
       probed++;
       if (info.valid) valid++;
@@ -1622,7 +1716,7 @@ class Api {
       // 行内预检测优先：与全量重置同一让路策略
       if (this._inlineProbing > 0) await new Promise((r) => setTimeout(r, 80));
       const info = await this._probeVideoAsync(f);
-      cache[f] = { LastWriteTime: this._ticksToStr(this._mtimeToTicks(f)), Duration: info.duration, Valid: info.valid, Width: info.width, Height: info.height };
+      cache[f] = { LastWriteTime: this._ticksToStr(this._mtimeToTicks(f)), Duration: info.duration, Valid: info.valid, Width: info.width, Height: info.height, FileSize: this._fileSize(f) };
       this._videoInfoCache.set(f, info);
       this._markVideoCacheDirty(f);
       probed++;
@@ -3887,7 +3981,7 @@ let themes = [];
       const st = fs.statSync(abs);
       if (st.isFile()) {
         if (!exts.has(path.extname(abs).toLowerCase())) return Promise.resolve([]);
-        return this._probeVideoAsync(abs).then((r) => [{ name: path.basename(abs), sub: '', dur: r && r.duration > 0 ? r.duration : 0 }]);
+        return this._maskMediaInfo(abs).then((r) => [{ name: path.basename(abs), sub: '', dur: r && r.duration > 0 ? r.duration : 0 }]);
       }
     } catch (e) { return Promise.resolve([]); }
     const items = [];
@@ -3903,7 +3997,7 @@ let themes = [];
     };
     walk(abs, '');
     items.sort((a, b) => (a.sub === b.sub ? a.name.localeCompare(b.name, 'zh-CN') : a.sub.localeCompare(b.sub, 'zh-CN')));
-    return this._runWithLimit(items, (it) => this._probeVideoAsync(it.full).then((r) => ({ name: it.name, sub: it.sub, dur: r && r.duration > 0 ? r.duration : 0 })), 6);
+    return this._runWithLimit(items, (it) => this._maskMediaInfo(it.full).then((r) => ({ name: it.name, sub: it.sub, dur: r && r.duration > 0 ? r.duration : 0 })), 6);
   }
 
   listMaskVideos(dir) { return this._listMaskMedia(dir, new Set(['.mp4', '.mov', '.avi', '.mkv', '.m4v', '.webm', '.flv'])); }
@@ -4008,11 +4102,22 @@ let themes = [];
   // 遮罩叠加日志目录约定：项目\遮罩日志
   _maskLogDir(projectPath) { return path.join(projectPath, '遮罩日志'); }
 
-  // 按成片名从视频缓存反查实际文件（用户手动迁移后仍可定位；日志 @out 缺失时兜底）
+  // 按成片名从视频缓存反查实际文件（用户手动迁移后仍可定位；日志 @out 缺失时兜底）。
+  // 查全部作用域：待查成片可能来自任意模式，此处不做来源过滤。
   _findMaskOut(videoName) {
     const target = String(videoName == null ? '' : videoName).toLowerCase();
     if (!target) return '';
-    // 缓存反查：视频缓存记录了各素材路径，用户手动迁移后按文件名找回
+    if (this._useDbCache()) {
+      try {
+        const mask = this._scopes.batch | this._scopes.replica | this._scopes.mask;
+        const map = this._cacheStore.loadVideoMap({ scopesMask: mask });
+        for (const p of Object.keys(map)) {
+          if (!p || path.basename(p).toLowerCase() !== target) continue;
+          try { if (fs.existsSync(p)) return p; } catch (e) {}
+        }
+        return '';
+      } catch (e) { /* 库读取失败 → 退回内存缓存 */ }
+    }
     try {
       const cache = this._loadVideoCache();
       for (const p of Object.keys(cache)) {

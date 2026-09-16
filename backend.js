@@ -223,7 +223,7 @@ function zhLiveLine(kv) {
 }
 
 class Api {
-  constructor(root, config, cachePath, videoCachePath, logCachePath, scriptsDir, clipIndexCachePath, taskStatePath, watermarkCachePath, enginesDir) {
+  constructor(root, config, cachePath, videoCachePath, logCachePath, scriptsDir, clipIndexCachePath, taskStatePath, watermarkCachePath, enginesDir, settingsDir) {
     this.root = root;
     this.config = Object.assign({}, DEFAULT_CONFIG, config || {});
     this.cachePath = cachePath || '';
@@ -233,7 +233,8 @@ class Api {
     this.enginesDirFixed = enginesDir || ''; // Node 引擎位置（源码形态 app\engines，分发形态 resources\Engines）
     this.clipIndexCachePath = clipIndexCachePath || ''; // 成片名搜索索引缓存文件（Cache 子文件夹）
     this.taskStatePath = taskStatePath || '';           // 任务列表持久化文件（Cache 子文件夹）
-    this.watermarkCachePath = watermarkCachePath || ''; // 水印主流水印固化缓存（Cache 子文件夹，随工作目录重置）
+    this.watermarkCachePath = watermarkCachePath || ''; // 批量项目设置（Batch.json，Config 子目录）
+    this.settingsDir = settingsDir || '';               // 设置目录（Config 子目录，随 config 位置）
     this._persistTimer = null;                          // 任务持久化节流定时器
     this._clipIndex = null;        // Map<baseDir, {mtime, entries}>
     this._clipIndexRoot = '';
@@ -4128,9 +4129,9 @@ let themes = [];
   // 删除与指定素材（原片/遮罩路径）相关的所有遮罩叠加成片：按日志块片段精确匹配，
   // 删除成片文件并同步从日志移除对应块；返回删除列表
 
-  // 原片/遮罩相关会话状态持久化（物理缓存文件 mask_session.json，与 video_cache.json 同目录）：
+  // 原片/遮罩会话状态（缓存，非设置）：mask_cache.json 与 video_cache.json 同目录（Cache 子文件夹），命名对齐 scan_cache/log_cache/task_cache
   // 不手动清除/移除就会一直在列表里；重建缓存菜单项清空后回退自动扫描
-  _maskSessionPath() { return this.videoCachePath ? path.join(path.dirname(this.videoCachePath), 'mask_session.json') : ''; }
+  _maskSessionPath() { return this.videoCachePath ? path.join(path.dirname(this.videoCachePath), 'mask_cache.json') : ''; }
   getMaskSession(projectName) {
     try {
       const p = this._maskSessionPath();
@@ -4168,8 +4169,9 @@ let themes = [];
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   }
 
-  // ── 项目默认输出目录（项目级设置，独立于会话缓存；供底栏输出目录占位符与选择初始路径） ──
-  _maskDefaultDirPath() { return this.videoCachePath ? path.join(path.dirname(this.videoCachePath), 'mask_default_dir.json') : ''; }
+  // —— 项目默认输出目录（项目级设置，独立于会话缓存；供底栏输出目录占位符与选择初始路径）——
+  // 设置统一存放于 Config 子目录：Mask.json（遮罩模式设置），命名与 Batch.json 同规则
+  _maskDefaultDirPath() { return this.settingsDir ? path.join(this.settingsDir, 'Mask.json') : ''; }
   getMaskDefaultDir(projectName) {
     const p = this._maskDefaultDirPath();
     if (!p || !fs.existsSync(p)) return '';

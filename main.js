@@ -140,8 +140,9 @@ function moveConfigFile(target) {
     fs.mkdirSync(path.dirname(target), { recursive: true });
     if (fs.existsSync(src)) fs.copyFileSync(src, target);
     try { if (fs.existsSync(src) && path.resolve(target) !== path.resolve(src)) fs.unlinkSync(src); } catch (e) {}
-    // 水印设置文件（设置数据）跟随 config 一并迁移，避免切保存位置后丢失设置
-    migrateWatermarkToDir(path.dirname(target));
+    // 设置类文件（Config 目录，含 Batch.json/Mask.json）跟随 config 一并迁移，避免切保存位置后丢失设置
+    migrateSettingsToDir(path.dirname(target));
+    refreshSettingsPaths(); // 配置位置已变 → 设置目录同步指向新位置
     configFile = target;
     pruneEmptyDirs();
     return { ok: true, moved: true };
@@ -149,15 +150,22 @@ function moveConfigFile(target) {
     return { ok: false, error: e.message };
   }
 }
-// 把水印设置文件（config 同级）搬到指定目录；目标已有则不覆盖，新旧同路径则跳过
-function migrateWatermarkToDir(dir) {
+// 把设置目录（Config 子文件夹，含 Batch.json/Mask.json）搬到指定位置；目标已有则不覆盖，新旧同路径则跳过
+function migrateSettingsToDir(dir) {
   try {
-    const name = watermarkCacheName;
-    const from = path.join(path.dirname(configFile), name);
-    const to = path.join(dir, name);
+    const from = path.join(path.dirname(configFile), 'Config');
+    const to = path.join(dir, 'Config');
     if (path.resolve(from) === path.resolve(to)) return;
-    if (fs.existsSync(from) && !fs.existsSync(to)) fs.copyFileSync(from, to);
-    if (fs.existsSync(to) && path.resolve(from) !== path.resolve(to)) { try { fs.unlinkSync(from); } catch (e) {} }
+    if (fs.existsSync(from)) {
+      fs.mkdirSync(to, { recursive: true });
+      // 目录级复制：仅补缺失文件（新位置已有则保留现有，避免覆盖新写入）
+      for (const ent of fs.readdirSync(from)) {
+        const src = path.join(from, ent);
+        const dst = path.join(to, ent);
+        if (!fs.existsSync(dst)) fs.copyFileSync(src, dst);
+      }
+      try { fs.rmSync(from, { recursive: true, force: true }); } catch (e) {}
+    }
   } catch (e) {}
 }
 // 迁移 Cache：随「配置和数据保存位置」切换一并移动 Cache 文件夹，并同步缓存路径与 Api 引用
@@ -177,19 +185,18 @@ function moveCaches() {
   logCachePath = path.join(cacheDir, app.isPackaged ? 'log_cache.json' : 'video_lab_log_cache.json');
   clipCachePath = path.join(cacheDir, 'clip_cache.db');
   taskStatePath = path.join(cacheDir, app.isPackaged ? 'task_cache.json' : 'video_lab_task_cache.json');
-  // 水印设置跟随 config 同级存放（不进 Cache）：Cache 整体复制时会把旧 Cache 版一并带过来，这里将其搬到设置侧并清理 Cache 副本
-  const wmTarget = path.join(path.dirname(configFilePath()), watermarkCacheName);
+  // 设置类文件统一在 Config 子目录（随 config 位置，不随 Cache 移动）；仅清理 Cache 侧可能残留的历史水印副本
   try {
-    const wmInNewCache = path.join(newCache, watermarkCacheName);
-    if (fs.existsSync(wmInNewCache) && !fs.existsSync(wmTarget)) fs.copyFileSync(wmInNewCache, wmTarget);
-    if (fs.existsSync(wmInNewCache)) fs.unlinkSync(wmInNewCache);
+    const oldWmInCache = path.join(newCache, oldWmCacheName);
+    if (fs.existsSync(oldWmInCache)) fs.unlinkSync(oldWmInCache);
   } catch (e) {}
-  watermarkCachePath = wmTarget;
   api.cachePath = scanCachePath;
   api.videoCachePath = videoCachePath;
   api.logCachePath = logCachePath;
   api.clipIndexCachePath = clipCachePath;
   api.taskStatePath = taskStatePath;
+  refreshSettingsPaths(); // Cache 迁移常伴随配置位置切换：一并重算设置目录
+  api.settingsDir = settingsDir;
   api.watermarkCachePath = watermarkCachePath;
   // 清空内存缓存与扫描标记，避免旧路径数据残留重新落盘
   api._videoCache = null;
@@ -303,17 +310,51 @@ let logCachePath = path.join(cacheDir, app.isPackaged ? 'log_cache.json' : 'vide
 // 成片名搜索缓存（仅存成片条目精简字段，目录 mtime 变化自动失效重建）
 let clipCachePath = path.join(cacheDir, 'clip_cache.db');
 let taskStatePath = path.join(cacheDir, app.isPackaged ? 'task_cache.json' : 'video_lab_task_cache.json');
-// 水印项目设置缓存：项目默认分组数和主流水印启用/选择结果，属于设置而非缓存，放在 config.json 同级，不随 Cache 清空
-const watermarkCacheName = app.isPackaged ? 'watermark_cache.json' : 'video_lab_watermark_cache.json';
-let watermarkCachePath = path.join(path.dirname(configFilePath()), watermarkCacheName);
-// 迁移旧版本存放在 Cache 目录下的水印设置文件到设置侧（config.json 同级）；仅当设置侧无文件且 Cache 侧有时才搬运
-(function migrateWatermarkFromCache() {
-  try {
-    const old = path.join(cacheDir, watermarkCacheName);
-    if (old === watermarkCachePath || !fs.existsSync(old) || fs.existsSync(watermarkCachePath)) return;
-    fs.copyFileSync(old, watermarkCachePath);
-    fs.unlinkSync(old);
-  } catch (e) {}
+// 设置类文件统一存放于 Config 子目录（config.json 同级，不随 Cache 清空）：
+//   命名即模式/窗口名 —— Batch.json=批量模式项目设置（原 watermark_cache.json）、
+//   Mask.json=遮罩模式设置（原 mask_default_dir.json）；mask 会话属缓存，改名 mask_cache.json 留在 Cache
+let settingsDir = path.join(path.dirname(configFilePath()), 'Config');
+const oldWmCacheName = app.isPackaged ? 'watermark_cache.json' : 'video_lab_watermark_cache.json';
+let watermarkCachePath = path.join(settingsDir, 'Batch.json'); // 批量：主流水印+默认分组数（设置）
+let maskSettingsPath = path.join(settingsDir, 'Mask.json');    // 遮罩：各项目默认输出目录（设置）
+// 重算设置目录相关路径：config.json 与 Config 子目录同级，切换「配置和数据保存位置」后必须重算，
+// 否则 Batch.json / Mask.json 会被写回旧位置（settingsDir 只在启动时算一次的话）
+function refreshSettingsPaths() {
+  settingsDir = path.join(path.dirname(configFilePath()), 'Config');
+  watermarkCachePath = path.join(settingsDir, 'Batch.json');
+  maskSettingsPath = path.join(settingsDir, 'Mask.json');
+  try { fs.mkdirSync(settingsDir, { recursive: true }); } catch (e) {}
+  try { if (api) { api.settingsDir = settingsDir; api.watermarkCachePath = watermarkCachePath; } } catch (e) {}
+}
+// 设置类文件统一迁移（一次性，自动回收旧命名文件；内容已随复制保存，删除旧文件属应用内部搬迁）：
+//   ① 旧 watermark_cache.json（config 同级 / 旧 Cache 侧）→ Config\Batch.json
+//   ② 旧 Cache\mask_default_dir.json → Config\Mask.json
+//   ③ 旧 Cache\mask_session.json（会话缓存）改名 mask_cache.json 留在 Cache（命名对齐 scan_cache/log_cache/task_cache）
+(function migrateConfigLayout() {
+  try { fs.mkdirSync(settingsDir, { recursive: true }); } catch (e) {}
+  const mv = (oldPath, newPath) => {
+    if (!oldPath || !fs.existsSync(oldPath) || oldPath === newPath) return;
+    if (fs.existsSync(newPath)) return; // 新位置已有内容则不覆盖（新为准）
+    try { fs.copyFileSync(oldPath, newPath); fs.unlinkSync(oldPath); } catch (e) {}
+  };
+  // ① 批量设置：旧水印文件两个可能位置均尝试（config 级为权威数据；Cache 级仅为历史残留副本，目标已有则直接清理）
+  mv(path.join(path.dirname(configFilePath()), oldWmCacheName), watermarkCachePath);
+  (() => {
+    const old = path.join(cacheDir, oldWmCacheName);
+    if (!old || !fs.existsSync(old) || old === watermarkCachePath) return;
+    if (fs.existsSync(watermarkCachePath)) { try { fs.unlinkSync(old); } catch (e) {} return; }
+    try { fs.copyFileSync(old, watermarkCachePath); fs.unlinkSync(old); } catch (e) {}
+  })();
+  // ② 遮罩设置：默认输出目录 → Config\Mask.json
+  mv(path.join(cacheDir, 'mask_default_dir.json'), maskSettingsPath);
+  // ③ 遮罩会话缓存：改名留 Cache（同目录 rename 即可，原样保留数据）
+  const oldMaskSession = path.join(cacheDir, 'mask_session.json');
+  const newMaskSession = path.join(cacheDir, 'mask_cache.json');
+  if (oldMaskSession !== newMaskSession && fs.existsSync(oldMaskSession) && !fs.existsSync(newMaskSession)) {
+    try { fs.renameSync(oldMaskSession, newMaskSession); } catch (e) {
+      try { fs.copyFileSync(oldMaskSession, newMaskSession); fs.unlinkSync(oldMaskSession); } catch (e2) {}
+    }
+  }
 })();
 // 迁移旧任务快照命名（task_snapshot.json → task_cache.json）
 (function migrateTaskCache() {
@@ -327,7 +368,7 @@ let watermarkCachePath = path.join(path.dirname(configFilePath()), watermarkCach
   if (oldScan === scanCachePath || !fs.existsSync(oldScan) || fs.existsSync(scanCachePath)) return;
   try { fs.copyFileSync(oldScan, scanCachePath); fs.unlinkSync(oldScan); } catch (e) {}
 })();
-const api = new Api(root, config, scanCachePath, videoCachePath, logCachePath, resolveScriptsDir(), clipCachePath, taskStatePath, watermarkCachePath, resolveEnginesDir());
+const api = new Api(root, config, scanCachePath, videoCachePath, logCachePath, resolveScriptsDir(), clipCachePath, taskStatePath, watermarkCachePath, resolveEnginesDir(), settingsDir);
 // 扫描/重建环节进度：推送主窗口渲染层实时状态（walk/收集日志/重建成片索引/水印统计 一一对应）
 api.onScanProgress = (p) => {
   try {

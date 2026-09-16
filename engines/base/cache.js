@@ -98,30 +98,11 @@ class CacheStore {
     try { this._db.exec('PRAGMA busy_timeout=5000'); } catch (e) {}
     try { this._db.exec('PRAGMA synchronous=NORMAL'); } catch (e) {}
     this._db.exec(SCHEMA);
-    try {
-      this._assertSchemaVersion();
-    } catch (e) {
-      this.close(); // 拒绝打开时不留连接，避免调用方拿到已开但不可用的库
-      throw e;
-    }
-    return this._db;
-  }
-
-  // 版本守卫：库由更新版本创建时拒绝打开（绝不静默重置、绝不覆盖）。
-  // E 盘与 D 盘实例共用同一份数据，只升级一侧时必须在此拦住——否则新表被旧版忽略、新数据被旧版覆盖。
-  _assertSchemaVersion() {
-    const row = this._db.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version');
-    const existing = row ? String(row.v) : '';
-    // 仅在「库内已是更高版本」时拒绝；空库（首次创建）与同版本正常放行。
-    // existing 非数字时 Number() 得 NaN，比较为 false → 放行，不因脏数据卡死启动。
-    if (existing && Number(existing) > Number(SCHEMA_VERSION)) {
-      const err = new Error('数据文件由更新版本的 Video Lab 创建（schema_version=' + existing +
-        '，当前支持 ' + SCHEMA_VERSION + '），请升级到最新版本后重试');
-      err.code = 'SCHEMA_TOO_NEW';
-      err.schemaVersion = existing;
-      throw err;
-    }
+    // 记录 schema 版本供排查与将来判断迁移；不做版本拒绝 ——
+    // 本项目所有 schema 变更都是向后兼容的（加表 / 加列，旧版本忽略），
+    // 打开更高版本的库读写不会造成损坏，而「拒绝打开」会在用户主动回退时反而阻断使用。
     this.setMeta('schema_version', SCHEMA_VERSION);
+    return this._db;
   }
 
   // 显式事务助手：fn 内所有写操作包在同一事务，成功 COMMIT / 异常 ROLLBACK

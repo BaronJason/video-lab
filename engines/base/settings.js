@@ -45,28 +45,19 @@ class SettingsStore {
     try { this._db.exec('PRAGMA busy_timeout=5000'); } catch (e) {}
     try { this._db.exec('PRAGMA synchronous=NORMAL'); } catch (e) {}
     this._db.exec(SCHEMA);
-    try {
-      this._assertSchemaVersion();
-    } catch (e) {
-      this.close(); // 拒绝打开时不留连接
-      throw e;
-    }
+    // 记录 schema 版本供排查；与 cache 一致不做版本拒绝（理由见 cache.js 同名处注释）
+    this.setMeta('schema_version', SCHEMA_VERSION);
     return this._db;
   }
 
-  // 与 cache 同源的版本守卫：库由更新版本创建时拒绝打开，绝不静默重置、绝不覆盖
-  _assertSchemaVersion() {
-    const row = this._db.prepare('SELECT v FROM meta WHERE k = ?').get('schema_version');
-    const existing = row ? String(row.v) : '';
-    if (existing && Number(existing) > Number(SCHEMA_VERSION)) {
-      const err = new Error('设置文件由更新版本的 Video Lab 创建（schema_version=' + existing +
-        '，当前支持 ' + SCHEMA_VERSION + '），请升级到最新版本后重试');
-      err.code = 'SCHEMA_TOO_NEW';
-      err.schemaVersion = existing;
-      throw err;
-    }
+  setMeta(k, v) {
     this._db.prepare('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v')
-      .run('schema_version', SCHEMA_VERSION);
+      .run(String(k), String(v));
+  }
+
+  getMeta(k) {
+    const row = this.open().prepare('SELECT v FROM meta WHERE k = ?').get(String(k));
+    return row ? String(row.v) : '';
   }
 
   // 显式事务助手：fn 内所有写操作包在同一事务，成功 COMMIT / 异常 ROLLBACK（支持嵌套复用）

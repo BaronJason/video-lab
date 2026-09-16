@@ -114,7 +114,7 @@ function appdataConfigPath() { return path.join(app.getPath('appData'), 'Video L
 // 启动时自动仲裁「配置和数据」的保存位置：
 //  1) 两侧都无配置 → 默认程序目录（随后由 ensureConfig 打开启动引导窗口）
 //  2) 两侧各有一份 → 取修改时间较新的一份生效，并删除旧的一份（防双份残留复发）
-//  3) 配置在一侧、缓存在对侧 → 由 alignCacheToConfig 把缓存迁移回配置侧
+//  3) 库与引导文件同目录（扁平布局）——不再有「配置在一侧、缓存在对侧」的情形
 function resolveConfigLocation() {
   const prog = programConfigPath();
   const appd = appdataConfigPath();
@@ -125,13 +125,17 @@ function resolveConfigLocation() {
     try { progNewer = fs.statSync(prog).mtimeMs >= fs.statSync(appd).mtimeMs; } catch (e) {}
     const chosen = progNewer ? prog : appd;
     const stale = progNewer ? appd : prog;
-    try { fs.unlinkSync(stale); } catch (e) {} // 以新的一份为准并清理旧的
-    pruneEmptyDirs();
+    try { fs.unlinkSync(stale); } catch (e) {} // 以新的一份为准并清理旧的（防双份残留复发）
     return chosen;
   }
   return hasAppd ? appd : prog;
 }
 let configFile = resolveConfigLocation();
+// 数据根目录 = 引导文件所在目录：三库（config.json / settings.db / cache.db）扁平同目录，
+// 不再有 Cache\ / Config\ 中间层；库路径一律由 storageDir() 派生，杜绝「路径重算」类 bug
+const SETTINGS_DB = 'settings.db';
+const CACHE_DB = 'cache.db';
+const storageDir = () => path.dirname(configFilePath());
 // 切换配置保存位置：复制到目标位置并删除旧位置文件（迁移式，不留两份）
 function moveConfigFile(target) {
   const src = configFile;
@@ -140,76 +144,59 @@ function moveConfigFile(target) {
     fs.mkdirSync(path.dirname(target), { recursive: true });
     if (fs.existsSync(src)) fs.copyFileSync(src, target);
     try { if (fs.existsSync(src) && path.resolve(target) !== path.resolve(src)) fs.unlinkSync(src); } catch (e) {}
-    // 设置类文件（Config 目录，含 Batch.json/Mask.json）跟随 config 一并迁移，避免切保存位置后丢失设置
-    migrateSettingsToDir(path.dirname(target));
-    refreshSettingsPaths(); // 配置位置已变 → 设置目录同步指向新位置
-    configFile = target;
-    pruneEmptyDirs();
+    const fromDir = path.dirname(src);
+    configFile = target;                        // 引导文件已到新位置
+    moveStorage(fromDir, path.dirname(target)); // 两个库随其后（关连接 → rename/cp → 读回校验 → 回收站源）
     return { ok: true, moved: true };
   } catch (e) {
     return { ok: false, error: e.message };
   }
 }
-// 把设置目录（Config 子文件夹，含 Batch.json/Mask.json）搬到指定位置；目标已有则不覆盖，新旧同路径则跳过
-function migrateSettingsToDir(dir) {
+// 移入系统回收站（可还原）；Electron 不可用时降级为重命名备份，绝不静默删除
+function recycleFile(p) {
   try {
-    const from = path.join(path.dirname(configFile), 'Config');
-    const to = path.join(dir, 'Config');
-    if (path.resolve(from) === path.resolve(to)) return;
-    if (fs.existsSync(from)) {
-      fs.mkdirSync(to, { recursive: true });
-      // 目录级复制：仅补缺失文件（新位置已有则保留现有，避免覆盖新写入）
-      for (const ent of fs.readdirSync(from)) {
-        const src = path.join(from, ent);
-        const dst = path.join(to, ent);
-        if (!fs.existsSync(dst)) fs.copyFileSync(src, dst);
-      }
-      try { fs.rmSync(from, { recursive: true, force: true }); } catch (e) {}
+    const { shell } = require('electron');
+    if (shell && typeof shell.trashItem === 'function') {
+      shell.trashItem(p).catch(() => { try { fs.renameSync(p, p + '.bak'); } catch (e) {} });
+      return true;
     }
   } catch (e) {}
+  try { fs.renameSync(p, p + '.bak'); return true; } catch (e) { return false; }
 }
-// 迁移 Cache：随「配置和数据保存位置」切换一并移动 Cache 文件夹，并同步缓存路径与 Api 引用
-function moveCaches() {
-  const newCache = path.dirname(configFilePath()) === path.dirname(appdataConfigPath()) ? appdataCacheDir() : cacheRootDir();
-  if (path.resolve(newCache) === path.resolve(cacheDir)) return;
+// 迁移「配置和数据保存位置」：只搬 2 个库（settings.db / cache.db）及其 -wal/-shm，不再递归搬目录树
+// （引导文件由 moveConfigFile 负责）。前置：关全部连接 + 无任务在跑 —— Windows 下持有句柄会阻止移动。
+// 策略：rename 优先（同盘瞬时完成），跨盘降级 cp + 读回校验 + 源文件入回收站。
+function moveStorage(fromDir, toDir) {
+  if (!fromDir || !toDir || path.resolve(fromDir) === path.resolve(toDir)) return { ok: true, moved: false };
+  if (api && typeof api.hasRunningTasks === 'function' && api.hasRunningTasks()) {
+    return { ok: false, error: '有任务正在运行，请等待任务结束后再切换保存位置' };
+  }
+  const moved = [];
   try {
-    if (fs.existsSync(cacheDir)) {
-      fs.mkdirSync(newCache, { recursive: true });
-      fs.cpSync(cacheDir, newCache, { recursive: true });
-      fs.rmSync(cacheDir, { recursive: true, force: true });
+    if (api && typeof api.closeStorageConnections === 'function') api.closeStorageConnections();
+    fs.mkdirSync(toDir, { recursive: true });
+    for (const base of [SETTINGS_DB, CACHE_DB]) {
+      for (const name of [base, base + '-wal', base + '-shm']) {
+        const p = path.join(fromDir, name);
+        if (!fs.existsSync(p)) continue;
+        const dst = path.join(toDir, name);
+        try { fs.renameSync(p, dst); } catch (e) { fs.copyFileSync(p, dst); }
+        moved.push([p, dst]);
+      }
     }
-  } catch (e) {}
-  cacheDir = newCache;
-  scanCachePath = path.join(cacheDir, app.isPackaged ? 'scan_cache.json' : 'video_lab_scan_cache.json');
-  videoCachePath = path.join(cacheDir, 'video_cache.json');
-  logCachePath = path.join(cacheDir, app.isPackaged ? 'log_cache.json' : 'video_lab_log_cache.json');
-  clipCachePath = path.join(cacheDir, 'clip_cache.db');
-  taskStatePath = path.join(cacheDir, app.isPackaged ? 'task_cache.json' : 'video_lab_task_cache.json');
-  // 设置类文件统一在 Config 子目录（随 config 位置，不随 Cache 移动）；仅清理 Cache 侧可能残留的历史水印副本
-  try {
-    const oldWmInCache = path.join(newCache, oldWmCacheName);
-    if (fs.existsSync(oldWmInCache)) fs.unlinkSync(oldWmInCache);
-  } catch (e) {}
-  api.cachePath = scanCachePath;
-  api.videoCachePath = videoCachePath;
-  api.logCachePath = logCachePath;
-  api.clipIndexCachePath = clipCachePath;
-  api.taskStatePath = taskStatePath;
-  refreshSettingsPaths(); // Cache 迁移常伴随配置位置切换：一并重算设置目录
-  api.settingsDir = settingsDir;
-  api.watermarkCachePath = watermarkCachePath;
-  // 清空内存缓存与扫描标记，避免旧路径数据残留重新落盘
-  api._videoCache = null;
-  api._logCache = null;
-  api._logCacheRoot = '';
-  api._videoInfoCache = new Map();
-  api._scanCache = new Map();
-  api._versionsCache = new Map();
-  api._projectsCache = null;
-  api._wmCache = null;
-  api._wmCacheLoadedRoot = null;
-  try { api._invalidateCaches(); } catch (e) {}
-  pruneEmptyDirs();
+    // 读回校验：目标侧必须存在且大小与源一致（rename 成功时源已不在，以目标为准）
+    for (const [srcPath, dstPath] of moved) {
+      let srcSize = 0, dstSize = -1;
+      try { dstSize = fs.statSync(dstPath).size; } catch (e) { dstSize = -1; }
+      try { srcSize = fs.statSync(srcPath).size; } catch (e) { srcSize = dstSize; }
+      if (dstSize < 0 || srcSize !== dstSize) throw new Error('读回校验失败：' + path.basename(dstPath));
+    }
+    for (const [srcPath] of moved) { if (fs.existsSync(srcPath)) recycleFile(srcPath); } // 跨盘复制留下的源文件
+    if (api && typeof api.onStorageMoved === 'function') api.onStorageMoved(toDir);
+    return { ok: true, moved: true, count: moved.length };
+  } catch (e) {
+    return { ok: false, error: (e && e.message) || String(e) };
+  }
 }
 function defaultRoot() { return path.dirname(projectDir()); }
 function loadConfig() {
@@ -263,112 +250,25 @@ function scheduleDailyUpdateCheck() {
 }
 
 const root = resolveRoot(config);
-// 缓存统一放「配置和数据的保存位置」下 Cache 子文件夹（打包版）；开发版放临时目录避免污染源码：
-//   配置在程序目录 → Cache 在程序目录；配置在 AppData → Cache 也在 AppData（切换存储位置时一并迁移）
-const cacheRootDir = () => (app.isPackaged ? path.join(projectDir(), 'Cache') : os.tmpdir());
-const appdataCacheDir = () => path.join(app.getPath('appData'), 'Video Lab', 'Cache');
-// 清理被搬空的空壳目录：仅当目录下无任何文件时才删除（用户手放的内容则保留）
-function pruneEmptyDirs() {
-  const appdataBase = path.join(app.getPath('appData'), 'Video Lab');
-  for (const dir of [appdataBase, path.join(appdataBase, 'Cache')]) {
-    try {
-      if (!fs.existsSync(dir)) continue;
-      if (fs.readdirSync(dir).length === 0) fs.rmSync(dir, { recursive: true, force: true });
-    } catch (e) {}
-  }
+// 库与引导文件同目录（扁平布局）：不再有 Cache\ / Config\ 中间层，也不需要「配置侧 / 缓存侧对齐」
+const { migrateToFlatLayout, listStagingDirs } = require(path.join(resolveEnginesDir(), 'base', 'migrate.js'));
+// 库路径一律由 storageDir() 派生（见上方定义）：不存在需要重算的路径，杜绝「写回旧位置」类 bug
+// 一次性布局迁移：旧布局（Cache\ + Config\ + config 同级旧设置文件）→ 三库（config.json / settings.db / cache.db）。
+// 每次启动执行且幂等（逐条 upsert 合并，便于回退旧版后再升级收敛）；校验通过才把旧物暂存，失败则保持旧布局可启动。
+// 暂存目录交由 app ready 后的回收任务（启动早期调用 shell.trashItem 不可靠）。
+const pendingTrashDirs = [];
+try {
+  const mr = migrateToFlatLayout({ configDir: path.dirname(configFile), log: (m) => console.log(m) });
+  if (mr.migrated && mr.stagingDir) pendingTrashDirs.push(mr.stagingDir);
+  if (mr.errors && mr.errors.length) console.error('[migrate] ' + mr.errors.join('；'));
+} catch (e) { console.error('[migrate] 迁移异常：' + ((e && e.message) || e)); }
+for (const d of listStagingDirs(path.dirname(configFile))) {
+  if (pendingTrashDirs.indexOf(d) < 0) pendingTrashDirs.push(d); // 回收上次运行未及清理的暂存目录
 }
-let cacheDir = (() => {
-  const dir = path.dirname(configFilePath()) === path.dirname(appdataConfigPath()) ? appdataCacheDir() : cacheRootDir();
-  try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
-  return dir;
-})();
-// 启动时对齐「数据和配置」：配置在一侧、缓存在对侧时，把缓存整个迁回配置侧
-//   （对侧无缓存或配置侧已有缓存则不动；api 尚未创建，迁移后路径 let 即为配置侧，后续 Api 直接用新路径）
-function alignCacheToConfig() {
-  if (!app.isPackaged) return;
-  const target = cacheDir; // 配置侧
-  const other = (path.resolve(cacheRootDir()) === path.resolve(target) ? appdataCacheDir() : cacheRootDir());
-  if (path.resolve(other) === path.resolve(target)) return;
-  const has = (p) => { try { return fs.readdirSync(p).length > 0; } catch (e) { return false; } };
-  if (has(other) && !has(target)) {
-    try {
-      fs.mkdirSync(target, { recursive: true });
-      fs.cpSync(other, target, { recursive: true });
-      fs.rmSync(other, { recursive: true, force: true });
-    } catch (e) {}
-    pruneEmptyDirs();
-  }
+if (pendingTrashDirs.length) {
+  app.whenReady().then(() => { for (const d of pendingTrashDirs) { try { recycleFile(d); } catch (e) {} } });
 }
-alignCacheToConfig();
-// 三个缓存统一命名(下划线)且统一存放于 Cache 子文件夹：
-//   scan_cache.json   —— TXT 指纹缓存
-//   video_cache.json  —— 预检测(ffprobe)缓存
-//   log_cache.json    —— 日志 txt 缓存（刷新配置时一并收集）
-let scanCachePath = path.join(cacheDir, app.isPackaged ? 'scan_cache.json' : 'video_lab_scan_cache.json');
-let videoCachePath = path.join(cacheDir, app.isPackaged ? 'video_cache.json' : 'video_lab_video_cache.json');
-let logCachePath = path.join(cacheDir, app.isPackaged ? 'log_cache.json' : 'video_lab_log_cache.json');
-// 成片名搜索缓存（仅存成片条目精简字段，目录 mtime 变化自动失效重建）
-let clipCachePath = path.join(cacheDir, 'clip_cache.db');
-let taskStatePath = path.join(cacheDir, app.isPackaged ? 'task_cache.json' : 'video_lab_task_cache.json');
-// 设置类文件统一存放于 Config 子目录（config.json 同级，不随 Cache 清空）：
-//   命名即模式/窗口名 —— Batch.json=批量模式项目设置（原 watermark_cache.json）、
-//   Mask.json=遮罩模式设置（原 mask_default_dir.json）；mask 会话属缓存，改名 mask_cache.json 留在 Cache
-let settingsDir = path.join(path.dirname(configFilePath()), 'Config');
-const oldWmCacheName = app.isPackaged ? 'watermark_cache.json' : 'video_lab_watermark_cache.json';
-let watermarkCachePath = path.join(settingsDir, 'Batch.json'); // 批量：主流水印+默认分组数（设置）
-let maskSettingsPath = path.join(settingsDir, 'Mask.json');    // 遮罩：各项目默认输出目录（设置）
-// 重算设置目录相关路径：config.json 与 Config 子目录同级，切换「配置和数据保存位置」后必须重算，
-// 否则 Batch.json / Mask.json 会被写回旧位置（settingsDir 只在启动时算一次的话）
-function refreshSettingsPaths() {
-  settingsDir = path.join(path.dirname(configFilePath()), 'Config');
-  watermarkCachePath = path.join(settingsDir, 'Batch.json');
-  maskSettingsPath = path.join(settingsDir, 'Mask.json');
-  try { fs.mkdirSync(settingsDir, { recursive: true }); } catch (e) {}
-  try { if (api) { api.settingsDir = settingsDir; api.watermarkCachePath = watermarkCachePath; } } catch (e) {}
-}
-// 设置类文件统一迁移（一次性，自动回收旧命名文件；内容已随复制保存，删除旧文件属应用内部搬迁）：
-//   ① 旧 watermark_cache.json（config 同级 / 旧 Cache 侧）→ Config\Batch.json
-//   ② 旧 Cache\mask_default_dir.json → Config\Mask.json
-//   ③ 旧 Cache\mask_session.json（会话缓存）改名 mask_cache.json 留在 Cache（命名对齐 scan_cache/log_cache/task_cache）
-(function migrateConfigLayout() {
-  try { fs.mkdirSync(settingsDir, { recursive: true }); } catch (e) {}
-  const mv = (oldPath, newPath) => {
-    if (!oldPath || !fs.existsSync(oldPath) || oldPath === newPath) return;
-    if (fs.existsSync(newPath)) return; // 新位置已有内容则不覆盖（新为准）
-    try { fs.copyFileSync(oldPath, newPath); fs.unlinkSync(oldPath); } catch (e) {}
-  };
-  // ① 批量设置：旧水印文件两个可能位置均尝试（config 级为权威数据；Cache 级仅为历史残留副本，目标已有则直接清理）
-  mv(path.join(path.dirname(configFilePath()), oldWmCacheName), watermarkCachePath);
-  (() => {
-    const old = path.join(cacheDir, oldWmCacheName);
-    if (!old || !fs.existsSync(old) || old === watermarkCachePath) return;
-    if (fs.existsSync(watermarkCachePath)) { try { fs.unlinkSync(old); } catch (e) {} return; }
-    try { fs.copyFileSync(old, watermarkCachePath); fs.unlinkSync(old); } catch (e) {}
-  })();
-  // ② 遮罩设置：默认输出目录 → Config\Mask.json
-  mv(path.join(cacheDir, 'mask_default_dir.json'), maskSettingsPath);
-  // ③ 遮罩会话缓存：改名留 Cache（同目录 rename 即可，原样保留数据）
-  const oldMaskSession = path.join(cacheDir, 'mask_session.json');
-  const newMaskSession = path.join(cacheDir, 'mask_cache.json');
-  if (oldMaskSession !== newMaskSession && fs.existsSync(oldMaskSession) && !fs.existsSync(newMaskSession)) {
-    try { fs.renameSync(oldMaskSession, newMaskSession); } catch (e) {
-      try { fs.copyFileSync(oldMaskSession, newMaskSession); fs.unlinkSync(oldMaskSession); } catch (e2) {}
-    }
-  }
-})();
-// 迁移旧任务快照命名（task_snapshot.json → task_cache.json）
-(function migrateTaskCache() {
-  const old = path.join(cacheDir, app.isPackaged ? 'task_snapshot.json' : 'video_lab_task_snapshot.json');
-  if (old === taskStatePath || !fs.existsSync(old) || fs.existsSync(taskStatePath)) return;
-  try { fs.copyFileSync(old, taskStatePath); fs.unlinkSync(old); } catch (e) {}
-})();
-// 迁移旧 scan 缓存命名（同目录内把旧的连字符命名改为下划线）；不含脚本目录缓存——脚本目录属用户个人数据，应用绝不读写
-(function migrateOldScanCache() {
-  const oldScan = path.join(cacheDir, app.isPackaged ? 'scan-cache.json' : 'video-lab-scan-cache.json');
-  if (oldScan === scanCachePath || !fs.existsSync(oldScan) || fs.existsSync(scanCachePath)) return;
-  try { fs.copyFileSync(oldScan, scanCachePath); fs.unlinkSync(oldScan); } catch (e) {}
-})();
-const api = new Api(root, config, scanCachePath, videoCachePath, logCachePath, resolveScriptsDir(), clipCachePath, taskStatePath, watermarkCachePath, resolveEnginesDir(), settingsDir);
+const api = new Api(root, config, resolveScriptsDir(), resolveEnginesDir(), storageDir());
 // 扫描/重建环节进度：推送主窗口渲染层实时状态（walk/收集日志/重建成片索引/水印统计 一一对应）
 api.onScanProgress = (p) => {
   try {
@@ -1052,6 +952,8 @@ async function startUpdate() {
     updateBusy = false;
   }
 }
+// 更新器脚本的临时落地目录：放系统临时目录，不落数据目录（避免污染「三库扁平」布局）
+const updateTmpDir = () => path.join(os.tmpdir(), 'video-lab-update');
 // 用户点击「更新并重启」：拉起更新器并退出应用（两步式第二步，需 UPDATE_ENABLED）
 async function applyUpdate() {
   if (!UPDATE_ENABLED) return { ok: false, error: '自动更新已停用' };
@@ -1059,7 +961,7 @@ async function applyUpdate() {
   if (!IS_PORTABLE) return setupApplyUpdate();
   if (!lastDownload) return { ok: false, error: '没有已下载的更新包' };
   const { zipPath, info } = lastDownload;
-  const scriptPath = path.join(cacheDir, 'update', 'apply_update.ps1');
+  const scriptPath = path.join(updateTmpDir(), 'apply_update.ps1');
   try { fs.mkdirSync(path.dirname(scriptPath), { recursive: true }); fs.writeFileSync(scriptPath, UPDATE_SCRIPT_TPL, 'utf-8'); } catch (e) {
     sendToMain('update_error', { message: '写入更新脚本失败：' + e.message });
     return { ok: false, error: e.message };
@@ -1067,7 +969,7 @@ async function applyUpdate() {
   const exeName = path.basename(process.execPath) || 'Video Lab.exe';
   try {
     // 生成 .cmd 启动器（路径全部加引号，避免空格路径被拆散）
-    const launcherPath = path.join(cacheDir, 'update', 'launch_update.cmd');
+    const launcherPath = path.join(updateTmpDir(), 'launch_update.cmd');
     const cmdLines = [
       '@echo off',
       'pwsh -NoProfile -ExecutionPolicy Bypass -File "' + scriptPath + '" -Target "' + projectDir() + '" -Zip "' + zipPath + '" -ExeName "' + exeName + '"'
@@ -1149,7 +1051,7 @@ function buildHttpExtraRoutes() {
       const target = cfg.config_storage === 'appdata' ? appdataConfigPath() : programConfigPath();
       if (path.resolve(target) !== path.resolve(configFilePath())) {
         const mv = moveConfigFile(target);
-        if (mv.ok && mv.moved) { configMoved = true; moveCaches(); }
+        if (mv.ok && mv.moved) { configMoved = true; }
       }
       saveConfig(cfg);
       try { if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: cfg.autostart === true, args: ['--autostart'] }); } catch (e) {}
@@ -1404,7 +1306,7 @@ function registerIpc() {
     const target = cfg.config_storage === 'appdata' ? appdataConfigPath() : programConfigPath();
     if (path.resolve(target) !== path.resolve(configFilePath())) {
       const mv = moveConfigFile(target);
-      if (mv.ok && mv.moved) { configMoved = true; moveCaches(); } // Cache 一并迁移（配置和数据）
+      if (mv.ok && mv.moved) { configMoved = true; } // 库随配置一并迁移（moveConfigFile 内部完成）
     }
     saveConfig(cfg);
     // 应用开机自启动（openAtLogin + --autostart 静默托盘启动）；开发版不注册，避免污染开发环境

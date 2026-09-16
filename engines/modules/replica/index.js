@@ -62,20 +62,22 @@ function mtimeToTicks(p) {
 const TICKS_TOLERANCE = 10000;
 
 function loadVideoCache(cacheDir) {
+  // 持久层优先数据库（VL_CACHE_DB 指向的 cache.db，未注入时取 cacheDir\cache.db）：
+  // 全表读且 Ticks 为精确字符串；库不存在/为空/不可用时回退 video_cache.json（legacy 形态）
+  const dbPath = String(process.env.VL_CACHE_DB || '').trim() || (cacheDir ? path.join(cacheDir, 'cache.db') : '');
+  if (dbPath) {
+    try {
+      if (fs.existsSync(dbPath)) {
+        const CacheStore = require('../../base/cache');
+        const store = new CacheStore(dbPath, { root: '' });
+        store.open({ readOnly: true }); // 只读用途：不建表、不写 meta（replica 仅消费缓存）
+        const map = store.loadVideoMap();
+        store.close();
+        if (map && Object.keys(map).length) return map;
+      }
+    } catch (e) { /* 回退 JSON */ }
+  }
   if (!cacheDir) return {};
-  // 持久层优先 sqlite（cache.db）：全表读且 Ticks 为精确字符串；
-  // 库不存在/为空/不可用时回退 video_cache.json（legacy 形态）
-  try {
-    const dbPath = path.join(cacheDir, 'cache.db');
-    if (fs.existsSync(dbPath)) {
-      const CacheStore = require('../../base/cache');
-      const store = new CacheStore(dbPath, { root: '' });
-      store.open({ readOnly: true }); // 只读用途：不建表、不写 meta（replica 仅消费缓存）
-      const map = store.loadVideoMap();
-      store.close();
-      if (map && Object.keys(map).length) return map;
-    }
-  } catch (e) { /* 回退 JSON */ }
   const f = path.join(cacheDir, 'video_cache.json');
   try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch (e) { return {}; }
 }

@@ -29,10 +29,12 @@ const base = {
 };
 
 // ── 业务模块注册 ──
+// 缓存出口：VL_CACHE_DB 指向数据缓存库（引擎直读）；VL_CACHE_DIR 是 legacy PS1 的 JSON 镜像目录，
+// 由主进程按实际执行路径二选一注入（见 backend 的 _spawnPowerShell）。
 const MODULE_META = {
-  batch: { title: '批量拼接', envs: ['BATCH_*', 'VL_CACHE_DIR'], legacy: 'video_batch.ps1' },
-  mask: { title: '遮罩叠加', envs: ['MASK_*', 'VL_CACHE_DIR'], legacy: 'video_mask.ps1' },
-  replica: { title: '复刻', envs: ['REPLICA_*', 'VL_CACHE_DIR'], legacy: 'video_replica.ps1' },
+  batch: { title: '批量拼接', envs: ['BATCH_*', 'VL_CACHE_DB', 'VL_CACHE_DIR'], legacy: 'video_batch.ps1' },
+  mask: { title: '遮罩叠加', envs: ['MASK_*', 'VL_CACHE_DB', 'VL_CACHE_DIR'], legacy: 'video_mask.ps1' },
+  replica: { title: '复刻', envs: ['REPLICA_*', 'VL_CACHE_DB', 'VL_CACHE_DIR'], legacy: 'video_replica.ps1' },
 };
 
 function loadModules(logger) {

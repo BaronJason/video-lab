@@ -232,22 +232,47 @@ class CacheStore {
     return { upserted, deleted };
   }
 
-  // 全量替换（重置预检测后一次性写入）：清空 + 批量插入，单事务
+  // 全量替换（重置预检测后一次性写入）：清空 + 批量插入，单事务。
+  // 使用计数按路径保留：入参 map 来自 loadVideoMap()（不含计数），若直接全清会让
+  // 「重置预检测」把全部计数清零 —— 计数是跨轮次的业务数据，不随探测缓存重建而失效。
   replaceVideoMap(map) {
     const db = this.open();
     let n = 0;
     this.transaction(() => {
+      const keep = new Map();
+      for (const r of db.prepare('SELECT path, usage_count FROM video_cache').all()) {
+        keep.set(String(r.path), Number(r.usage_count) || 0);
+      }
       db.exec('DELETE FROM video_cache');
       const step = db.prepare(`INSERT INTO video_cache (path, last_write, duration, width, height, valid, usage_count)
-                               VALUES (?, ?, ?, ?, ?, ?, 0)`);
+                               VALUES (?, ?, ?, ?, ?, ?, ?)`);
       for (const k of Object.keys(map || {})) {
         const info = map[k] || {};
         step.run(String(k), String(info.LastWriteTime == null ? '' : info.LastWriteTime),
-          Number(info.Duration) || 0, Number(info.Width) || 0, Number(info.Height) || 0, info.Valid ? 1 : 0);
+          Number(info.Duration) || 0, Number(info.Width) || 0, Number(info.Height) || 0, info.Valid ? 1 : 0,
+          keep.get(String(k)) || 0);
         n++;
       }
     });
     return n;
+  }
+
+  // 覆盖式设置使用计数（legacy 回写用：JSON 侧计数是权威快照，须覆盖而非累加）；行不存在则新建
+  setVideoUsage(vPath, count) {
+    const n = Math.max(0, Number(count) || 0);
+    this.open().prepare(`INSERT INTO video_cache (path, last_write, duration, width, height, valid, usage_count)
+                         VALUES (?, '', 0, 0, 0, 0, ?)
+                         ON CONFLICT(path) DO UPDATE SET usage_count = excluded.usage_count`)
+      .run(String(vPath), n);
+    return n;
+  }
+
+  // 使用计数全量读出（仅计数 > 0 的行）：供 legacy 出口导出 usage_cache.json
+  listUsage() {
+    const rows = this.open().prepare('SELECT path, usage_count FROM video_cache WHERE usage_count > 0').all();
+    const out = {};
+    for (const r of rows) out[String(r.path)] = Number(r.usage_count) || 0;
+    return out;
   }
 
   // 失效清理「判定分区」（纯内存，无磁盘调用）：
@@ -290,6 +315,25 @@ class CacheStore {
                 ON CONFLICT(key) DO UPDATE SET fingerprint = excluded.fingerprint, payload = excluded.payload`)
       .run(String(key), String(fingerprint), String(payload));
   }
+  // 键前缀列取（backend 按 root 前缀一次性载入当前工作目录的指纹）
+  listScans(prefix) {
+    const rows = this.open().prepare('SELECT key, fingerprint, payload FROM scan_cache WHERE key LIKE ?')
+      .all(String(prefix || '') + '%');
+    return rows.map((r) => ({ key: String(r.key), fingerprint: String(r.fingerprint), payload: String(r.payload || '') }));
+  }
+  deleteScans(keys) {
+    const list = Array.isArray(keys) ? keys : (keys ? Array.from(keys) : []);
+    if (!list.length) return 0;
+    const db = this.open();
+    let n = 0;
+    this.transaction(() => {
+      for (const chunk of chunked(list, 400)) {
+        const ph = chunk.map(() => '?').join(',');
+        n += Number(db.prepare(`DELETE FROM scan_cache WHERE key IN (${ph})`).run(...chunk.map(String)).changes) || 0;
+      }
+    });
+    return n;
+  }
 
   // ── log_cache ──
   getLog(lp) { return this.open().prepare('SELECT * FROM log_cache WHERE log_path = ?').get(String(lp)) || null; }
@@ -327,6 +371,88 @@ class CacheStore {
     const out = {};
     for (const r of rows) out[String(r.k)] = String(r.v);
     return out;
+  }
+
+  // ── tasks / task_logs（任务列表分表：payload 不含日志，日志按行独立存储）──
+  // 7 成以上的 task_cache 体积来自日志；分表后状态变更只重写 payload，日志仅在追加时重写。
+  upsertTask(row) {
+    const r = row || {};
+    this.open().prepare(`INSERT INTO tasks (id, seq, type, status, title, created_at, updated_at, payload)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                         ON CONFLICT(id) DO UPDATE SET
+                           seq = excluded.seq, type = excluded.type, status = excluded.status,
+                           title = excluded.title, created_at = excluded.created_at,
+                           updated_at = excluded.updated_at, payload = excluded.payload`)
+      .run(String(r.id), Number(r.seq) || 0, String(r.type || ''), String(r.status || ''),
+        String(r.title || ''), Number(r.createdAt) || 0, Number(r.updatedAt) || 0, String(r.payload || ''));
+  }
+
+  listTasks() {
+    const rows = this.open().prepare('SELECT id, payload FROM tasks').all();
+    return rows.map((r) => ({ id: String(r.id), payload: String(r.payload || '') }));
+  }
+
+  // 列出全部任务 id：落盘时据此删除「列表中已不存在」的任务行
+  listTaskIds() {
+    return this.open().prepare('SELECT id FROM tasks').all().map((r) => String(r.id));
+  }
+
+  removeTask(id) {
+    const db = this.open();
+    let n = 0;
+    this.transaction(() => {
+      n += Number(db.prepare('DELETE FROM tasks WHERE id = ?').run(String(id)).changes) || 0;
+      db.prepare('DELETE FROM task_logs WHERE task_id = ?').run(String(id));
+    });
+    return n;
+  }
+
+  // 日志整体重写（按行号）：同一任务重复调用结果一致，天然幂等
+  setTaskLog(id, lines) {
+    const db = this.open();
+    const list = Array.isArray(lines) ? lines : [];
+    this.transaction(() => {
+      db.prepare('DELETE FROM task_logs WHERE task_id = ?').run(String(id));
+      const ins = db.prepare('INSERT OR REPLACE INTO task_logs (task_id, line_no, line) VALUES (?, ?, ?)');
+      for (let i = 0; i < list.length; i++) ins.run(String(id), i, String(list[i]));
+    });
+    return list.length;
+  }
+
+  // 追加日志行（startIdx 为这批行在任务日志中的起始序号）：任务运行中持续追加时的常态路径，
+  // 避免每来一行就整体重写（日志是任务数据里体积最大的部分）
+  appendTaskLog(id, startIdx, lines) {
+    const list = Array.isArray(lines) ? lines : [];
+    if (!list.length) return 0;
+    const db = this.open();
+    this.transaction(() => {
+      const ins = db.prepare('INSERT OR REPLACE INTO task_logs (task_id, line_no, line) VALUES (?, ?, ?)');
+      for (let i = 0; i < list.length; i++) ins.run(String(id), Number(startIdx) + i, String(list[i]));
+    });
+    return list.length;
+  }
+
+  getTaskLog(id) {
+    const rows = this.open().prepare('SELECT line FROM task_logs WHERE task_id = ? ORDER BY line_no').all(String(id));
+    return rows.map((r) => String(r.line));
+  }
+
+  // ── task_marks（任务标记：替代原 task-marks\ 目录下逐任务一个 JSON 文件）──
+  getMark(id) {
+    const row = this.open().prepare('SELECT payload FROM task_marks WHERE task_id = ?').get(String(id));
+    return row ? String(row.payload) : '';
+  }
+  setMark(id, payload, createdAt) {
+    this.open().prepare(`INSERT INTO task_marks (task_id, payload, created_at, updated_at)
+                         VALUES (?, ?, ?, ?)
+                         ON CONFLICT(task_id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at`)
+      .run(String(id), String(payload || ''), Number(createdAt) || 0, Date.now());
+  }
+  removeMark(id) {
+    return Number(this.open().prepare('DELETE FROM task_marks WHERE task_id = ?').run(String(id)).changes) || 0;
+  }
+  listMarkIds() {
+    return this.open().prepare('SELECT task_id FROM task_marks').all().map((r) => String(r.task_id));
   }
 
   // ── 旧 JSON 一次性迁移（video_cache.json / usage_cache.json）──

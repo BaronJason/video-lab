@@ -26,6 +26,8 @@ const ALIASES = {
   maskSession: ['mask_cache.json', 'mask_session.json', 'video_lab_mask_cache.json'],
   batchSettings: ['Batch.json', 'watermark_cache.json', 'video_lab_watermark_cache.json'],
   maskSettings: ['Mask.json', 'mask_default_dir.json'],
+  clipDb: ['clip_cache.db'],
+  clipJson: ['clip_cache.json'],
 };
 const STAGING_PREFIX = '.video-lab-legacy-';
 const LEGACY_DB_MERGED_KEY = 'legacy_cache_db_merged';
@@ -212,6 +214,43 @@ function migrateMarks(cache, oldCacheDir, counts) {
   counts.marks = n;
 }
 
+// 旧成片名搜索索引 → clip_index 表。两种形态：独立的 clip_cache.db（表结构一致，逐行搬运）、
+// 更早的 clip_cache.json（{ root, dirs: { <目录>: { mtime, entries } } }）。
+// 索引本身可由日志目录重建，故不做逐条校验；搬运仅为省去首轮重扫。
+function migrateClipIndex(cache, dirs, counts) {
+  const db = cache.open();
+  const up = db.prepare('INSERT OR REPLACE INTO clip_index (dir, mtime, entries) VALUES (?, ?, ?)');
+  let n = 0;
+  const oldDb = findLegacy(dirs, ALIASES.clipDb);
+  if (oldDb) {
+    try {
+      const { DatabaseSync } = require('node:sqlite');
+      const sdb = new DatabaseSync(oldDb, { readOnly: true });
+      const rows = sdb.prepare('SELECT dir, mtime, entries FROM clip_index').all();
+      sdb.close();
+      cache.transaction(() => {
+        for (const r of rows) { up.run(String(r.dir), Number(r.mtime) || 0, String(r.entries)); n++; }
+      });
+    } catch (e) { /* 旧库不可读：索引按需重建 */ }
+  }
+  const oldJson = findLegacy(dirs, ALIASES.clipJson);
+  if (oldJson) {
+    const data = readJson(oldJson);
+    const dirsMap = (data && data.dirs && typeof data.dirs === 'object') ? data.dirs : null;
+    if (dirsMap) {
+      cache.transaction(() => {
+        for (const k of Object.keys(dirsMap)) {
+          const v = dirsMap[k];
+          if (!v || typeof v.mtime !== 'number' || !Array.isArray(v.entries)) continue;
+          up.run(String(k), Number(v.mtime) || 0, JSON.stringify(v.entries));
+          n++;
+        }
+      });
+    }
+  }
+  if (n) counts.clipIndex = n;
+}
+
 function migrateSettings(settings, dirs, counts) {
   const bp = findLegacy(dirs, ALIASES.batchSettings);
   if (bp) {
@@ -379,6 +418,7 @@ function migrateToFlatLayout({ configDir, log } = {}) {
     migrateMaskSession(cache, dirs, out.counts);
     migrateTasks(cache, dirs, out.counts);
     migrateMarks(cache, oldCacheDir, out.counts);
+    migrateClipIndex(cache, dirs, out.counts);
     migrateSettings(settings, dirs, out.counts);
 
     const problems = verify(cache, settings, dirs, stats);

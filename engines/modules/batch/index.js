@@ -107,19 +107,20 @@ function writeFileAtomic(file, text) {
   }
 }
 
-/** video_cache 持久层：优先 sqlite（<storageDir>\cache.db），不存在/不可用时返回 null 回退 JSON。
+/** video_cache 持久层：优先数据库（VL_CACHE_DB 指向的 cache.db，未注入时取 cacheDir\cache.db），
+ *  库不存在/不可用时返回 null 回退 JSON。
  *  收益：全量读从「解析整个 JSON」变为库内全表读（数千条约 3ms），写回只落本次新探测的条目而非重写全量。 */
 function openVideoStore(cacheDir) {
-  if (!cacheDir) return null;
+  const dbPath = String(process.env.VL_CACHE_DB || '').trim() || (cacheDir ? path.join(cacheDir, 'cache.db') : '');
+  if (!dbPath) return null;
   try {
-    const dbPath = path.join(cacheDir, 'cache.db');
     if (!fs.existsSync(dbPath)) return null;
     const CacheStore = require('../../base/cache');
     const store = new CacheStore(dbPath, { root: '' });
     store.open();
     return store;
   } catch (e) {
-    return null; // sqlite 不可用：静默回退 JSON，不影响任务
+    return null; // 库不可用：静默回退 JSON，不影响任务
   }
 }
 

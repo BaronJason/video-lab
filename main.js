@@ -163,6 +163,15 @@ function recycleFile(p) {
   } catch (e) {}
   try { fs.renameSync(p, p + '.bak'); return true; } catch (e) { return false; }
 }
+// 回收「搬空后的对侧空壳目录」：搬迁完成后旧位置若已无任何内容则整个移入回收站，
+// 否则便携版切到程序目录后会在 AppData 侧留下空文件夹（目录非空则保留，不误删用户手放的内容）
+function recycleIfEmpty(dir) {
+  try {
+    if (!dir || !fs.existsSync(dir)) return false;
+    if (fs.readdirSync(dir).length) return false;
+    return recycleFile(dir);
+  } catch (e) { return false; }
+}
 // 迁移「配置和数据保存位置」：只搬 2 个库（settings.db / cache.db）及其 -wal/-shm，不再递归搬目录树
 // （引导文件由 moveConfigFile 负责）。前置：关全部连接 + 无任务在跑 —— Windows 下持有句柄会阻止移动。
 // 策略：rename 优先（同盘瞬时完成），跨盘降级 cp + 读回校验 + 源文件入回收站。
@@ -193,6 +202,7 @@ function moveStorage(fromDir, toDir) {
     }
     for (const [srcPath] of moved) { if (fs.existsSync(srcPath)) recycleFile(srcPath); } // 跨盘复制留下的源文件
     if (api && typeof api.onStorageMoved === 'function') api.onStorageMoved(toDir);
+    recycleIfEmpty(fromDir); // 旧位置已搬空则整目录入回收站，避免留下空壳（非空则保留）
     return { ok: true, moved: true, count: moved.length };
   } catch (e) {
     return { ok: false, error: (e && e.message) || String(e) };

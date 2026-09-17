@@ -184,13 +184,16 @@
     }, 3200);
   }
   // 记录最后一次点击的可作为锚点的元素：气泡确认未显式传 anchor 时用它定位（气泡内部交互不更新）
-  var _popAnchor = null;
+  var _popAnchor = null; // { el, rect }：rect 为按下瞬间的位置快照，供元素随后被移除时仍能定位
   document.addEventListener('mousedown', function (e) {
     var t = e.target;
     if (!t || !t.closest) return;
     if (t.closest('.vl-pop')) return;
     var el = t.closest('button, .btn, [role="button"], a, .menu-item');
-    if (el) _popAnchor = el;
+    if (el) {
+      var r = el.getBoundingClientRect();
+      _popAnchor = { el: el, rect: { left: r.left, top: r.top, width: r.width, height: r.height, right: r.right, bottom: r.bottom } };
+    }
   }, true);
   // 锚定气泡确认：贴着触发元素弹小浮层（取代居中大窗），仅「取消 / 一个动作」两选一。
   // opts: { title, message, okLabel, cancelLabel, danger }；anchor 省略时用最后点击的元素。
@@ -202,8 +205,13 @@
       if (prevMask) prevMask.remove();
       var prevPop = document.querySelector('.vl-pop');
       if (prevPop) prevPop.remove();
-      var a = anchor || _popAnchor;
-      if (!a || !a.getBoundingClientRect || !a.isConnected) a = null;
+      // 定位锚点矩形：优先显式传入的有效元素 → 最后点击元素（仍在 DOM）→ 其位置快照（元素已被移除）
+      var rect = null;
+      if (anchor && anchor.getBoundingClientRect && anchor.isConnected) rect = anchor.getBoundingClientRect();
+      if (!rect && _popAnchor) {
+        if (_popAnchor.el && _popAnchor.el.isConnected) rect = _popAnchor.el.getBoundingClientRect();
+        else if (_popAnchor.rect) rect = _popAnchor.rect;
+      }
       var mask = document.createElement('div');
       mask.className = 'vl-pop-mask';
       var pop = document.createElement('div');
@@ -227,8 +235,8 @@
       var vw = window.innerWidth, vh = window.innerHeight, gap = 8;
       var pr = pop.getBoundingClientRect();
       var left, top, below = true;
-      if (a) {
-        var r = a.getBoundingClientRect();
+      if (rect) {
+        var r = rect;
         left = r.left + r.width / 2 - pr.width / 2;
         top = r.bottom + gap;
         if (top + pr.height > vh - 8) { top = r.top - pr.height - gap; below = false; }

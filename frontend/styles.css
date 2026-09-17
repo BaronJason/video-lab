@@ -5324,7 +5324,8 @@ body.mask-mode .center-top { min-height: 0; max-height: none; }
    底色/边框用当前主题固定实色变量（--toast-bg / --toast-border），
    语义色由 toast--ok/--error/--warn 的 status 实色承担 */
 .toast-host {
-  position: fixed; right: 16px; bottom: 16px; z-index: 9999;
+  /* 浮在配置栏（46px）+ 状态栏（24px）之上，避免遮挡右下角「覆盖当前配置/保存为当日配置/启动脚本」三按钮 */
+  position: fixed; right: 16px; bottom: 84px; z-index: 9999;
   display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
   pointer-events: none;
 }

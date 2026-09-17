@@ -2164,8 +2164,8 @@ class Api {
     return { outDir: path.join(base, month, day, mode), mode };
   }
 
-  // 复刻任务的成片输出目录：按提交日期推算复刻产物目录（月份/MMdd/模式目录），
-  // 未生成时回退任务 outDir（原"日志目录下成片"语义），供「打开成片文件夹」使用
+  // 复刻任务的成片输出目录：按提交日期推算复刻产物目录（月份/MMdd/模式目录）；
+  // 目录不存在即明确报错「未生成」，绝不退而求其次指向源日志目录（那里是原始日志与素材）
   taskReplicaOutputDir(taskId) {
     const t = this.tasks.get(taskId);
     if (!t) return { ok: false, error: '任务不存在' };
@@ -2195,7 +2195,9 @@ class Api {
   }
 
   // 任务成片文件夹：批量任务按提交时刻+配置名精确推算（与脚本实际输出目录一致）；
-  // 其余类型取源 TXT 所在目录下以「成片」结尾的子目录，找不到则回退源目录
+  // 其余类型取源 TXT 所在目录下以「成片」结尾的子目录。
+  // 找不到即返回空串：绝不回退成源目录 —— 源目录放着原始日志与素材，
+  // 一旦被当成成片目录用于打开/删除，会直接误伤业务文件。
   _taskOutDir(type, srcPath, env) {
     if (type === 'mask') {
       const out = String((env && env.MASK_OUTPUT_DIR) || '').trim();
@@ -2215,7 +2217,7 @@ class Api {
         }
       }
     } catch (e2) {}
-    return d;
+    return '';
   }
 
   // 业务归属日（MMDD）：按任务提交/创建时刻，凌晨 0-4 点归入前一天（跨日任务视同昨天产出）。
@@ -2333,6 +2335,38 @@ class Api {
     return '脚本执行失败';
   }
 
+  // 任务的成片是否还在磁盘上：仅对「曾经产出过」的已结束任务判定。
+  // 用途是列表提示（成片消失时标题置灰），任务行本身始终保留；
+  // 从未产出的任务（未开始即失败等）不参与判定，避免把正常状态显示为异常。
+  _taskHasOutput(t) {
+    if (!t) return true;
+    const st = String(t.status || '');
+    if (st !== 'done' && st !== 'stopped' && st !== 'error' && st !== 'interrupted') return true;
+    // 产出证据：标记清单 / 日志中的「成片完成」/ 批量任务的真实输出目录记录
+    const marker = this._loadMarker(t);
+    const marked = (marker && Array.isArray(marker.videos)) ? marker.videos.filter(Boolean) : [];
+    const logged = [];
+    for (const ln of (t.log || [])) {
+      const m = /✅ 成片完成：(.+)$/.exec(ln);
+      if (m) logged.push(String(m[1]).trim());
+    }
+    const outDirAuth = this._taskOutDirFromLog(t);
+    const hadOutput = marked.length > 0 || logged.length > 0 || (t.type === 'batch' && !!outDirAuth);
+    if (!hadOutput) return true;
+    // 现存证据：任一记录的文件仍在，或批量输出目录内仍有成片
+    for (const p of marked.concat(logged)) {
+      try { if (p && fs.existsSync(p)) return true; } catch (e) {}
+    }
+    const dir = outDirAuth || t.outDir || '';
+    if (dir) {
+      try {
+        if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()
+          && fs.readdirSync(dir).some((f) => path.extname(f).toLowerCase() === '.mp4')) return true;
+      } catch (e) {}
+    }
+    return false;
+  }
+
   snapshotTasks() {
     const list = [];
     this.tasks.forEach((t) => {
@@ -2350,6 +2384,8 @@ class Api {
         pos: t.planPos || 0,
         resumeIdx: typeof t.resumeIdx === 'number' ? t.resumeIdx : null,
         queueTotal: this._taskQueue.length,
+        // 成片是否仍在磁盘（仅曾产出过的已结束任务会为 false）：前端据此提示，不影响任务行本身
+        hasOutput: this._taskHasOutput(t),
         log: t.log.slice(-500),
       });
     });
@@ -2466,12 +2502,14 @@ class Api {
         // 批量任务缺归属日时按提交/创建时刻补算（凌晨0-4点归前一天）
         if (restored.type === 'batch' && typeof restored.groupDate !== 'string') restored.groupDate = this._taskGroupDate(restored.type, restored.env, restored.createdAt);
         // 批量任务的成片文件夹：记录指向有效目录（含人工迁移/手工修正后）则保留；
-        // 失效时才按提交时刻推算 + 当天/前一天回退查找（旧记录 outDir 可能指向无关/已删除目录，
-        // 凌晨内容人工归入前一天的场景靠回退命中）
+        // 失效时仅按本任务提交时刻+配置名确定性推算规范路径，绝不跨日搜索猜替代品（见下方）
         if (restored.type === 'batch') {
           const live = restored.outDir && fs.existsSync(restored.outDir);
           if (!live) {
-            const detail = this._batchTaskOutDetail(restored, true);
+            // 原 outDir 失效时：仅按「本任务提交时刻 + 配置名」确定性推算规范输出路径（脚本本就会创建的目录），
+            // 绝不跨当天/前一天做目录搜索猜一个替代品 —— 找不到就是找不到，交给 hasOutput 置灰提示，
+            // 避免无产出的停止/失败任务被推断到同日同名任务的目录上（清除时会误删对方成片）。
+            const detail = restored.status === 'done' ? this._batchTaskOutDetail(restored, false) : null;
             if (detail && detail.outDir) restored.outDir = detail.outDir;
           }
         }
@@ -2815,8 +2853,11 @@ class Api {
     }
   }
 
-  // 删除失败任务在磁盘上遗留的产物（无任务标记时的回退方案）：
-  // 1) 任务日志中「✅ 成片完成：」明确列出的成片文件；
+  // 删除失败任务在磁盘上遗留的产物（无任务标记时的清理）：
+  // 1) 任务日志中「✅ 成片完成：」明确列出的成片文件 —— 精确清单，始终执行；
+  // 2) 批量输出目录内的残留 mp4 与拼接日志 —— 仅在能确认该目录确属本任务时执行
+  //    （目录内确有日志列出的成片文件）。推算目录在同日同名任务间会撞车，
+  //    无归属证据时一律不动：找不到就是找不到，不猜。
   _removeTaskArtifacts(task) {
     const rm = (p) => {
       try {
@@ -2827,29 +2868,58 @@ class Api {
       } catch (e2) {}
     };
     // 1) 日志中列出的成片
+    const listed = [];
     for (const line of (task.log || [])) {
       const m = /✅ 成片完成：(.+)$/.exec(line);
-      if (m) rm(String(m[1]).trim());
+      if (m) { const p = String(m[1]).trim(); if (p) { listed.push(p); rm(p); } }
     }
-    // 2) batch 专属输出目录（以提交时刻+配置名精确推算，日志行被滚动挤出时仍可命中）
+    // 2) batch 专属输出目录：先确认归属，再做残留清理与配置 TXT 归位
     if (task.type === 'batch') {
       const detail = this._batchTaskOutDetail(task);
       if (detail && detail.outDir) {
-        const src = (task.env && task.env.REPLICA_TXT) ? String(task.env.REPLICA_TXT) : '';
-        if (src && !fs.existsSync(src)) {
-          const dest = path.join(detail.outDir, path.basename(src));
-          try { if (fs.existsSync(dest) && fs.statSync(dest).isFile()) fs.renameSync(dest, src); } catch (e2) {}
-        }
-        try {
-          if (fs.existsSync(detail.outDir) && fs.statSync(detail.outDir).isDirectory()) {
-            for (const f of fs.readdirSync(detail.outDir)) {
-              const fp = path.join(detail.outDir, f);
-              if (fs.existsSync(fp) && fs.statSync(fp).isFile() && (path.extname(f).toLowerCase() === '.mp4' || /拼接日志/.test(f))) rm(fp);
-            }
+        const dir = path.resolve(detail.outDir);
+        const belongs = listed.some((p) => path.dirname(path.resolve(p)) === dir);
+        if (belongs) {
+          const src = (task.env && task.env.REPLICA_TXT) ? String(task.env.REPLICA_TXT) : '';
+          if (src && !fs.existsSync(src)) {
+            const dest = path.join(dir, path.basename(src));
+            try { if (fs.existsSync(dest) && fs.statSync(dest).isFile()) fs.renameSync(dest, src); } catch (e2) {}
           }
-        } catch (e2) {}
+          try {
+            if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
+              for (const f of fs.readdirSync(dir)) {
+                const fp = path.join(dir, f);
+                if (fs.existsSync(fp) && fs.statSync(fp).isFile() && (path.extname(f).toLowerCase() === '.mp4' || /拼接日志/.test(f))) rm(fp);
+              }
+            }
+          } catch (e2) {}
+        }
       }
     }
+  }
+
+  // 任务在磁盘上的真实输出目录：取日志中脚本明确创建的目录（权威记录）。
+  // 推算目录（提交时刻+配置名）在同日同名任务之间会撞车，不能作为删除依据。
+  _taskOutDirFromLog(task) {
+    for (const ln of (task.log || [])) {
+      const m = /✅ 创建输出目录：(.+)$/.exec(ln);
+      if (m) {
+        const d = String(m[1]).trim();
+        if (d) return d;
+      }
+    }
+    return '';
+  }
+
+  // 校验某目录确属该任务：目录内存在任务产出清单（标记/日志解析）中的文件
+  _dirOwnsVideos(dir, videos) {
+    if (!dir || !Array.isArray(videos) || !videos.length) return false;
+    const target = path.resolve(dir);
+    for (const p of videos) {
+      if (!p) continue;
+      if (path.dirname(path.resolve(p)) === target) return true;
+    }
+    return false;
   }
 
   // batch 专属输出目录推算：目录名规则 MMdd-HH时mm分-配置名-成片（与 video_batch.ps1 一致）
@@ -2936,9 +3006,13 @@ class Api {
         const exactVideos = (marker && Array.isArray(marker.videos) ? marker.videos.slice() : [])
           .concat(this.collectDoneFromLog(t));
         if (t.type === 'batch') {
-          // 批量任务：成片目录为独立目录（提交时刻+配置名推算），保留「视频→整目录」的目录级语义
-          if (!t.outDir) continue;
-          const abs = path.resolve(t.outDir);
+          // 成片目录以「日志中脚本实际创建的目录」为权威；推算目录在同日同名任务间会撞车，
+          // 且无产出的停止任务会被推断到同名任务的目录上 —— 无权威记录时必须有产出证据
+          // 并校验目录归属，否则一律不删：找不到就是找不到，不猜。
+          let abs = this._taskOutDirFromLog(t);
+          if (!abs && t.outDir && this._dirOwnsVideos(t.outDir, exactVideos)) abs = path.resolve(t.outDir);
+          if (!abs) continue;
+          try { if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) continue; } catch (e2) { continue; }
           if (scope === 'video') {
             let files = [];
             try { files = fs.readdirSync(abs).filter((f) => path.extname(f).toLowerCase() === '.mp4'); }

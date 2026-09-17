@@ -265,6 +265,7 @@
       '<span class="task-card__status-dot"></span>' +
       '<span class="task-card__status-text"></span>' +
       '<span class="task-card__title"></span>' +
+      '<span class="task-card__nomedia" title="成片文件已不存在（任务记录保留，可自行删除）">无成片</span>' +
       '<span class="task-card__tag"></span>' +
       '<span class="task-card__time"></span>' +
       '<span class="task-card__lock"></span>' +
@@ -411,8 +412,19 @@
     rec.el.__task = t;
     rec.el.className = 'task-card task-card--' + (t.lockState === 'waiting' ? 'waiting' : t.status);
     rec.header.querySelector('.task-card__status-text').textContent = STATUS_TEXT[t.status] || t.status;
-    rec.header.querySelector('.task-card__title').textContent = t.title || '';
-    rec.header.querySelector('.task-card__title').title = t.script || '';
+    var titleEl = rec.header.querySelector('.task-card__title');
+    titleEl.textContent = t.title || '';
+    var nomediaEl = rec.header.querySelector('.task-card__nomedia');
+    // 成片已不在磁盘（曾产出过）：标题置灰 + 常驻「无成片」徽标提示；任务行本身保留，由用户自行决定去留
+    if (t.hasOutput === false) {
+      titleEl.classList.add('task-card__title--missing');
+      titleEl.title = '成片文件已不存在（任务记录保留，可自行删除）';
+      nomediaEl.classList.add('task-card__nomedia--show');
+    } else {
+      titleEl.classList.remove('task-card__title--missing');
+      titleEl.title = t.script || '';
+      nomediaEl.classList.remove('task-card__nomedia--show');
+    }
     var tagEl = rec.header.querySelector('.task-card__tag');
     tagEl.textContent = TYPE_TEXT[t.type] || t.type || '';
     tagEl.className = 'task-card__tag' + ((t.type === 'batch' || t.type === 'replica' || t.type === 'mask') ? ' task-card__tag--' + t.type : '');

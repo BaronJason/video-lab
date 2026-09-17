@@ -170,6 +170,14 @@
     }
     .task-card__status-text { font-size: var(--body-xs-font-size); color: var(--text-tertiary); flex-shrink: 0; }
     .task-card__title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--body-sm-font-size); color: var(--text-default); }
+    /* 成片已不在磁盘：置灰 + 删除线提示，任务行本身保留（明暗主题均适用） */
+    .task-card__title--missing { color: var(--text-tertiary); opacity: 0.65; text-decoration: line-through; }
+    /* 成片缺失常驻徽标：默认隐藏，仅在该任务 hasOutput=false 时显示 */
+    .task-card__nomedia {
+      display: none; flex-shrink: 0; padding: 0 6px; height: 16px; line-height: 16px; border-radius: 8px;
+      font-size: 10px; background: var(--bg-danger, #fde2e2); color: var(--text-danger, #c0392b);
+    }
+    .task-card__nomedia--show { display: inline-block; }
     .task-card__tag {
       flex-shrink: 0; padding: 0 6px; height: 16px; line-height: 16px; border-radius: 8px;
       font-size: 10px; background: var(--bg-overlay-l2); color: var(--text-secondary);

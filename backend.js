@@ -986,10 +986,10 @@ class Api {
       if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return { ok: false, error: '文件不存在：' + filePath };
       const dir = path.dirname(filePath);
       const mode = scope === 'folder' ? 'folder' : (scope === 'both' ? 'both' : 'txt');
-      // 外部 * 配置（文件名含 *，位于成片文件夹之外）：其成片不在本分支目录内，逐块删除整个文件夹
-      // 会连累同目录下其它任务的产物 → 拒绝 folder 整体删除，仅允许 txt/both
-      const isStarConfig = /[*＊]/.test(path.basename(filePath));
-      if (mode === 'folder' && isStarConfig) return { ok: false, error: '外部 * 配置没有自成片文件夹，不能整体删除；请选「仅移除该配置」' };
+      // 外部 * 配置：位于成片文件夹之外（路径不含「成片」段），其「成片」不在本分支目录内，
+      // 整体删除会连累同目录下其它任务的产物 → 拒绝 folder 整体删除，仅允许 txt/both
+      const inChengpian = String(filePath).split(/[\\/]/).some((p) => p.endsWith('成片'));
+      if (mode === 'folder' && !inChengpian) return { ok: false, error: '该配置不在成片文件夹内（外部配置），不能整体删除；请选「仅移除该配置」' };
       if (mode === 'folder') {
         if (dir.length <= root.length) return { ok: false, error: '不允许删除工作根目录' };
         // 整个文件夹走回收站（可还原），不再递归永久删除

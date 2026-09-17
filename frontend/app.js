@@ -2739,7 +2739,7 @@
         showMenu(e.clientX, e.clientY, [
           { label: '打开文件', action: function () { call('open_path', fp); } },
           { label: '打开路径', action: function () { call('open_folder_select', fp); } },
-          { label: '移除', action: function () { confirmRemoveBranch(target, modeName); } }
+          { label: '移除', action: function () { confirmRemoveBranch(target, modeName, false); } }
         ]);
         return;
       }
@@ -2751,29 +2751,28 @@
       showMenu(e.clientX, e.clientY, [
         { label: '打开文件', action: function () { call('open_path', v.path); } },
         { label: '打开路径', action: function () { call('open_folder_select', v.path); } },
-        { label: '移除', action: function () { confirmRemoveBranch(target, modeName); } }
+        { label: '移除', action: function () { confirmRemoveBranch(target, modeName, !!v.isExternal); } }
       ]);
     });
     // 移除日期分支：三选一弹窗（样式同任务清除弹窗）——仅删当前 / 双模式 / 连同成片文件夹
     // 文案按当前分支模式动态显示（配置↔日志）；目录无另一模式 TXT 时禁用双模式按钮
-    function confirmRemoveBranch(target, modeName) {
+    function confirmRemoveBranch(target, modeName, isExternal) {
       if (!target) return;
       call('branch_other_txt', target).then(function (info) {
         info = info || {};
-        openRemoveBranchDialog(target, modeName, !!info.hasOther);
+        openRemoveBranchDialog(target, modeName, !!info.hasOther, !!isExternal);
       }).catch(function () {
-        openRemoveBranchDialog(target, modeName, true);
+        openRemoveBranchDialog(target, modeName, true, !!isExternal);
       });
     }
-    function openRemoveBranchDialog(target, modeName, hasOther) {
+    function openRemoveBranchDialog(target, modeName, hasOther, isExternal) {
       var otherName = modeName === '日志' ? '配置' : '日志';
       var bothLabel = '移除' + modeName + '/' + otherName;
       var bothDesc = hasOther
         ? '连同该日期下的【' + otherName + '】TXT一并删除（成片保留）'
         : '不可用（该日期下没有对应的【' + otherName + '】TXT）';
-      // 外部 * 配置（文件名含 *）：位于成片文件夹之外，无自成片文件夹，仅能移除该配置 → 直接简化确认
-      var isStar = /[*＊]/.test(String(target).split(/[\\/]/).pop());
-      if (isStar) {
+      // 外部 * 配置（isExternal）：位于成片文件夹之外，无自成片文件夹，仅能移除该配置 → 直接简化确认
+      if (isExternal) {
         showDialog({
           title: '移除该' + modeName,
           message: target + '\n\n确认移除该外部配置（仅删除当前【' + modeName + '】文件，不影响成片）？',

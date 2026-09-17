@@ -126,4 +126,7 @@ html[data-skin="Black_Orange"] {
   --code-parameter: #7ED957;
   --code-attribute: #FFB347;
   --code-tag: #FF5C5C;
+  /* toast 固定实色（深色浮层实底：层次深灰卡片 + 灰边框） */
+  --toast-bg: #1e1e20;
+  --toast-border: #3a3a3e;
 }

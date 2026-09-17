@@ -845,7 +845,7 @@
 
   function confirmStop(t, anchor) {
     var warn = t.status === 'running' && t.lockState === 'locked'
-      ? '\n\n注意：任务可能正在生成视频，停止将中断当前生成并可能留下不完整文件！'
+      ? '\n\n停止会中断当前生成，可能留下不完整文件'
       : '';
     var msg = '任务「' + (t.title || t.id) + '」' + warn;
     confirmPopover({ title: t.status === 'running' ? '停止任务' : '取消任务', message: msg, okLabel: t.status === 'running' ? '停止' : '取消任务', danger: true }, anchor).then(function (ok) {
@@ -880,7 +880,7 @@
   }
 
   function confirmRerun(t, anchor) {
-    var msg = '本次重开将使用与最初一致的配置（包括日期、输出目录等），并删除上次执行失败产生的成片和日志文件';
+    var msg = '将使用最初配置重新制作，并删除上次失败的成片与日志';
     confirmPopover({ title: '重新开始', message: msg, okLabel: '重新开始', danger: true }, anchor).then(function (ok) {
       if (!ok) return;
       call('rerun_task', t.id).then(function (r) {

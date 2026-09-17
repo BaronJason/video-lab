@@ -323,7 +323,7 @@
           if (v === 'all') {
             confirmPopover({
               title: '确认批量替换水印',
-              message: '将把本项目全部 TXT（含日志）中的水印行更换为：\n' + curWm + '\n\n删除后无法按原样恢复',
+              message: '将把本项目全部 TXT（含日志）中的水印行更换为：\n' + curWm + '\n\n原水印无法恢复',
               okLabel: '确认替换',
               danger: true
             }).then(function (ok) { if (ok) doSave(true); });
@@ -2305,7 +2305,7 @@
     if (!state._probeActive) { setStatus('当前没有进行中的预检测'); return; }
     confirmPopover({
       title: '取消预检测',
-      message: '已检测到的结果会保留，未完成的部分不会写入缓存',
+      message: '已检测到的结果会保留',
       okLabel: '取消预检测',
       danger: true
     }).then(function (ok) {
@@ -2349,7 +2349,7 @@
   function resetPrecheckFlow() {
     confirmPopover({
       title: '重置预检测',
-      message: '将重置预检测物理缓存，并重新预检测所有配置指向的路径（重复文件自动跳过）。视频较多时可能耗时较长',
+      message: '将重置预检测缓存并重新检测所有配置路径，视频较多时可能较慢',
       okLabel: '确认重置',
       danger: true
     }).then(function (v) {
@@ -2413,7 +2413,7 @@
       }
       confirmPopover({
         title: '发现重复配置',
-        message: '发现 ' + pending.length + ' 个与正本内容完全一致的外部 * 配置（历史遗留副本）。删除不影响正本与其他日期分支',
+        message: '发现 ' + pending.length + ' 个与正本内容一致的外部 * 配置（历史遗留副本），删除不影响正本与其他日期分支',
         okLabel: '删除并刷新',
         danger: true
       }).then(function (v) {
@@ -2884,7 +2884,7 @@
       if (isExternal) {
         confirmPopover({
           title: '移除该' + modeName,
-          message: target + '\n\n仅删除当前【' + modeName + '】文件，不影响成片',
+          message: target,
           okLabel: '移除',
           danger: true
         }).then(function (v) { if (v) doRemoveBranch(target, 'txt'); });
@@ -2908,7 +2908,7 @@
           var targetDir = String(target).replace(/[\\/][^\\/]*$/, '');
           confirmPopover({
             title: '整体删除',
-            message: '将整个文件夹（含成片视频及全部子项）移入回收站：\n' + targetDir + '\n\n如误删可从回收站还原',
+            message: '将整个文件夹（含成片视频）移入回收站：\n' + targetDir + '\n\n可从回收站还原',
             okLabel: '继续删除',
             danger: true
           }).then(function (ok) { if (ok) doRemoveBranch(target, v); });
@@ -3657,7 +3657,7 @@
   function maskRebuildCache() {
     if (!maskOn() || !maskState.project) { setStatus('未选择遮罩叠加项目'); return; }
     var p = maskState.project;
-    confirmPopover({ title: '重建缓存', message: '将清空本项目的原片/遮罩持久化缓存并全量重建扫描（已选状态将重置）', okLabel: '重建' }).then(function (v) {
+    confirmPopover({ title: '重建缓存', message: '将清空本项目的原片/遮罩缓存并全量重建扫描（已选状态将重置）', okLabel: '重建' }).then(function (v) {
       if (!v) return;
       setStatus('正在重建遮罩缓存…');
       call('clear_mask_session', p.name).then(function () {
@@ -3682,7 +3682,7 @@
   }
   // 删除所有使用该原片素材产生的遮罩叠加成片（按本遮罩日志精确匹配）
   function maskDeleteByRaw(full) {
-    confirmPopover({ title: '删除素材成片', message: '将删除所有使用该素材产生的遮罩叠加成片（按本遮罩叠加日志精确匹配）\n' + full, okLabel: '删除', danger: true }).then(function (v) {
+    confirmPopover({ title: '删除素材成片', message: '将删除所有使用该素材的遮罩叠加成片\n' + full, okLabel: '删除', danger: true }).then(function (v) {
       if (!v) return;
       call('delete_mask_related', maskState.project.path, [full]).then(function (r) {
         if (!r || !r.ok) { maskTellResult('删除失败', ((r && r.error) || '未知错误')); return; }

@@ -1085,6 +1085,8 @@ function registerIpc() {
     const err = await shell.openPath(r.dir);
     return err ? { ok: false, error: err } : { ok: true };
   });
+  // 复刻任务成片目录只读探测（供前端打开前判定按钮可用性，避免点击后再弹窗）
+  ipcMain.handle('task_replica_outdir', (e, taskId) => api.taskReplicaOutputDir(taskId));
   ipcMain.handle('stop_task', (e, id) => api.stopTask(id));
   ipcMain.handle('rerun_task', (e, id) => api.rerunTask(id));
   ipcMain.handle('pin_task', (e, id) => api.pinTask(id));

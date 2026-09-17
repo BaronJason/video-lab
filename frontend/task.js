@@ -265,7 +265,6 @@
       '<span class="task-card__status-dot"></span>' +
       '<span class="task-card__status-text"></span>' +
       '<span class="task-card__title"></span>' +
-      '<span class="task-card__nomedia" title="成片文件已不存在（任务记录保留，可自行删除）">无成片</span>' +
       '<span class="task-card__tag"></span>' +
       '<span class="task-card__time"></span>' +
       '<span class="task-card__lock"></span>' +
@@ -411,19 +410,28 @@
   function updateCard(rec, t) {
     rec.el.__task = t;
     rec.el.className = 'task-card task-card--' + (t.lockState === 'waiting' ? 'waiting' : t.status);
-    rec.header.querySelector('.task-card__status-text').textContent = STATUS_TEXT[t.status] || t.status;
+    var statusEl = rec.header.querySelector('.task-card__status-text');
     var titleEl = rec.header.querySelector('.task-card__title');
     titleEl.textContent = t.title || '';
-    var nomediaEl = rec.header.querySelector('.task-card__nomedia');
-    // 成片已不在磁盘（曾产出过）：标题置灰 + 常驻「无成片」徽标提示；任务行本身保留，由用户自行决定去留
+    // 成片已不在磁盘（曾产出过）：标题置灰；状态文字由「已完成」改为警示色红色「已删除」。任务行本身保留
     if (t.hasOutput === false) {
       titleEl.classList.add('task-card__title--missing');
-      titleEl.title = '成片文件已不存在（任务记录保留，可自行删除）';
-      nomediaEl.classList.add('task-card__nomedia--show');
+      titleEl.title = '成片文件已不存在';
+      if (t.status === 'done') {
+        statusEl.textContent = '已删除';
+        statusEl.classList.add('task-card__status-text--deleted');
+        statusEl.title = '成片文件已不存在';
+      } else {
+        statusEl.textContent = STATUS_TEXT[t.status] || t.status;
+        statusEl.classList.remove('task-card__status-text--deleted');
+        statusEl.title = '';
+      }
     } else {
       titleEl.classList.remove('task-card__title--missing');
       titleEl.title = t.script || '';
-      nomediaEl.classList.remove('task-card__nomedia--show');
+      statusEl.textContent = STATUS_TEXT[t.status] || t.status;
+      statusEl.classList.remove('task-card__status-text--deleted');
+      statusEl.title = '';
     }
     var tagEl = rec.header.querySelector('.task-card__tag');
     tagEl.textContent = TYPE_TEXT[t.type] || t.type || '';
@@ -645,6 +653,17 @@
         if (r && !r.ok) alertDialog('打开失败：' + (r.error || '成片文件夹不存在'));
       }).catch(function () {});
     }
+    // 打开前的只读探测：目标不可达时把菜单项直接置灰禁用，避免点击后再弹窗
+    // （复刻实际打开的是推算产物目录，走专用探测；其余直接 check 成片文件夹）
+    function probeOpenable() {
+      if (t.type === 'replica' && t.id) {
+        return call('task_replica_outdir', t.id).then(function (r) { return !!(r && r.ok && r.dir); })
+          .catch(function () { return false; });
+      }
+      if (!t.outDir) return Promise.resolve(false);
+      return call('check_exists', [t.outDir]).then(function (m) { return !!(m && m[t.outDir]); })
+        .catch(function () { return false; });
+    }
     // 已结束任务（完成/停止/失败/中断）只读：已完成批量任务可重分组，其余仅提供打开成片文件夹
     if (t.status === 'done' || t.status === 'stopped' || t.status === 'error' || t.status === 'interrupted') {
       var mItems = [];
@@ -665,10 +684,15 @@
       }
       var it = { label: '打开成片文件夹', action: openFolder };
       if (!t.outDir) { it.disabled = true; it.title = '该任务没有成片文件夹信息'; }
+      else { it.disabled = true; it.title = '正在侦测成片文件夹…'; }
       mItems.push(it);
       // 遮罩任务无配置/日志可定位，不提供「定位」子菜单
       if (t.type !== 'mask') mItems.push(buildLocateItem(t));
-      showMenu(x, y, mItems);
+      probeOpenable().then(function (ok) {
+        if (ok) { it.disabled = false; it.title = ''; }
+        else { it.disabled = true; it.title = '成片文件夹不存在'; }
+        showMenu(x, y, mItems);
+      });
       return;
     }
     if (t.status === 'queued') {
@@ -683,11 +707,16 @@
     } else if (t.status === 'running') {
       items.push({ label: '停止任务', action: function () { confirmStop(t); } });
     }
-    items.push({ label: '打开成片文件夹', action: openFolder });
+    var folderItem = { label: '打开成片文件夹', action: openFolder };
+    if (!t.outDir) { folderItem.disabled = true; folderItem.title = '该任务没有成片文件夹信息'; }
+    else { folderItem.disabled = true; folderItem.title = '正在侦测成片文件夹…'; }
+    items.push(folderItem);
     items.push(buildLocateItem(t));
-    var last = items[items.length - 2]; // 定位「打开成片文件夹」项（其后为定位子菜单）
-    if (!t.outDir) { last.disabled = true; last.title = '该任务没有成片文件夹信息'; }
-    showMenu(x, y, items);
+    probeOpenable().then(function (ok) {
+      if (ok) { folderItem.disabled = false; folderItem.title = ''; }
+      else { folderItem.disabled = true; folderItem.title = '成片文件夹不存在'; }
+      showMenu(x, y, items);
+    });
   }
 
   function confirmStop(t) {

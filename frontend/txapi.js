@@ -168,6 +168,7 @@
     list_tasks: function () { return invoke('list_tasks', []); },
     locate_task: function (taskId, target) { return invokeArgs('locate_task', taskId, target); },
     open_replica_output: function (taskId) { return invokeArgs('open_replica_output', taskId); },
+    task_replica_outdir: function (taskId) { return invokeArgs('task_replica_outdir', taskId); },
     on_locate: function (cb) { return onEvent('locate_request', cb); },
     stop_task: function (id) { return invokeArgs('stop_task', id); },
     rerun_task: function (id) { return invokeArgs('rerun_task', id); },

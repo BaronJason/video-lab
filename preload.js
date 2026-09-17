@@ -71,6 +71,7 @@ contextBridge.exposeInMainWorld('txapi', {
   list_tasks: () => invoke('list_tasks'),
   locate_task: (taskId, target) => { try { return invoke('locate_task', taskId, target); } catch (e) {} },
   open_replica_output: (taskId) => invoke('open_replica_output', taskId),
+  task_replica_outdir: (taskId) => invoke('task_replica_outdir', taskId),
   on_locate: (cb) => { ipcRenderer.on('locate_request', (evt, info) => { try { cb(info); } catch (err) {} }); },
   stop_task: (id) => invoke('stop_task', id),
   rerun_task: (id) => invoke('rerun_task', id),

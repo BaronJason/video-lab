@@ -5309,25 +5309,23 @@ body.mask-mode .center-top { min-height: 0; max-height: none; }
 }
 
 /* ── 轻量角落提示（toast）：仅告知、无需操作，右下角出现后自动消失 ── */
+
+
+/* ── 轻量角落提示（toast）：仅告知、无需操作，右下角出现后自动消失 ──
+   底色/边框用当前主题固定实色变量（--toast-bg / --toast-border），
+   语义色由 toast--ok/--error/--warn 的 status 实色承担 */
 .toast-host {
   position: fixed; right: 16px; bottom: 16px; z-index: 9999;
   display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
   pointer-events: none;
 }
 .toast {
-  max-width: 340px; padding: 9px 14px; border-radius: 8px;
-  font-size: var(--body-sm-font-size); line-height: 1.4; color: var(--text-default);
-  background: var(--bg-overlay-l2, #2b2f36); border: 1px solid var(--border-neutral-l2);
-  box-shadow: 0 4px 14px rgba(0,0,0,.22);
-  opacity: 0; transform: translateY(8px); transition: opacity .25s ease, transform .25s ease;
-}
-.toast--show { opacity: 1; transform: translateY(0); }
-.toast--error { border-color: var(--status-error-default); color: var(--status-error-default); }
-.toast {
   max-width: 360px; padding: 10px 14px; border-radius: 8px;
-  font-size: var(--body-sm-font-size); line-height: 1.4; color: var(--text-default);
-  background: var(--bg-overlay-l2, #2b2f36); border: 1px solid var(--border-neutral-l2);
-  box-shadow: 0 4px 14px rgba(0,0,0,.22);
+  font-size: var(--body-sm-font-size); line-height: 1.4;
+  color: var(--text-default);
+  background: var(--toast-bg, var(--bg-base-tertiary, #ffffff));
+  border: 1px solid var(--toast-border, var(--border-neutral-l2, #d0d0d0));
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--text-default) 12%, transparent);
   display: flex; align-items: flex-start; gap: 8px;
   opacity: 0; transform: translateY(8px); transition: opacity .25s ease, transform .25s ease;
 }
@@ -5335,6 +5333,9 @@ body.mask-mode .center-top { min-height: 0; max-height: none; }
 .toast__text { flex: 1 1 auto; min-width: 0; word-break: break-all; }
 .toast--show { opacity: 1; transform: translateY(0); }
 .toast--error { border-color: var(--status-error-default); color: var(--status-error-default); }
+.toast--error .toast__text { color: var(--text-default); }
 .toast--ok { border-color: var(--status-success-default); color: var(--status-success-default); }
+.toast--ok .toast__text { color: var(--text-default); }
 .toast--warn { border-color: var(--status-warning-default); color: var(--status-warning-default); }
-.toast--info { border-color: var(--border-neutral-l2); color: var(--text-default); }
+.toast--warn .toast__text { color: var(--text-default); }
+.toast--info { border-color: var(--toast-border, var(--border-neutral-l2, #d0d0d0)); color: var(--text-default); }

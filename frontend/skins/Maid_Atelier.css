@@ -1643,4 +1643,6 @@ html[data-skin="Maid_Atelier"] .modal-btn--primary {
 html[data-skin="Maid_Atelier"] .modal-btn--primary:hover {
   background: var(--brand-500);
   border-color: var(--brand-500);
-}
+}  /* toast 固定实色（深海蓝浮层：深蓝卡片 + 海蓝边框） */
+  --toast-bg: #14264f;
+  --toast-border: #2c4a97;

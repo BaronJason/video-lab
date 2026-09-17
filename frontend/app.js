@@ -2771,17 +2771,20 @@
       var bothDesc = hasOther
         ? '连同该日期下的【' + otherName + '】TXT一并删除（成片保留）'
         : '不可用（该日期下没有对应的【' + otherName + '】TXT）';
+      // 外部 * 配置（文件名含 *）：位于成片文件夹之外，其「成片」不在本分支目录内，
+      // 整体删除会连累同目录下其它任务的产物 → 禁用「连同成片移除」
+      var isStar = /[*＊]/.test(String(target).replace(/[\\/][^\\/]*$/, '').split(/[\\/]/).pop()) || /[*＊]/.test(String(target).split(/[\\/]/).pop());
       showDialog({
         title: '移除该' + modeName,
         cssClass: 'modal-card--wide',
         message: target + '\n\n请选择移除方式：\n' +
           '· 仅移除该' + modeName + '：只删除当前【' + modeName + '】文件\n' +
           '· ' + bothLabel + '：' + bothDesc + '\n' +
-          '· 连同成片移除：删除整个文件夹（含成片视频）',
+          (isStar ? '· 连同成片移除：不可用（外部 * 配置没有自成片文件夹，整体删除会误删其它任务产物）' : '· 连同成片移除：删除整个文件夹（含成片视频）'),
         buttons: [
           { label: '仅移除该' + modeName, value: 'txt', primary: true },
           { label: bothLabel, value: 'both', primary: true, disabled: !hasOther, hint: hasOther ? '' : '该日期下没有对应的' + otherName + 'TXT' },
-          { label: '连同成片移除', value: 'folder', danger: true }
+          { label: '连同成片移除', value: 'folder', danger: true, disabled: isStar, hint: isStar ? '外部 * 配置不能整体删除，会误删其它任务产物' : '' }
         ]
       }).then(function (v) {
         if (!v) return;
@@ -2789,7 +2792,7 @@
           var targetDir = String(target).replace(/[\\/][^\\/]*$/, '');
           showDialog({
             title: '确认整体删除',
-            message: '将删除整个文件夹（含成片视频及全部子项）：\n' + targetDir + '\n\n删除后无法恢复，是否继续？',
+            message: '将整个文件夹（含成片视频及全部子项）移入回收站：\n' + targetDir + '\n\n如误删可从回收站还原，是否继续？',
             buttons: [ { label: '继续删除', value: 'go', danger: true, primary: true } ]
           }).then(function (ok) { if (ok) doRemoveBranch(target, v); });
         } else doRemoveBranch(target, v);
@@ -2798,7 +2801,7 @@
     function doRemoveBranch(target, scope) {
       call('remove_branch', target, scope).then(function (r) {
         if (!(r && r.ok)) { setStatus('移除失败：' + ((r && r.error) || '未知错误')); return; }
-        setStatus('已移除' + (scope === 'folder' ? '日期文件夹' : '分支文件') + '，并清理空文件夹');
+        setStatus('已移除' + (scope === 'folder' ? '日期文件夹' : '分支文件') + '，已移入回收站');
         refreshData();
       }).catch(function (err) { setStatus('移除失败：' + err.message); });
     }

@@ -986,9 +986,14 @@ class Api {
       if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return { ok: false, error: '文件不存在：' + filePath };
       const dir = path.dirname(filePath);
       const mode = scope === 'folder' ? 'folder' : (scope === 'both' ? 'both' : 'txt');
+      // 外部 * 配置（文件名含 *，位于成片文件夹之外）：其成片不在本分支目录内，逐块删除整个文件夹
+      // 会连累同目录下其它任务的产物 → 拒绝 folder 整体删除，仅允许 txt/both
+      const isStarConfig = /[*＊]/.test(path.basename(filePath));
+      if (mode === 'folder' && isStarConfig) return { ok: false, error: '外部 * 配置没有自成片文件夹，不能整体删除；请选「仅移除该配置」' };
       if (mode === 'folder') {
         if (dir.length <= root.length) return { ok: false, error: '不允许删除工作根目录' };
-        this._rmtree(dir);
+        // 整个文件夹走回收站（可还原），不再递归永久删除
+        if (!this._recycleFile(dir)) return { ok: false, error: '移入回收站失败' };
       } else {
         if (mode === 'both') {
           let entries = [];
@@ -997,11 +1002,11 @@ class Api {
             const full = path.join(dir, String(ent));
             let st;
             try { st = fs.statSync(full); } catch (e) { continue; }
-            if (st.isFile() && String(ent).toLowerCase().endsWith('.txt')) { try { fs.unlinkSync(full); } catch (e) {} }
+            if (st.isFile() && String(ent).toLowerCase().endsWith('.txt')) this._recycleFile(full);
           }
         } else {
           if (!filePath.toLowerCase().endsWith('.txt')) return { ok: false, error: '仅支持移除 TXT 分支' };
-          fs.unlinkSync(filePath);
+          this._recycleFile(filePath);
         }
       }
       // 逐级向上删除空目录：任一目录非空即停止；到工作根为止，不会越界

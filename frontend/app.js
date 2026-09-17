@@ -2771,20 +2771,30 @@
       var bothDesc = hasOther
         ? '连同该日期下的【' + otherName + '】TXT一并删除（成片保留）'
         : '不可用（该日期下没有对应的【' + otherName + '】TXT）';
-      // 外部 * 配置（文件名含 *）：位于成片文件夹之外，其「成片」不在本分支目录内，
-      // 整体删除会连累同目录下其它任务的产物 → 禁用「连同成片移除」
-      var isStar = /[*＊]/.test(String(target).replace(/[\\/][^\\/]*$/, '').split(/[\\/]/).pop()) || /[*＊]/.test(String(target).split(/[\\/]/).pop());
+      // 外部 * 配置（文件名含 *）：位于成片文件夹之外，无自成片文件夹，仅能移除该配置 → 直接简化确认
+      var isStar = /[*＊]/.test(String(target).split(/[\\/]/).pop());
+      if (isStar) {
+        showDialog({
+          title: '移除该' + modeName,
+          message: target + '\n\n确认移除该外部配置（仅删除当前【' + modeName + '】文件，不影响成片）？',
+          buttons: [
+            { label: '取消', value: 0 },
+            { label: '移除该' + modeName, value: 1, primary: true, danger: true }
+          ]
+        }).then(function (v) { if (v === 1) doRemoveBranch(target, 'txt'); });
+        return;
+      }
       showDialog({
         title: '移除该' + modeName,
         cssClass: 'modal-card--wide',
         message: target + '\n\n请选择移除方式：\n' +
           '· 仅移除该' + modeName + '：只删除当前【' + modeName + '】文件\n' +
           '· ' + bothLabel + '：' + bothDesc + '\n' +
-          (isStar ? '· 连同成片移除：不可用（外部 * 配置没有自成片文件夹，整体删除会误删其它任务产物）' : '· 连同成片移除：删除整个文件夹（含成片视频）'),
+          '· 连同成片移除：删除整个文件夹（含成片视频）',
         buttons: [
           { label: '仅移除该' + modeName, value: 'txt', primary: true },
           { label: bothLabel, value: 'both', primary: true, disabled: !hasOther, hint: hasOther ? '' : '该日期下没有对应的' + otherName + 'TXT' },
-          { label: '连同成片移除', value: 'folder', danger: true, disabled: isStar, hint: isStar ? '外部 * 配置不能整体删除，会误删其它任务产物' : '' }
+          { label: '连同成片移除', value: 'folder', danger: true }
         ]
       }).then(function (v) {
         if (!v) return;

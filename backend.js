@@ -2477,8 +2477,10 @@ class Api {
         }
         restored._savedLogLen = restored.log.length; // 已与库一致，避免下次持久化重复重写
         this.tasks.set(restored.id, restored);
+        // 历史脏 ID 的数字部分曾被推到天文数字（科学计数法形态）：超出安全整数一律不采纳，
+        // 否则 taskSeq 永远停在 e 记法大数上，新 ID 的数字部分 ++ 无效且只能靠时间戳后缀保唯一
         const n = parseInt(String(t.id).replace(/\D/g, ''), 10);
-        if (n > this.taskSeq) this.taskSeq = n;
+        if (Number.isSafeInteger(n) && n > this.taskSeq) this.taskSeq = n;
       }
       const planSeq = parseInt(store.getKv('plan_seq') || '0', 10) || 0;
       if (planSeq > this._planSeq) this._planSeq = planSeq;

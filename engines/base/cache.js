@@ -307,13 +307,14 @@ class CacheStore {
 
   // 全量替换（重置预检测后一次性写入）：单事务。
   // 只替换「本次掩码范围内」的条目 —— 其它作用域（如遮罩）的探测结果不属于预检测，不得被重置清掉。
-  // 使用计数与作用域标记按路径保留：入参 map 来自 loadVideoMap()（不含这两项），
-  // 若直接重插会让「重置预检测」把全部计数清零 —— 计数是跨轮次的业务数据，不随探测缓存重建而失效。
+  // 使用计数与作用域标记按路径保留；**本次替换范围外但有计数的行，重建为「纯计数行」**
+  // （探测数据清空、计数与作用域保留）—— 使用计数是跨轮次的业务数据，
+  // 不因「重置预检测」或「素材不在当前配置里」而丢失；其文件存在性交由 GC 按软删除语义核验。
   replaceVideoMap(map, opts) {
     const mask = scopesMaskOf(opts);
     const sc = Number(opts && opts.scopes) || SCOPES_DEFAULT;
     const db = this.open();
-    let n = 0;
+    let n = 0, orphans = 0;
     this.transaction(() => {
       const keep = new Map();
       for (const r of db.prepare('SELECT path, usage_count, scopes FROM video_cache').all()) {
@@ -322,16 +323,27 @@ class CacheStore {
       db.prepare('DELETE FROM video_cache WHERE (scopes & ?) != 0').run(mask);
       const step = db.prepare(`INSERT INTO video_cache (path, last_write, duration, width, height, valid, usage_count, scopes, file_size, missing_since)
                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`);
+      const inMap = new Set();
       for (const k of Object.keys(map || {})) {
         const info = map[k] || {};
         const prev = keep.get(String(k));
         step.run(String(k), String(info.LastWriteTime == null ? '' : info.LastWriteTime),
           Number(info.Duration) || 0, Number(info.Width) || 0, Number(info.Height) || 0, info.Valid ? 1 : 0,
           prev ? prev.usage : 0, sc | (prev ? prev.scopes : 0), Number(info.FileSize) || 0);
+        inMap.add(String(k));
         n++;
       }
+      // 配置外但有计数的行：重建纯计数行（探测数据为空，待 GC/预检测重新核验与探测）
+      const orphanStep = db.prepare(`INSERT INTO video_cache (path, last_write, duration, width, height, valid, usage_count, scopes, file_size, missing_since)
+                                     VALUES (?, '', 0, 0, 0, 0, ?, ?, 0, 0)`);
+      for (const [k, v] of keep) {
+        if (inMap.has(k) || !(v.usage > 0)) continue;
+        if ((v.scopes & mask) === 0) continue; // 其它作用域的行未被删除，无需重建
+        orphanStep.run(k, v.usage, v.scopes);
+        orphans++;
+      }
     });
-    return n;
+    return { replaced: n, orphaned: orphans };
   }
 
   // 覆盖式设置使用计数（legacy 回写用：JSON 侧计数是权威快照，须覆盖而非累加）；行不存在则新建

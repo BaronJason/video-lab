@@ -74,16 +74,26 @@
   }
   // 记录最后一次点击的可作为锚点的元素：气泡确认未显式传 anchor 时用它定位，
   // 使既有 showDialog 调用点改成气泡时几乎无需改动（气泡内部交互不更新锚点）
-  var _popAnchor = null; // { el, rect }：rect 为按下瞬间的位置快照，供元素随后被移除（如右键菜单关闭）时仍能定位
+  var _popAnchor = null; // { el, rect }：rect 为元素当时的位置快照，供元素随后被移除（如右键菜单关闭）时仍能定位
+  // 设置气泡的归属锚点：气泡应锚在「被操作对象」上（如日期分支按钮、任务卡片），而非临时菜单项
+  function setPopAnchor(el) {
+    if (!el || !el.getBoundingClientRect) return;
+    var r = el.getBoundingClientRect();
+    _popAnchor = { el: el, rect: { left: r.left, top: r.top, width: r.width, height: r.height, right: r.right, bottom: r.bottom } };
+  }
   document.addEventListener('mousedown', function (e) {
     var t = e.target;
     if (!t || !t.closest) return;
     if (t.closest('.vl-pop')) return;
-    var el = t.closest('button, .btn, [role="button"], a, .menu-item, .ctx-menu button, .date-branch-btn, .list-row, .log-row');
-    if (el) {
-      var r = el.getBoundingClientRect();
-      _popAnchor = { el: el, rect: { left: r.left, top: r.top, width: r.width, height: r.height, right: r.right, bottom: r.bottom } };
-    }
+    setPopAnchor(t.closest('button, .btn, [role="button"], a, .menu-item, .ctx-menu button, .date-branch-btn, .list-row, .log-row'));
+  }, true);
+  // 右键目标元素：作为「该菜单操作」气泡的归属锚点 —— 气泡应锚在「被操作对象」（如日期分支按钮）上，
+  // 而不是临时菜单项；菜单关闭后仍能凭此定位
+  var _ctxOwner = null;
+  document.addEventListener('contextmenu', function (e) {
+    var t = e.target;
+    if (!t || !t.closest || t.closest('.vl-pop')) return;
+    _ctxOwner = t.closest('.date-branch-btn, .log-entry__clip, .log-entry, .tree-project__name, .mask-file-item, .mask-folder-row, .mask-group-file, .mask-group-head') || t;
   }, true);
   // 锚定气泡确认：贴着触发元素弹小浮层（取代居中大窗），仅「取消 / 一个动作」两选一。
   // opts: { title, message, okLabel, cancelLabel, danger }；anchor 省略时用最后点击的元素。
@@ -322,7 +332,9 @@
       });
     }).catch(function (err) { toast('读取项目设置失败：' + err.message, true); });
   }
-  function showMenu(x, y, items) {
+  // ownerEl：气泡的归属元素（被右键/点击操作的对象）。菜单项点击后菜单即移除，
+  // 故把锚点改回归属元素，使气泡出现在「真正的对象」旁，而不是菜单项位置。
+  function showMenu(x, y, items, ownerEl) {
     var old = document.getElementById('ctxMenu');
     if (old) old.remove();
     var m = document.createElement('div');
@@ -339,7 +351,7 @@
       b.addEventListener('click', function () { close(); toast(it.title || it.label + '不可用', true); });
       return;
     }
-      b.addEventListener('click', function () { m.remove(); it.action(); });
+      b.addEventListener('click', function () { m.remove(); setPopAnchor(ownerEl || _ctxOwner); it.action(); });
     });
     document.body.appendChild(m);
     m.style.left = x + 'px'; m.style.top = y + 'px';
@@ -1205,9 +1217,14 @@
         if (badge) { badge.className = 'config-path-row__badge ' + cls; badge.textContent = r.text || ''; }
         else { span.className = 'config-path-row__precheck ' + cls; span.textContent = r.text || ''; }
       });
+      // 成片数默认值（预检测视频总数）与「默认分组数」一致：以占位符展示、不写入 value，
+      // 用户不填写时沿用该默认值，一旦填写即用自己的数量
       var def = (results.length && results[0] && results[0].total) ? String(results[0].total) : '';
       var filmInput = $('inputFilmCount');
-      if (filmInput) filmInput.value = def;
+      if (filmInput) {
+        filmInput.placeholder = def || '必填';
+        filmInput.title = def ? '默认成片数量 ' + def + '（预检测视频总数），留空则使用该值' : '必填';
+      }
       state.precheckInvalid = anyWarn;
       applyPrecheckValidity();
     }).catch(function () {
@@ -1594,8 +1611,10 @@
     if (_envBad()) { setStatus('运行环境缺失'); return; }
     if (state.watermarkMissing) { setStatus('水印文件不存在，无法启动脚本'); return; }
     if (!state.activeVersion) return;
-    var count = $('inputFilmCount').value.trim();
-    if (!count || !/^\d+$/.test(count) || parseInt(count, 10) < 1) { var errEl2 = $('filmCountError'); if (errEl2) errEl2.style.display = ''; $('inputFilmCount').focus(); return; }
+    // 成片数：显式填写优先；留空则沿用占位符所示的默认值（预检测视频总数）
+    var fcInp = $('inputFilmCount');
+    var count = (fcInp.value.trim() || fcInp.placeholder || '').trim();
+    if (!count || !/^\d+$/.test(count) || parseInt(count, 10) < 1) { var errEl2 = $('filmCountError'); if (errEl2) errEl2.style.display = ''; fcInp.focus(); return; }
     var errEl = $('filmCountError'); if (errEl) errEl.style.display = 'none';
     if (!state.activeProject || !state.activeTxt) return;
     var ed = getEditorState();
@@ -2948,6 +2967,8 @@
         }
       });
       document.addEventListener('mousedown', function (e) { if (!menu.contains(e.target) && e.target !== menuBtn) closeMenu(); });
+      // 侧栏菜单项操作的气泡统一锚到菜单按钮（而非菜单项本身）
+      menu.addEventListener('click', function () { setPopAnchor(menuBtn); }, true);
       // 菜单项动作
       $('menuRefreshConfigs').addEventListener('click', function () { closeMenu(); refreshConfigsFlow(); });   // 刷新配置列表（含清理重复外部 *）
       $('menuChoosePath').addEventListener('click', function () { closeMenu(); choosePath(); });

@@ -336,13 +336,17 @@
   }
   function setStatus(msg, ok) {
     var el = $('settingsStatus');
-    el.textContent = msg;
-    el.classList.toggle('is-error', !ok);
-    // 结果类提示一并 toast（失败必弹、成功也弹），「正在…」等过程提示跳过以免打扰
     var s = String(msg || '');
-    if (s && !/^正在/.test(s) && !/…$/.test(s) && !/\.\.\.$/.test(s)) {
-      toast(s, ok === false ? 'error' : 'ok');
+    // 过程提示（「正在…」）只写状态栏小字；结果提示只走 toast —— 同一件事不再双份提示
+    var isProgress = /^正在/.test(s) || /…$/.test(s) || /\.\.\.$/.test(s);
+    if (isProgress) {
+      el.textContent = s;
+      el.classList.toggle('is-error', !ok);
+      return;
     }
+    el.textContent = '';
+    el.classList.remove('is-error');
+    if (s) toast(s, ok === false ? 'error' : 'ok');
   }
   function statusTimer() { setStatus('', true); }
 

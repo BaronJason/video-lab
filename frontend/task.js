@@ -57,7 +57,7 @@
     var rootEl = currentRootMenu(), subEl = currentSubEl();
     if (rootEl && (rootEl.contains(e.target) || (subEl && subEl.contains(e.target)))) subTimerClear();
   }
-  function showMenu(x, y, items) {
+  function showMenu(x, y, items, ownerEl) {
     var old = currentRootMenu();
     if (old) old.remove();
     var m = document.createElement('div');
@@ -81,7 +81,7 @@
         b.addEventListener('click', function (ev) { ev.stopPropagation(); });
         return;
       }
-      b.addEventListener('click', function () { teardownMenu(); it.action(); });
+      b.addEventListener('click', function () { teardownMenu(); setPopAnchor(ownerEl || _ctxOwner); it.action(); });
     });
     document.body.appendChild(m);
     m.style.left = Math.max(4, Math.min(x, window.innerWidth - 200)) + 'px';
@@ -103,7 +103,7 @@
       var b = document.createElement('button');
       b.type = 'button';
       b.textContent = it.label;
-      b.addEventListener('click', function () { teardownMenu(); it.action(); });
+      b.addEventListener('click', function () { teardownMenu(); setPopAnchor(_ctxOwner); it.action(); });
       el.appendChild(b);
     });
     el.style.top = Math.max(4, Math.min(r.top, window.innerHeight - sub.length * 30 - 8)) + 'px';
@@ -184,16 +184,25 @@
     }, 3200);
   }
   // 记录最后一次点击的可作为锚点的元素：气泡确认未显式传 anchor 时用它定位（气泡内部交互不更新）
-  var _popAnchor = null; // { el, rect }：rect 为按下瞬间的位置快照，供元素随后被移除时仍能定位
+  var _popAnchor = null; // { el, rect }：rect 为元素当时的位置快照，供元素随后被移除时仍能定位
+  // 设置气泡的归属锚点：气泡应锚在「被操作对象」（如任务卡片）上，而非临时菜单项
+  function setPopAnchor(el) {
+    if (!el || !el.getBoundingClientRect) return;
+    var r = el.getBoundingClientRect();
+    _popAnchor = { el: el, rect: { left: r.left, top: r.top, width: r.width, height: r.height, right: r.right, bottom: r.bottom } };
+  }
   document.addEventListener('mousedown', function (e) {
     var t = e.target;
     if (!t || !t.closest) return;
     if (t.closest('.vl-pop')) return;
-    var el = t.closest('button, .btn, [role="button"], a, .menu-item');
-    if (el) {
-      var r = el.getBoundingClientRect();
-      _popAnchor = { el: el, rect: { left: r.left, top: r.top, width: r.width, height: r.height, right: r.right, bottom: r.bottom } };
-    }
+    setPopAnchor(t.closest('button, .btn, [role="button"], a, .menu-item'));
+  }, true);
+  // 右键目标元素：作为该菜单操作气泡的归属锚点（如任务卡片 / 日期分组头）
+  var _ctxOwner = null;
+  document.addEventListener('contextmenu', function (e) {
+    var t = e.target;
+    if (!t || !t.closest || t.closest('.vl-pop')) return;
+    _ctxOwner = t.closest('.task-card, .task-day-group') || t;
   }, true);
   // 锚定气泡确认：贴着触发元素弹小浮层（取代居中大窗），仅「取消 / 一个动作」两选一。
   // opts: { title, message, okLabel, cancelLabel, danger }；anchor 省略时用最后点击的元素。

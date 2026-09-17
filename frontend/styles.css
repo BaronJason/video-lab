@@ -4397,6 +4397,15 @@ body[data-preview-collapsed] .center-global-search .ds-input {
   color: var(--text-disabled);
   background: transparent;
 }
+/* 变灰项仍可点击（点击弹 toast 说明）：同 disabled 的灰显外观，但保留可点光标 */
+.ctx-menu .ctx-menu__btn--disabled {
+  color: var(--text-disabled);
+  background: transparent;
+}
+.ctx-menu .ctx-menu__btn--disabled:hover {
+  color: var(--text-disabled);
+  background: transparent;
+}
 /* 带子菜单的项：右侧箭头提示 */
 .ctx-menu__item--has-sub {
   display: flex !important;
@@ -5339,3 +5348,10 @@ body.mask-mode .center-top { min-height: 0; max-height: none; }
 .toast--warn { border-color: var(--status-warning-default); color: var(--status-warning-default); }
 .toast--warn .toast__text { color: var(--text-default); }
 .toast--info { border-color: var(--toast-border, var(--border-neutral-l2, #d0d0d0)); color: var(--text-default); }
+/* 统一灰显按钮（模拟 disabled 外观，但保留可点 → 点击弹 toast 说明，见 app.js/task.js 全局委托） */
+button.is-vl-disabled {
+  color: var(--text-disabled) !important;
+  background: transparent !important;
+  border-color: var(--border-neutral-l2) !important;
+  opacity: .6;
+}

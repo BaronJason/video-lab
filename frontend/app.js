@@ -42,8 +42,8 @@
     if (p) h += '<div class="config-watermark__path" title="' + escapeHtml(p) + '">' + escapeHtml(baseNameNoExt(p)) + '</div>';
     else h += '<div class="config-watermark__path config-watermark__path--empty" title="点击更换水印">未设置水印</div>';
     if (showActions) {
-      h += '<button type="button" class="config-watermark__btn" data-wm="open" title="打开文件"' + (p ? '' : ' disabled') + '>' + icon('image', 15) + '</button>';
-      h += '<button type="button" class="config-watermark__btn" data-wm="folder" title="打开文件夹"' + (p ? '' : ' disabled') + '>' + icon('folder-open', 15) + '</button>';
+      h += '<button type="button" class="config-watermark__btn' + (p ? '' : ' is-vl-disabled') + '" data-wm="open" title="打开文件"' + (p ? '' : ' data-why="未设置主流水印"') + '>' + icon('image', 15) + '</button>';
+      h += '<button type="button" class="config-watermark__btn' + (p ? '' : ' is-vl-disabled') + '" data-wm="folder" title="打开文件夹"' + (p ? '' : ' data-why="未设置主流水印"') + '>' + icon('folder-open', 15) + '</button>';
     }
     return h + '</div>';
   }
@@ -95,7 +95,17 @@
       var closeBtn = card.querySelector('.modal-close');
       if (closeBtn) closeBtn.addEventListener('click', function () { done(null); });
       var btns = card.querySelectorAll('.modal-btn');
-      (opts.buttons || []).forEach(function (b, i) { btns[i].addEventListener('click', function () { done(b.value); }); });
+      (opts.buttons || []).forEach(function (b, i) {
+        if (b.disabled) {
+          // 弹窗内灰显按钮统一由全局 is-vl-disabled 委托弹 toast（此处仅加灰显类，不再自绑）
+          btns[i].classList.add('is-vl-disabled');
+          btns[i].removeAttribute('disabled');
+          if (b.hint) btns[i].setAttribute('data-why', b.hint);
+          btns[i].addEventListener('click', function (e) { e.stopPropagation(); });
+        } else {
+          btns[i].addEventListener('click', function () { done(b.value); });
+        }
+      });
     });
   }
   // 保存归属选择弹窗：每行左侧提示"保存到 XX 项目：<项目名>"，右侧统一「保存」按钮（右对齐、样式一致）
@@ -161,9 +171,15 @@
           call('pick_watermark', curWm).then(function (p) { if (p) { curWm = p; renderRow(); } });
         });
         var bOpen = root.querySelector('[data-wm="open"]');
-        if (bOpen) bOpen.addEventListener('click', function () { if (curWm) call('open_path', curWm); });
+        if (bOpen) bOpen.addEventListener('click', function () {
+          if (curWm) call('open_path', curWm);
+          else toast('未设置主流水印，无法打开文件', true);
+        });
         var bFold = root.querySelector('[data-wm="folder"]');
-        if (bFold) bFold.addEventListener('click', function () { if (curWm) call('open_folder_select', curWm); });
+        if (bFold) bFold.addEventListener('click', function () {
+          if (curWm) call('open_folder_select', curWm);
+          else toast('未设置主流水印，无法打开文件夹', true);
+        });
       }
       function renderRow() { row.innerHTML = wmRowHtml(curWm, false); bindWmRow(row); }
       renderRow();
@@ -254,6 +270,18 @@
   function getApi() {
     return window.txapi || (window.pywebview && window.pywebview.api) || null;
   }
+  // 全局统一：灰显按钮（.is-vl-disabled）点击弹 toast 说明不可用原因（不开新窗）。
+  // 捕获阶段拦截，优先于业务点击处理；水印行/模式切换等所有 is-vl-disabled 按钮统一走此
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    if (t && t.closest && t.closest('.is-vl-disabled')) {
+      var el = t.closest('.is-vl-disabled');
+      var why = el.getAttribute && (el.getAttribute('data-why') || el.title || '');
+      if (why) toast(why, true);
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, true);
   function call(method) {
     var args = Array.prototype.slice.call(arguments, 1);
     var api = getApi();
@@ -630,19 +658,19 @@
   function updateModeToggle() {
     var ml = $('modeLog'), mf = $('modeFilelist');
     if (!ml || !mf) return;
-    ml.disabled = false; ml.title = '';
-    mf.disabled = false; mf.title = '';
+    ml.classList.remove('is-vl-disabled'); ml.removeAttribute('data-why'); ml.title = '';
+    mf.classList.remove('is-vl-disabled'); mf.removeAttribute('data-why'); mf.title = '';
     if (state.activeProject === REPLICA_PROJECT) {
-      mf.disabled = true; mf.title = '复刻模式无配置文件';
+      mf.classList.add('is-vl-disabled'); mf.setAttribute('data-why', '复刻模式无配置文件'); mf.title = '复刻模式无配置文件';
       return;
     }
     if (state.mode === 'filelist') {
-      if (!state.activeVersion) { ml.disabled = true; ml.title = '该配置文件没有对应日志'; return; }
+      if (!state.activeVersion) { ml.classList.add('is-vl-disabled'); ml.setAttribute('data-why', '该配置文件没有对应日志'); ml.title = '该配置文件没有对应日志'; return; }
       var d = mmddOf(state.activeVersion.label);
-      if (!d || !state.activeVersion.hasLog) { ml.disabled = true; ml.title = '该配置文件没有对应日志'; }
+      if (!d || !state.activeVersion.hasLog) { ml.classList.add('is-vl-disabled'); ml.setAttribute('data-why', '该配置文件没有对应日志'); ml.title = '该配置文件没有对应日志'; }
     } else if (state.mode === 'log') {
-      if (!state.activeLogDate) { mf.disabled = true; mf.title = '该日志没有对应日期的配置'; return; }
-      if (!logDateHasConfig()) { mf.disabled = true; mf.title = '该日志没有对应日期的配置'; }
+      if (!state.activeLogDate) { mf.classList.add('is-vl-disabled'); mf.setAttribute('data-why', '该日志没有对应日期的配置'); mf.title = '该日志没有对应日期的配置'; return; }
+      if (!logDateHasConfig()) { mf.classList.add('is-vl-disabled'); mf.setAttribute('data-why', '该日志没有对应日期的配置'); mf.title = '该日志没有对应日期的配置'; }
     }
   }
   function buildDateBranches(silent) {

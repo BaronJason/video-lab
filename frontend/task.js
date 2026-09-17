@@ -158,8 +158,9 @@
   function alertDialog(message) {
     return showDialog({ title: '提示', message: message, buttons: [{ label: '知道了', value: true, primary: true }] });
   }
-  // 轻量角落提示（toast）：仅告知、无需用户操作，自动消失。用于打开失败等「知道即可」的通知，不开大窗
-  function toast(message, isError) {
+  // 轻量角落提示（toast）：仅告知、无需用户操作，自动消失。type：ok(✓绿)/error(⚠红)/info(ℹ)/warn(黄)
+  // 用于操作结果与失败提示，比状态栏小字更显眼，且不开大窗
+  function toast(message, type) {
     var host = document.getElementById('toastHost');
     if (!host) {
       host = document.createElement('div');
@@ -168,8 +169,13 @@
       document.body.appendChild(host);
     }
     var el = document.createElement('div');
-    el.className = 'toast' + (isError ? ' toast--error' : '');
-    el.textContent = String(message || '');
+    var t = type === true ? 'error' : (String(type || 'info'));
+    var ic = t === 'ok' ? '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>'
+      : t === 'error' ? '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg>'
+      : '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="16" y2="12"/><line x1="12" x2="12.01" y1="8" y2="8"/></svg>';
+    el.className = 'toast toast--' + t;
+    el.innerHTML = '<span class="toast__icon">' + ic + '</span><span class="toast__text"></span>';
+    el.querySelector('.toast__text').textContent = String(message || '');
     host.appendChild(el);
     requestAnimationFrame(function () { el.classList.add('toast--show'); });
     setTimeout(function () {

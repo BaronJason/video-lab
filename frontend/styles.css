@@ -5323,3 +5323,18 @@ body.mask-mode .center-top { min-height: 0; max-height: none; }
 }
 .toast--show { opacity: 1; transform: translateY(0); }
 .toast--error { border-color: var(--status-error-default); color: var(--status-error-default); }
+.toast {
+  max-width: 360px; padding: 10px 14px; border-radius: 8px;
+  font-size: var(--body-sm-font-size); line-height: 1.4; color: var(--text-default);
+  background: var(--bg-overlay-l2, #2b2f36); border: 1px solid var(--border-neutral-l2);
+  box-shadow: 0 4px 14px rgba(0,0,0,.22);
+  display: flex; align-items: flex-start; gap: 8px;
+  opacity: 0; transform: translateY(8px); transition: opacity .25s ease, transform .25s ease;
+}
+.toast__icon { flex-shrink: 0; display: inline-flex; margin-top: 1px; }
+.toast__text { flex: 1 1 auto; min-width: 0; word-break: break-all; }
+.toast--show { opacity: 1; transform: translateY(0); }
+.toast--error { border-color: var(--status-error-default); color: var(--status-error-default); }
+.toast--ok { border-color: var(--status-success-default); color: var(--status-success-default); }
+.toast--warn { border-color: var(--status-warning-default); color: var(--status-warning-default); }
+.toast--info { border-color: var(--border-neutral-l2); color: var(--text-default); }

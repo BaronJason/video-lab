@@ -47,8 +47,9 @@
     }
     return h + '</div>';
   }
-  // 轻量角落提示（toast）：仅告知、无需用户操作，自动消失。用于打开/保存失败等「知道即可」的通知，不开大窗
-  function toast(message, isError) {
+  // 轻量角落提示（toast）：仅告知、无需用户操作，自动消失。type：ok(✓绿)/error(⚠红)/info(ℹ)/warn(黄)
+  // 用于保存/删除/迁移等操作结果与失败提示，比状态栏小字更显眼，且不开大窗
+  function toast(message, type) {
     var host = document.getElementById('toastHost');
     if (!host) {
       host = document.createElement('div');
@@ -57,8 +58,13 @@
       document.body.appendChild(host);
     }
     var el = document.createElement('div');
-    el.className = 'toast' + (isError ? ' toast--error' : '');
-    el.textContent = String(message || '');
+    var t = type === true ? 'error' : (String(type || 'info'));
+    var ic = t === 'ok' ? '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>'
+      : t === 'error' ? '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg>'
+      : '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="16" y2="12"/><line x1="12" x2="12.01" y1="8" y2="8"/></svg>';
+    el.className = 'toast toast--' + t;
+    el.innerHTML = '<span class="toast__icon">' + ic + '</span><span class="toast__text"></span>';
+    el.querySelector('.toast__text').textContent = String(message || '');
     host.appendChild(el);
     requestAnimationFrame(function () { el.classList.add('toast--show'); });
     setTimeout(function () {
@@ -985,7 +991,7 @@
       call('run_replica', it.path, mode, it.video).then(function (r) {
         done++;
         if (!(r && r.ok)) setStatus('启动失败：' + ((r && r.error) || '未知错误'));
-        else if (done === cnt) { setStatus('已全部启动 ' + cnt + ' 个批量复刻脚本'); }
+        else if (done === cnt) { toast('已全部启动 ' + cnt + ' 个批量复刻脚本', 'ok'); }
       }).catch(function () { done++; });
     });
     // 批量启动完成后退出选择模式
@@ -1370,14 +1376,14 @@
       if (dest !== state.activeProject) {
         // 另存到其他项目：原文件保留
         return saveAsToProject(dest, ed).then(function (r) {
-          if (r.ok) { setStatus('已另存到项目「' + dest + '」：' + r.path); refreshData(); return true; }
+          if (r.ok) { toast('已另存到项目「' + dest + '」', 'ok'); refreshData(); return true; }
           setStatus('保存失败：' + ((r && r.error) || '未知错误')); return false;
         }).catch(function (e) { setStatus('保存失败：' + e.message); return false; });
       }
       var go = function () {
         return call('save_config', path, ed.folders, ed.excludes, ed.watermark).then(function (r) {
           if (r && r.ok) {
-            setStatus('已保存：' + path); refreshData();
+            toast('已保存：' + path, 'ok'); refreshData();
             document.querySelectorAll('.config-exclude-row[data-deleted="1"]').forEach(function (rr) { rr.remove(); });
             document.querySelectorAll('.config-path-row[data-deleted="1"]').forEach(function (rr) { rr.remove(); });
             state._configOrigSnapshot = configSnapshot(); refreshConfigModified();
@@ -1401,7 +1407,7 @@
     return resolveDestProject().then(function (dest) {
       if (dest === null) { setStatus('已取消保存'); return false; }
       return call('save_config_today', dest, state.activeTxt, configName, ed.folders, ed.excludes, ed.watermark).then(function (r) {
-        if (r && r.ok) { setStatus('已保存为当日配置：' + r.path); jumpToVersionPath(r.path, dest); return true; }
+        if (r && r.ok) { toast('已保存为当日配置', 'ok'); jumpToVersionPath(r.path, dest); return true; }
         setStatus('保存失败：' + ((r && r.error) || '未知错误')); return false;
       }).catch(function (e) { setStatus('保存失败：' + e.message); return false; });
     }).catch(function (e) { setStatus('保存失败：' + e.message); return false; });
@@ -1465,7 +1471,7 @@
     if (!pr) { setStatus('请先在项目列表中选择要新增配置的项目'); return; }
     call('new_empty_config', pr).then(function (r) {
       if (!(r && r.ok)) { setStatus('新增配置失败：' + ((r && r.error) || '未知错误')); return; }
-      setStatus('已新增空白配置：' + r.path);
+      toast('已新增空白配置', 'ok');
       jumpToVersionPath(r.path, pr);
     }).catch(function (e) { setStatus('新增配置失败：' + e.message); });
   }
@@ -1484,7 +1490,7 @@
         if (dest === null) { setStatus('已取消启动'); return; }
         call('save_config_today', dest, state.activeTxt, configName, ed.folders, ed.excludes, ed.watermark).then(function (saved) {
           if (!saved || !saved.ok) { setStatus('保存失败：' + ((saved && saved.error) || '未知错误')); return; }
-          setStatus('已保存并启动脚本：' + saved.path);
+          toast('已保存并启动脚本', 'ok');
           // 水印归属在选中配置预检测时已判定并提示，此处不再阻断启动
           call('run_batch', saved.path, count, group).then(function (r) { if (!(r && r.ok)) setStatus('启动失败：' + ((r && r.error) || '未知错误')); });
           jumpToVersionPath(saved.path, dest);
@@ -2278,7 +2284,7 @@
         showBusy('正在清理重复配置…');
         call('clean_duplicate_star', true).then(function (r2) {
           hideBusy();
-          setStatus('已删除 ' + ((r2 && r2.deleted) ? r2.deleted.length : 0) + ' 个重复配置');
+          toast('已删除 ' + ((r2 && r2.deleted) ? r2.deleted.length : 0) + ' 个重复配置', 'ok');
           refreshData(true, '正在重新扫描工作路径…', function () { setStatusDone('重新检测完成'); }, true);
         }).catch(function (e) { hideBusy(); setStatus('清理失败：' + e.message); refreshData(true); });
       });
@@ -3513,7 +3519,7 @@
         maskState.rawDirs = Array.isArray(dirs) ? dirs : [];
         buildMaskCenter(); buildMaskConfigBar(); refreshMaskStartHint();
         if (maskNeedMask()) loadAllMaskGroups();
-        setStatusDone('缓存已重建');
+        toast('缓存已重建', 'ok');
       }).catch(function () { setStatus('重建失败'); });
     });
   }
@@ -3922,7 +3928,7 @@
         var v = inp.value.trim();
         call('set_mask_default_dir', projectName, v).then(function (r) {
           if (!r || !r.ok) { toast('保存失败：' + ((r && r.error) || '未知错误'), true); return; }
-          setStatusDone('已保存项目设置');
+          toast('已保存项目设置', 'ok');
           closeDlg();
           // 正在编辑该项目时刷新底栏占位符
           if (maskState.project && maskState.project.name === projectName) {
@@ -4577,7 +4583,7 @@
           if (!nd) return;
           call('move_mask_out', maskState.project.path, vn, nd).then(function (r) {
             if (!r || !r.ok) { setStatus('迁移失败：' + ((r && r.error) || '未知错误')); return; }
-            setStatusDone('已迁移成片：' + baseNameNoExt(r.to || vn));
+            toast('已迁移成片：' + baseNameNoExt(r.to || vn), 'ok');
             buildMaskLogView();
           }).catch(function (err) { setStatus('迁移失败：' + err.message); });
         }).catch(function () {});
@@ -4757,7 +4763,7 @@
         if (!nd) return;
         var k = 0;
         (function next() {
-          if (k >= names.length) { setStatusDone('已迁移 ' + names.length + ' 个成片'); buildMaskLogView(); return; }
+          if (k >= names.length) { toast('已迁移 ' + names.length + ' 个成片', 'ok'); buildMaskLogView(); return; }
           var vn2 = names[k++];
           call('move_mask_out', maskState.project.path, vn2, nd).then(function (r) {
             if (!r || !r.ok) { setStatus('迁移失败：' + ((r && r.error) || '未知错误')); return; }
@@ -4818,7 +4824,7 @@
       if (v === 'txt') {
         call('delete_mask_log', maskState.project.path, mfp).then(function (r) {
           if (!(r && r.ok)) { setStatus('移除失败：' + ((r && r.error) || '未知错误')); return; }
-          setStatus('已移除遮罩日志'); buildMaskLogView();
+          toast('已移除遮罩日志', 'ok'); buildMaskLogView();
         }).catch(function (err) { setStatus('移除失败：' + err.message); });
         return;
       }
@@ -4829,13 +4835,13 @@
         if (!names.length) {
           call('delete_mask_log', maskState.project.path, mfp).then(function (r2) {
             if (!(r2 && r2.ok)) { setStatus('移除失败：' + ((r2 && r2.error) || '未知错误')); return; }
-            setStatus('已移除遮罩日志'); buildMaskLogView();
+            toast('已移除遮罩日志', 'ok'); buildMaskLogView();
           }).catch(function (err) { setStatus('移除失败：' + err.message); });
           return;
         }
         call('delete_mask_videos', maskState.project.path, names).then(function (r) {
           if (!(r && r.ok)) { setStatus('删除失败：' + ((r && r.error) || '未知错误')); return; }
-          setStatus('已删除 ' + ((r.deleted || []).length) + ' 个成片及其日志');
+          toast('已删除 ' + ((r.deleted || []).length) + ' 个成片及其日志', 'ok');
           buildMaskLogView();
         }).catch(function (err) { setStatus('删除失败：' + err.message); });
       }).catch(function () { setStatus('读取遮罩日志失败'); });
@@ -4849,7 +4855,7 @@
       if (!nd) return;
       call('relocate_mask_out', maskState.project.path, videoName, nd).then(function (r) {
         if (!r || !r.ok) { setStatus('重新定位失败：' + ((r && r.error) || '未知错误')); return; }
-        setStatus('已重新定位成片：' + baseNameNoExt(r.path || videoName) + (r.noLog ? '（日志中无该成片记录，未改写 @out）' : ''));
+        toast('已重新定位成片：' + baseNameNoExt(r.path || videoName) + (r.noLog ? '（日志中无该成片记录）' : ''), 'ok');
         buildMaskLogView();
       }).catch(function (err) { setStatus('重新定位失败：' + err.message); });
     }).catch(function () {});
@@ -5067,7 +5073,7 @@
     call('run_mask', payload).then(function (r) {
       if (!r || !r.ok) { setStatus('启动失败：' + ((r && r.error) || '未知错误')); return; }
       // 提交成功不弹窗，仅状态栏提示（任务窗口可随时打开查看）
-      setStatusDone('遮罩叠加任务已提交，可打开任务窗口查看进度');
+      toast('遮罩叠加任务已提交，可打开任务窗口查看进度', 'ok');
       // 开始任务后取消所有勾选（勾选不持久化记忆，下次从空开始）
       maskState.rawSel = {};
       maskState.maskSel = {};

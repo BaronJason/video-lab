@@ -4,6 +4,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { runFfmpeg } = require('../../base/ffmpeg');
 const { probe } = require('../../base/probe');
@@ -526,7 +527,8 @@ async function run(ctx, env = process.env) {
   const { logger } = ctx;
   const cfg = readEnv(env);
   const scriptRoot = __dirname;
-  const cacheDir = cfg.cacheDir || scriptRoot;
+  // 缓存目录：VL_CACHE_DIR 未注入时回退系统临时目录（绝不写模块目录——那会污染源码仓并随打包进入发布物）
+  const cacheDir = cfg.cacheDir || path.join(os.tmpdir(), 'video-lab-engine-cache');
   const videoCacheFile = path.join(cacheDir, 'video_cache.json');
   const usageCacheFile = path.join(cacheDir, 'usage_cache.json');
   const fail = (msg, step) => { logger.error(step, msg); return 1; };

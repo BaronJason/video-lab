@@ -529,6 +529,9 @@ async function run(ctx, env = process.env) {
   const scriptRoot = __dirname;
   // 缓存目录：VL_CACHE_DIR 未注入时回退系统临时目录（绝不写模块目录——那会污染源码仓并随打包进入发布物）
   const cacheDir = cfg.cacheDir || path.join(os.tmpdir(), 'video-lab-engine-cache');
+  // 回退目录可能不存在（Node 引擎未注入 VL_CACHE_DIR 时走系统临时目录），
+  // 互斥锁与缓存回退文件都落在这里，目录缺失会让任务在「互斥锁」步骤失败
+  try { fs.mkdirSync(cacheDir, { recursive: true }); } catch (e) {}
   const videoCacheFile = path.join(cacheDir, 'video_cache.json');
   const usageCacheFile = path.join(cacheDir, 'usage_cache.json');
   const fail = (msg, step) => { logger.error(step, msg); return 1; };

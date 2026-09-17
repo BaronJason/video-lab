@@ -11,8 +11,11 @@ function isPidAlive(pid) {
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-// 获取锁：锁文件写 { pid, ts }；持有者消亡或超时则抢占
+// 获取锁：锁文件写 { pid, ts }；持有者消亡或超时则抢占。
+// 锁目录可能尚不存在（例如 Node 引擎未注入 VL_CACHE_DIR 时回退到系统临时目录下的固定位置），
+// 缺失会让 openSync 直接抛 ENOENT、任务在「互斥锁」步骤失败，故先确保父目录存在。
 async function acquireLock(lockPath, { staleMs = 60 * 1000, retryIntervalMs = 300, timeoutMs = 5 * 60 * 1000 } = {}) {
+  try { fs.mkdirSync(path.dirname(lockPath), { recursive: true }); } catch (e) {}
   const started = Date.now();
   for (;;) {
     try {

@@ -67,7 +67,13 @@
       b.type = 'button';
       b.textContent = it.label;
       m.appendChild(b);
-      if (it.disabled) { b.disabled = true; if (it.title) b.title = it.title; return; }
+      if (it.disabled) {
+        // 置灰项仍可点击：点击关闭菜单并以 toast 提示不可用原因（仅告知，不开大窗）
+        b.className = 'ctx-menu__btn--disabled';
+        if (it.title) b.title = it.title;
+        b.addEventListener('click', function () { teardownMenu(); toast(it.title || it.label + '不可用', true); });
+        return;
+      }
       if (it.submenu && it.submenu.length) {
         // hover 展示子菜单（右侧展开，如 定位至配置 / 定位至日志）；切到其它子菜单项自动替换
         b.classList.add('ctx-menu__item--has-sub');
@@ -151,6 +157,25 @@
   }
   function alertDialog(message) {
     return showDialog({ title: '提示', message: message, buttons: [{ label: '知道了', value: true, primary: true }] });
+  }
+  // 轻量角落提示（toast）：仅告知、无需用户操作，自动消失。用于打开失败等「知道即可」的通知，不开大窗
+  function toast(message, isError) {
+    var host = document.getElementById('toastHost');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'toastHost';
+      host.className = 'toast-host';
+      document.body.appendChild(host);
+    }
+    var el = document.createElement('div');
+    el.className = 'toast' + (isError ? ' toast--error' : '');
+    el.textContent = String(message || '');
+    host.appendChild(el);
+    requestAnimationFrame(function () { el.classList.add('toast--show'); });
+    setTimeout(function () {
+      el.classList.remove('toast--show');
+      setTimeout(function () { try { el.remove(); } catch (e) {} }, 300);
+    }, 3200);
   }
 
   function fmtTime(ts) {
@@ -337,8 +362,8 @@
       // 已完成任务：与清除按钮同款弹窗（+成片 / 全部清除可选）
       if (cur.status === 'done') { openClearDialog(null, { ids: [cur.id], statuses: ['done'] }); return; }
       call('clear_task', cur.id).then(function (r) {
-        if (!r || !r.ok) alertDialog('删除失败：' + ((r && r.error) || '未知错误'));
-      }).catch(function (err) { alertDialog('删除失败：' + err.message); });
+        if (!r || !r.ok) toast('删除失败：' + ((r && r.error) || '未知错误'), true);
+      }).catch(function (err) { toast('删除失败：' + err.message, true); });
     });
     // 右键菜单：按任务状态提供 置顶/暂停/继续/打开文件夹
     card.addEventListener('contextmenu', function (e) {
@@ -403,8 +428,8 @@
     if (waiting.length < 2) return;
     if (waiting.indexOf(card.dataset.taskId) < 0) return;
     call('reorder_tasks', waiting).then(function (r) {
-      if (r && !r.ok) alertDialog('调整顺序失败：' + (r.error || '未知错误'));
-    }).catch(function (err) { alertDialog('调整顺序失败：' + err.message); });
+      if (r && !r.ok) toast('调整顺序失败：' + (r.error || '未知错误'), true);
+    }).catch(function (err) { toast('调整顺序失败：' + err.message, true); });
   }
 
   function updateCard(rec, t) {
@@ -608,14 +633,14 @@
     var submit = function () {
       var inp = document.getElementById('rgInput');
       var v = parseInt(inp ? inp.value : '', 10);
-      if (!(v > 0)) { alertDialog('请输入大于 0 的分组数'); return; }
+      if (!(v > 0)) { toast('请输入大于 0 的分组数', true); return; }
       close();
       call('regroup_task', t.id, v).then(function (r) {
-        if (!r || !r.ok) { alertDialog('重分组失败：' + ((r && r.error) || '未知错误')); return; }
+        if (!r || !r.ok) { toast('重分组失败：' + ((r && r.error) || '未知错误'), true); return; }
         var msg = '重分组完成：' + (r.regrouped || 0) + ' / ' + (r.total || 0) + ' 个成片已重新分组，拼接日志已同步修改';
         if (r.errors && r.errors.length) msg += '\n\n部分未处理：\n' + r.errors.slice(0, 5).join('\n');
         alertDialog(msg);
-      }).catch(function (e) { alertDialog('重分组失败：' + e.message); });
+      }).catch(function (e) { toast('重分组失败：' + e.message, true); });
     };
     overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
     card.querySelector('.modal-close').addEventListener('click', close);
@@ -636,8 +661,8 @@
   }
   function locateTask(id, target) {
     call('locate_task', id, target).then(function (r) {
-      if (r && !r.ok) alertDialog('定位失败：' + (r.error || '未知错误'));
-    }).catch(function (e) { alertDialog('定位失败：' + e.message); });
+      if (r && !r.ok) toast('定位失败：' + (r.error || '未知错误'), true);
+    }).catch(function (e) { toast('定位失败：' + e.message, true); });
   }
   function showTaskMenu(x, y, t) {
     var items = [];
@@ -645,12 +670,12 @@
       if (t.type === 'replica') {
         // 复刻：打开复刻产物目录（月份/MMdd/模式目录），而非原日志所在成片目录
         call('open_replica_output', t.id).then(function (r) {
-          if (r && !r.ok) alertDialog('打开失败：' + (r.error || '复刻成片文件夹不存在'));
-        }).catch(function (e) { alertDialog('打开失败：' + e.message); });
+          if (r && !r.ok) toast(r.error || '复刻成片文件夹不存在', true);
+        }).catch(function (e) { toast(e.message, true); });
         return;
       }
       call('open_path', t.outDir).then(function (r) {
-        if (r && !r.ok) alertDialog('打开失败：' + (r.error || '成片文件夹不存在'));
+        if (r && !r.ok) toast(r.error || '成片文件夹不存在', true);
       }).catch(function () {});
     }
     // 打开前的只读探测：目标不可达时把菜单项直接置灰禁用，避免点击后再弹窗
@@ -698,8 +723,8 @@
     if (t.status === 'queued') {
       items.push({ label: '置顶任务', action: function () {
         call('pin_task', t.id).then(function (r) {
-          if (r && !r.ok) alertDialog('置顶失败：' + (r.error || '未知错误'));
-        }).catch(function (e) { alertDialog('置顶失败：' + e.message); });
+          if (r && !r.ok) toast('置顶失败：' + (r.error || '未知错误'), true);
+        }).catch(function (e) { toast('置顶失败：' + e.message, true); });
       } });
       items.push({ label: '暂停任务', action: function () { confirmPause(t); } });
     } else if (t.status === 'paused') {
@@ -727,21 +752,21 @@
     confirmDialog(msg).then(function (ok) {
       if (!ok) return;
       call('stop_task', t.id).then(function (r) {
-        if (!r || !r.ok) alertDialog('停止失败：' + ((r && r.error) || '未知错误'));
-      }).catch(function (e) { alertDialog('停止失败：' + e.message); });
+        if (!r || !r.ok) toast('停止失败：' + ((r && r.error) || '未知错误'), true);
+      }).catch(function (e) { toast('停止失败：' + e.message, true); });
     });
   }
 
   function confirmPause(t) {
     call('pause_task', t.id).then(function (r) {
-      if (!r || !r.ok) alertDialog('暂停失败：' + ((r && r.error) || '未知错误'));
-    }).catch(function (e) { alertDialog('暂停失败：' + e.message); });
+      if (!r || !r.ok) toast('暂停失败：' + ((r && r.error) || '未知错误'), true);
+    }).catch(function (e) { toast('暂停失败：' + e.message, true); });
   }
 
   function confirmResume(t) {
   call('resume_task', t.id).then(function (r) {
-    if (!r || !r.ok) alertDialog('恢复失败：' + ((r && r.error) || '未知错误'));
-  }).catch(function (e) { alertDialog('恢复失败：' + e.message); });
+    if (!r || !r.ok) toast('恢复失败：' + ((r && r.error) || '未知错误'), true);
+  }).catch(function (e) { toast('恢复失败：' + e.message, true); });
 }
 
   function confirmContinue(t) {
@@ -750,8 +775,8 @@
     confirmDialog(msg).then(function (ok) {
       if (!ok) return;
       call(t.type === 'mask' ? 'continue_mask' : 'continue_replica', t.id).then(function (r) {
-        if (!r || !r.ok) alertDialog('继续制作失败：' + ((r && r.error) || '未知错误'));
-      }).catch(function (err) { alertDialog('继续制作失败：' + err.message); });
+        if (!r || !r.ok) toast('继续制作失败：' + ((r && r.error) || '未知错误'), true);
+      }).catch(function (err) { toast('继续制作失败：' + err.message, true); });
     });
   }
 
@@ -760,8 +785,8 @@
     confirmDialog(msg).then(function (ok) {
       if (!ok) return;
       call('rerun_task', t.id).then(function (r) {
-        if (!r || !r.ok) alertDialog('重新开始失败：' + ((r && r.error) || '未知错误'));
-      }).catch(function (err) { alertDialog('重新开始失败：' + err.message); });
+        if (!r || !r.ok) toast('重新开始失败：' + ((r && r.error) || '未知错误'), true);
+      }).catch(function (err) { toast('重新开始失败：' + err.message, true); });
     });
   }
 
@@ -978,11 +1003,11 @@
 
   function doClearDone(day, scope, statuses, ids) {
     call('clear_done_tasks', { day: day || null, scope: scope, statuses: statuses, ids: ids || null }).then(function (r) {
-      if (!r || !r.ok) { alertDialog('清除失败：' + ((r && r.error) || '未知错误')); return; }
+      if (!r || !r.ok) { toast('清除失败：' + ((r && r.error) || '未知错误'), true); return; }
       if (r.errors && r.errors.length) alertDialog('部分项目清除失败：\n' + r.errors.slice(0, 5).join('\n'));
       var api = getApi();
       if (api && api.list_tasks) api.list_tasks().then(renderTasks).catch(function () {});
-    }).catch(function (e) { alertDialog('清除失败：' + e.message); });
+    }).catch(function (e) { toast('清除失败：' + e.message, true); });
   }
 
   function switchTab(tab) {
@@ -1013,14 +1038,14 @@
     var fabResume = $('fabResumeAll');
     if (fabResume) fabResume.addEventListener('click', function () {
       call('resume_all_tasks').then(function (r) {
-        if (r && !r.ok) alertDialog('暂无暂停的任务');
-      }).catch(function (e) { alertDialog('全部继续失败：' + e.message); });
+        if (r && !r.ok) toast('暂无暂停的任务', true);
+      }).catch(function (e) { toast('全部继续失败：' + e.message, true); });
     });
     var fabPause = $('fabPauseAll');
     if (fabPause) fabPause.addEventListener('click', function () {
       call('pause_all_tasks').then(function (r) {
-        if (r && !r.ok) alertDialog('暂无排队中的任务');
-      }).catch(function (e) { alertDialog('全部暂停失败：' + e.message); });
+        if (r && !r.ok) toast('暂无排队中的任务', true);
+      }).catch(function (e) { toast('全部暂停失败：' + e.message, true); });
     });
     // 已完成分组头右键：清除当日任务（后续三按钮弹窗二次确认）
     var taskListEl = $('taskList');

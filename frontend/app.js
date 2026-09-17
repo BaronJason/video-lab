@@ -47,6 +47,25 @@
     }
     return h + '</div>';
   }
+  // 轻量角落提示（toast）：仅告知、无需用户操作，自动消失。用于打开/保存失败等「知道即可」的通知，不开大窗
+  function toast(message, isError) {
+    var host = document.getElementById('toastHost');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'toastHost';
+      host.className = 'toast-host';
+      document.body.appendChild(host);
+    }
+    var el = document.createElement('div');
+    el.className = 'toast' + (isError ? ' toast--error' : '');
+    el.textContent = String(message || '');
+    host.appendChild(el);
+    requestAnimationFrame(function () { el.classList.add('toast--show'); });
+    setTimeout(function () {
+      el.classList.remove('toast--show');
+      setTimeout(function () { try { el.remove(); } catch (e) {} }, 300);
+    }, 3200);
+  }
   function showDialog(opts) {
     return new Promise(function (resolve) {
       var overlay = document.createElement('div');
@@ -102,7 +121,7 @@
   // 主流水印设置弹窗：启用判定复选框 + 主流水印行（样式照搬水印 PNG 行）+ 保存/保存并更改/取消
   function openProjectWatermarkDialog(project) {
     call('get_project_watermark', project).then(function (r) {
-      if (!r || !r.ok) { alertDialog('读取项目设置失败：' + ((r && r.error) || '未知错误')); return; }
+      if (!r || !r.ok) { toast('读取项目设置失败：' + ((r && r.error) || '未知错误'), true); return; }
       var curWm0 = String(r.main || '').trim();
       var curWm = curWm0;
       var wmEn0 = r.enabled === true;
@@ -159,8 +178,8 @@
             if (applyToAll) refreshData();
             afterSave();
           }
-          else alertDialog('保存失败：' + ((res && res.error) || '未知错误'));
-        }).catch(function (err) { alertDialog('保存失败：' + err.message); });
+          else toast('保存失败：' + ((res && res.error) || '未知错误'), true);
+        }).catch(function (err) { toast('保存失败：' + err.message, true); });
       }
       overlay.addEventListener('click', function (e) { if (e.target === overlay) closeDialog(); });
       card.querySelector('.modal-close').addEventListener('click', closeDialog);
@@ -193,7 +212,7 @@
           } else doSave(false);
         });
       });
-    }).catch(function (err) { alertDialog('读取项目设置失败：' + err.message); });
+    }).catch(function (err) { toast('读取项目设置失败：' + err.message, true); });
   }
   function showMenu(x, y, items) {
     var old = document.getElementById('ctxMenu');
@@ -205,7 +224,13 @@
       b.type = 'button';
       b.textContent = it.label;
       m.appendChild(b);
-      if (it.disabled) { b.disabled = true; b.className = 'ctx-menu__btn--disabled'; if (it.title) b.title = it.title; return; }
+      if (it.disabled) {
+      // 置灰项仍可点击：点击关闭菜单并以 toast 提示不可用原因（仅告知，不开大窗）
+      b.className = 'ctx-menu__btn--disabled';
+      if (it.title) b.title = it.title;
+      b.addEventListener('click', function () { close(); toast(it.title || it.label + '不可用', true); });
+      return;
+    }
       b.addEventListener('click', function () { m.remove(); it.action(); });
     });
     document.body.appendChild(m);
@@ -3896,7 +3921,7 @@
       card.querySelector('[data-mp2-act="save"]').addEventListener('click', function () {
         var v = inp.value.trim();
         call('set_mask_default_dir', projectName, v).then(function (r) {
-          if (!r || !r.ok) { alertDialog('保存失败：' + ((r && r.error) || '未知错误')); return; }
+          if (!r || !r.ok) { toast('保存失败：' + ((r && r.error) || '未知错误'), true); return; }
           setStatusDone('已保存项目设置');
           closeDlg();
           // 正在编辑该项目时刷新底栏占位符
@@ -3904,9 +3929,9 @@
             maskState.defaultOutDir = v;
             buildMaskConfigBar();
           }
-        }).catch(function (err) { alertDialog('保存失败：' + err.message); });
+        }).catch(function (err) { toast('保存失败：' + err.message, true); });
       });
-    }).catch(function (err) { alertDialog('读取项目设置失败：' + err.message); });
+    }).catch(function (err) { toast('读取项目设置失败：' + err.message, true); });
   }
   function selectMaskProject(name) {
     var p = maskState.projects.find(function (x) { return x.name === name; });

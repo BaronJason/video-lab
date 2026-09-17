@@ -568,6 +568,30 @@
     if (gh && api && api.open_external) gh.addEventListener('click', function () {
       api.open_external('https://github.com/BaronJason/video-lab').catch(function () {});
     });
+    // 「维护」区：重建预检测缓存（低频兜底操作）。两段式确认，避免误触这个耗时动作
+    var brp = document.getElementById('btnRebuildPrecheck');
+    if (brp && api && api.reset_precheck) brp.addEventListener('click', function () {
+      if (brp.dataset.armed !== '1') {
+        brp.dataset.armed = '1';
+        brp.textContent = '再次点击确认重建';
+        setStatus('将清空并重新检测全部素材，视频较多时较耗时', true);
+        setTimeout(function () { if (brp.dataset.armed === '1') { brp.dataset.armed = '0'; brp.textContent = '重建'; } }, 4000);
+        return;
+      }
+      brp.dataset.armed = '0';
+      brp.disabled = true;
+      brp.textContent = '重建中…';
+      setStatus('正在重建预检测缓存…', true);
+      api.reset_precheck().then(function (r) {
+        brp.disabled = false;
+        brp.textContent = '重建';
+        setStatus('预检测缓存已重建：检测 ' + ((r && r.total) || 0) + ' 个视频，合规 ' + ((r && r.valid) || 0) + ' 个', true);
+      }).catch(function (e) {
+        brp.disabled = false;
+        brp.textContent = '重建';
+        setStatus('重建失败：' + ((e && e.message) || e), false);
+      });
+    });
     // 「配置和数据保存位置」行：打开当前生效的配置存储目录
     var openCfg = document.getElementById('btnOpenCfgDir');
     if (openCfg && api && api.open_path) openCfg.addEventListener('click', function () {

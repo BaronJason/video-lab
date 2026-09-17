@@ -2325,55 +2325,6 @@
       ? '已完成 ' + done + ' / ' + total
       : (total > 0 ? '正在检测 ' + done + ' / ' + total + '（' + pct + '%）' : '正在收集视频…');
   }
-  function resetPrecheckAll() {
-    var dismiss = null;
-    var api = getApi();
-    if (api && typeof api.on_reset_progress === 'function') {
-      try { dismiss = api.on_reset_progress(onResetProgress); } catch (e) { dismiss = null; }
-    }
-    var cleanup = function () { state._probeActive = false; if (dismiss) { try { dismiss(); } catch (e) {} dismiss = null; } };
-    state._probeActive = true;
-    state.precheckBackground = false;
-    call('reset_precheck').then(function (r) {
-      if (state.precheckBackground) hideProbeMini(); else hideBusy();
-      cleanup();
-      setStatus('预检测已重置：共检测 ' + (r && r.total || 0) + ' 个视频，合规 ' + (r && r.valid || 0) + ' 个' + ((r && r.cancelled) ? '（已中断）' : ''));
-      if (state.activeTxt && state.activeVersion) runPrecheck();
-    }).catch(function (e) {
-      hideBusy();
-      cleanup();
-      hideProbeMini();
-      setStatus('重置预检测失败：' + e.message);
-    });
-  }
-  function resetPrecheckFlow() {
-    confirmPopover({
-      title: '重置预检测',
-      message: '将重置预检测缓存并重新检测所有配置路径，视频较多时可能较慢',
-      okLabel: '确认重置',
-      danger: true
-    }).then(function (v) {
-      if (!v) { setStatus('已取消重置预检测'); return; }
-      showBusyProgress('正在重置预检测缓存并全量检测，请耐心等待…');
-      resetPrecheckAll();
-    });
-  }
-  // 刷新预缓存菜单：点击后弹窗二选一；「全部重置」走原流程（内部仍保留二次确认）。
-  // 「仅刷新」已整合失效清理：增量更新的同时顺带删除失效（文件已删除/换工作目录残留）条目
-  function refreshPrecacheMenu() {
-    showDialog({
-      title: '刷新预缓存',
-      message: '仅刷新：更新缺失或已变化的视频，并顺带清理失效缓存条目（不重置缓存）；\n全部重置：清空缓存后重新检测（视频较多时较耗时）。',
-      buttons: [
-        { label: '仅刷新', value: 'refresh', primary: true },
-        { label: '全部重置', value: 'reset', danger: true }
-      ]
-    }).then(function (v) {
-      if (!v) { setStatus('已取消刷新预缓存'); return; }
-      if (v === 'refresh') refreshPrecacheFlow();
-      else resetPrecheckFlow(); // 内部含「确认重置」二次确认
-    });
-  }
   // 仅刷新预缓存：不删缓存、不重置，只对缺失/变化的视频增量更新（进度与取消/缩后台同「重置预检测」）
   function refreshPrecacheFlow() {
     var dismiss = null;
@@ -2973,8 +2924,10 @@
       $('menuRefreshConfigs').addEventListener('click', function () { closeMenu(); refreshConfigsFlow(); });   // 刷新配置列表（含清理重复外部 *）
       $('menuChoosePath').addEventListener('click', function () { closeMenu(); choosePath(); });
       // 「刷新预缓存」点击弹窗二选一：仅刷新（增量）/ 全部重置（原功能）
+      // 「刷新预缓存」：单一动作 = 增量刷新（更新变化/缺失的视频并顺带清理失效缓存）。
+      // 全量重建属低频兜底操作，已移至设置页「维护」
       var lmrp = $('menuResetPrecheck');
-      if (lmrp) lmrp.addEventListener('click', function () { closeMenu(); refreshPrecacheMenu(); });
+      if (lmrp) lmrp.addEventListener('click', function () { closeMenu(); refreshPrecacheFlow(); });
       $('menuSettings').addEventListener('click', function () { closeMenu(); call('open_settings_window').catch(function () { setStatus('打开设置窗口失败'); }); });
       var mob = $('menuOpenBrowser');
       if (mob) mob.addEventListener('click', function () {
@@ -3852,8 +3805,6 @@
     state.previewCollapsed = true;
     var cc = $('previewCollapseRound'); if (cc) cc.style.display = 'none';
     var az = $('azIndexBar'); if (az) az.style.display = 'none';
-    var mmb = $('menuMask'); if (mmb) mmb.innerHTML = icon('layers', 14) + '配置管理';
-    maskSidebarExitBtn(true);
     buildMaskSidebar();
     buildMaskCenterHeader();
     buildMaskCenter();
@@ -3871,24 +3822,6 @@
       }
     }).catch(function () {});
     setStatus('遮罩叠加模式：左侧选项目，中间配置素材/查看日志，底部设模式与输出后开始制作');
-  }
-  // 侧栏「项目列表」标题行右侧的退出按钮（遮罩模式挂载，退出移除）
-  function maskSidebarExitBtn(add) {
-    var h = document.querySelector('.sidebar__header');
-    if (!h) return;
-    if (add) {
-      if (h.querySelector('#btnMaskExitSide')) return;
-      var b = document.createElement('button');
-      b.id = 'btnMaskExitSide';
-      b.className = 'mask-bar__exit mask-proj-head__exit';
-      b.title = '退出遮罩叠加，返回配置管理';
-      b.innerHTML = icon('log-in', 13) + '退出';
-      b.addEventListener('click', exitMaskMode);
-      h.appendChild(b);
-    } else {
-      var old = h.querySelector('#btnMaskExitSide');
-      if (old) old.remove();
-    }
   }
   // 中间区顶部：标题 + 配置/日志模式切换（遮罩模式隐藏全局成片搜索栏，退出时恢复批量）
   function buildMaskCenterHeader() {
@@ -3980,7 +3913,6 @@
     maskState.on = false; maskResetSession();
     document.body.classList.remove('mask-mode');
     updateWinModeLabel(); // 标题栏模式按钮 → 配置管理
-    maskSidebarExitBtn(false);
     // 还原进入遮罩前右栏的展开状态（遮罩模式强制折叠，退出恢复）
     if (maskState._sideBefore) {
       var rp0 = $('rightPanel');
@@ -3994,7 +3926,6 @@
     restoreBatchCenterTop();
     refreshData(true, '正在恢复视图…', function () {
       var az = $('azIndexBar'); if (az) az.style.display = '';
-      var mmb = $('menuMask'); if (mmb) mmb.innerHTML = icon('layers', 14) + '遮罩叠加';
       var si = $('logSearchInput'); if (si) si.value = '';
       bindBatchLogSearch(true); // 搜索框曾被遮罩 clone：强制恢复批量成片搜索监听
       // 对称还原：批量模式原本未选中配置时（refreshData 不会自动重绘中心区），
@@ -5243,8 +5174,6 @@
     if (maskState.on) exitMaskMode(); else enterMaskMode();
   }
   function initMaskMode() {
-    var m = $('menuMask');
-    if (m) m.addEventListener('click', toggleMaskMode);
     // 标题栏模式切换按钮：事件由 titlebar.js 派发
     document.addEventListener('vl:toggle-mask', toggleMaskMode);
     // 遮罩模式菜单「刷新」：刷新项目列表 + 重扫当前项目原片分组/遮罩主题（保留仍存在的勾选），

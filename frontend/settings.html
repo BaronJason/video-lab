@@ -48,6 +48,7 @@
     <button class="settings-nav__item" data-view="batch">批量拼接</button>
     <button class="settings-nav__item" data-view="replica">视频复刻</button>
     <button class="settings-nav__item" data-view="mask">遮罩叠加</button>
+    <button class="settings-nav__item" data-view="maintenance">维护</button>
     <button class="settings-nav__item" data-view="changelog">更新日志</button>
     <button class="settings-nav__item" data-view="about">关于</button>
   </aside>
@@ -297,7 +298,18 @@
       </div>
     </section>
 
-    <!-- ═══ 更新日志 ═══ -->
+    <!-- ═══ 维护 ═══ 低频兜底操作：日常刷新预缓存走主窗口侧栏 -->
+    <section class="settings-view" id="view-maintenance">
+      <h2 class="settings-view__title">维护</h2>
+
+      <div class="form-group">
+        <label class="form-group__label">重建预检测缓存<small>清空并重新检测全部素材，视频较多时较耗时。日常无需使用：主窗口侧栏「刷新预缓存」已能更新变化的视频并清理失效缓存，仅当缓存异常或数据不一致时才需要重建。</small></label>
+        <div class="opt-row">
+          <button class="btn btn-ghost" id="btnRebuildPrecheck">重建</button>
+        </div>
+      </div>
+    </section>
+
     <section class="settings-view" id="view-changelog">
       <div class="changelog-box" id="changelogBox"><div class="changelog-hint" id="changelogHint"></div></div>
     </section>

@@ -3011,23 +3011,32 @@ class Api {
         const exactVideos = (marker && Array.isArray(marker.videos) ? marker.videos.slice() : [])
           .concat(this.collectDoneFromLog(t));
         if (t.type === 'batch') {
-          // 成片目录以「日志中脚本实际创建的目录」为权威；推算目录在同日同名任务间会撞车，
-          // 且无产出的停止任务会被推断到同名任务的目录上 —— 无权威记录时必须有产出证据
-          // 并校验目录归属，否则一律不删：找不到就是找不到，不猜。
-          let abs = this._taskOutDirFromLog(t);
-          if (!abs && t.outDir && this._dirOwnsVideos(t.outDir, exactVideos)) abs = path.resolve(t.outDir);
-          if (!abs) continue;
+          // 候选目录：日志中脚本实际创建的目录（权威）→ 推算目录。
+          // 两者都必须通过「目录内产出确属本任务」校验：同分钟同配置名的任务共享同一成片目录，
+          // 只凭"日志里有创建记录"就整目录删除，会误删重跑任务的成片 —— 找不到就是找不到，不猜。
+          const cand = this._taskOutDirFromLog(t) || (t.outDir ? path.resolve(t.outDir) : '');
+          if (!cand || !this._dirOwnsVideos(cand, exactVideos)) continue;
+          const abs = cand;
           try { if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) continue; } catch (e2) { continue; }
-          if (scope === 'video') {
-            let files = [];
-            try { files = fs.readdirSync(abs).filter((f) => path.extname(f).toLowerCase() === '.mp4'); }
-            catch (e) { errors.push('读取成片目录失败：' + abs); continue; }
-            for (const f of files) {
-              try { await trash(path.join(abs, f)); }
-              catch (e) { errors.push('清除成片失败：' + path.join(abs, f)); }
+          // 目录内 mp4 全部属于本任务 → 独占，可整目录删除；否则说明与同分钟同名任务共享目录，
+          // 降级为「只删本任务的成片」，避免波及他人产物
+          let mp4s = [];
+          try { mp4s = fs.readdirSync(abs).filter((f) => path.extname(f).toLowerCase() === '.mp4'); }
+          catch (e) { errors.push('读取成片目录失败：' + abs); continue; }
+          const owned = new Set(exactVideos.filter(Boolean).map((p) => path.resolve(p)));
+          const exclusive = mp4s.length > 0 && mp4s.every((f) => owned.has(path.resolve(path.join(abs, f))));
+          const trashOwned = async () => {
+            for (const f of mp4s) {
+              const fp = path.join(abs, f);
+              if (!owned.has(path.resolve(fp))) continue;
+              try { await trash(fp); }
+              catch (e) { errors.push('清除成片失败：' + fp); }
             }
+          };
+          if (scope === 'video') {
+            await trashOwned();
           } else if (scope === 'all') {
-            if (path.basename(abs).endsWith('成片')) {
+            if (path.basename(abs).endsWith('成片') && exclusive) {
               try { await trash(abs); }
               catch (e) { errors.push('清除成片文件夹失败：' + abs); continue; }
               const parent = path.dirname(abs);
@@ -3036,13 +3045,7 @@ class Api {
                 catch (e) { errors.push('清除空上级文件夹失败：' + parent); }
               }
             } else {
-              let files = [];
-              try { files = fs.readdirSync(abs).filter((f) => path.extname(f).toLowerCase() === '.mp4'); }
-              catch (e) { errors.push('读取成片目录失败：' + abs); continue; }
-              for (const f of files) {
-                try { await trash(path.join(abs, f)); }
-                catch (e) { errors.push('清除成片失败：' + path.join(abs, f)); }
-              }
+              await trashOwned();
             }
           }
           continue;

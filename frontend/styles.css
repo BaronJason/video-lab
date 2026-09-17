@@ -5355,3 +5355,39 @@ button.is-vl-disabled {
   border-color: var(--border-neutral-l2) !important;
   opacity: .6;
 }
+
+/* ── 锚定气泡确认（popover confirm）：贴着触发元素弹出的小浮层，取代居中大窗 ──
+   mask 为透明层（无视觉遮罩），仅用于捕获「点击外部关闭」，故不会呈现大窗观感 */
+.vl-pop-mask { position: fixed; inset: 0; z-index: 1190; }
+.vl-pop {
+  position: fixed; z-index: 1200;
+  min-width: 190px; max-width: 320px;
+  padding: 12px 14px;
+  background: var(--bg-base-default);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--text-default) 16%, transparent);
+  animation: vl-pop-in .15s ease-out;
+}
+@keyframes vl-pop-in { from { opacity: 0; transform: translateY(6px) scale(.98); } to { opacity: 1; transform: none; } }
+.vl-pop__arrow { position: absolute; width: 10px; height: 10px; background: var(--bg-base-default); transform: rotate(45deg); }
+/* 气泡在触发元素下方：箭头在顶部、指向上 */
+.vl-pop--below .vl-pop__arrow { top: -6px; border-left: 1px solid var(--border-neutral-l1); border-top: 1px solid var(--border-neutral-l1); }
+/* 气泡在触发元素上方：箭头在底部、指向下 */
+.vl-pop--above .vl-pop__arrow { bottom: -6px; border-right: 1px solid var(--border-neutral-l1); border-bottom: 1px solid var(--border-neutral-l1); }
+.vl-pop__title { font-size: 13px; font-weight: var(--font-weight-strong); color: var(--text-default); }
+.vl-pop__msg {
+  margin-top: 4px; font-size: 12px; line-height: 1.5; color: var(--text-tertiary);
+  white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow: auto;
+}
+.vl-pop__actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+.vl-pop__btn {
+  padding: 5px 14px; font-size: 13px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border-neutral-l2);
+  background: var(--bg-base-default); color: var(--text-default);
+}
+.vl-pop__btn:hover { background: var(--bg-overlay-l1, rgba(127, 127, 127, .12)); }
+.vl-pop__btn--primary { background: var(--brand-500); border-color: var(--brand-500); color: var(--text-onaccent, #fff); }
+.vl-pop__btn--primary:hover { background: var(--brand-600, var(--brand-500)); }
+.vl-pop__btn--danger { background: var(--status-error-default); border-color: var(--status-error-default); color: #fff; }
+.vl-pop__btn--danger:hover { filter: brightness(.94); }

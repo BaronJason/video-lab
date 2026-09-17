@@ -183,6 +183,82 @@
       setTimeout(function () { try { el.remove(); } catch (e) {} }, 300);
     }, 3200);
   }
+  // 记录最后一次点击的可作为锚点的元素：气泡确认未显式传 anchor 时用它定位（气泡内部交互不更新）
+  var _popAnchor = null;
+  document.addEventListener('mousedown', function (e) {
+    var t = e.target;
+    if (!t || !t.closest) return;
+    if (t.closest('.vl-pop')) return;
+    var el = t.closest('button, .btn, [role="button"], a, .menu-item');
+    if (el) _popAnchor = el;
+  }, true);
+  // 锚定气泡确认：贴着触发元素弹小浮层（取代居中大窗），仅「取消 / 一个动作」两选一。
+  // opts: { title, message, okLabel, cancelLabel, danger }；anchor 省略时用最后点击的元素。
+  // 返回 Promise：确认 → true；取消 / 点外部 / ESC → null
+  function confirmPopover(opts, anchor) {
+    var o = opts || {};
+    return new Promise(function (resolve) {
+      var prevMask = document.querySelector('.vl-pop-mask');
+      if (prevMask) prevMask.remove();
+      var prevPop = document.querySelector('.vl-pop');
+      if (prevPop) prevPop.remove();
+      var a = anchor || _popAnchor;
+      if (!a || !a.getBoundingClientRect || !a.isConnected) a = null;
+      var mask = document.createElement('div');
+      mask.className = 'vl-pop-mask';
+      var pop = document.createElement('div');
+      pop.className = 'vl-pop';
+      var html = '<div class="vl-pop__arrow"></div>';
+      if (o.title) html += '<div class="vl-pop__title"></div>';
+      if (o.message) html += '<div class="vl-pop__msg"></div>';
+      html += '<div class="vl-pop__actions">'
+        + '<button type="button" class="vl-pop__btn" data-k="cancel"></button>'
+        + '<button type="button" class="vl-pop__btn ' + (o.danger ? 'vl-pop__btn--danger' : 'vl-pop__btn--primary') + '" data-k="ok"></button>'
+        + '</div>';
+      pop.innerHTML = html;
+      if (o.title) pop.querySelector('.vl-pop__title').textContent = o.title;
+      if (o.message) pop.querySelector('.vl-pop__msg').textContent = o.message;
+      pop.querySelector('[data-k="cancel"]').textContent = o.cancelLabel || '取消';
+      pop.querySelector('[data-k="ok"]').textContent = o.okLabel || '确定';
+      document.body.appendChild(mask);
+      document.body.appendChild(pop);
+
+      // 定位：优先贴触发元素下方居中；下方空间不足转上方；水平夹紧在视口内
+      var vw = window.innerWidth, vh = window.innerHeight, gap = 8;
+      var pr = pop.getBoundingClientRect();
+      var left, top, below = true;
+      if (a) {
+        var r = a.getBoundingClientRect();
+        left = r.left + r.width / 2 - pr.width / 2;
+        top = r.bottom + gap;
+        if (top + pr.height > vh - 8) { top = r.top - pr.height - gap; below = false; }
+        if (top < 8) { top = Math.min(r.bottom + gap, Math.max(8, vh - pr.height - 8)); below = true; }
+        left = Math.max(8, Math.min(left, vw - pr.width - 8));
+        pop.classList.add(below ? 'vl-pop--below' : 'vl-pop--above');
+        var arrow = pop.querySelector('.vl-pop__arrow');
+        arrow.style.left = Math.max(12, Math.min(r.left + r.width / 2 - left, pr.width - 22)) + 'px';
+      } else {
+        left = Math.max(8, vw / 2 - pr.width / 2);
+        top = Math.max(8, vh / 2 - pr.height / 2);
+        pop.classList.add('vl-pop--below');
+        pop.querySelector('.vl-pop__arrow').style.display = 'none';
+      }
+      pop.style.left = left + 'px';
+      pop.style.top = top + 'px';
+
+      var done = function (v) {
+        document.removeEventListener('keydown', onKey, true);
+        if (mask.parentNode) mask.remove();
+        if (pop.parentNode) pop.remove();
+        resolve(v);
+      };
+      var onKey = function (e) { if (e.key === 'Escape') done(null); };
+      document.addEventListener('keydown', onKey, true);
+      mask.addEventListener('mousedown', function () { done(null); });
+      pop.querySelector('[data-k="cancel"]').addEventListener('click', function () { done(null); });
+      pop.querySelector('[data-k="ok"]').addEventListener('click', function () { done(true); });
+    });
+  }
 
   function fmtTime(ts) {
     if (!ts) return '';
@@ -341,15 +417,15 @@
     });
     header.querySelector('.task-card__stop').addEventListener('click', function (e) {
       e.stopPropagation();
-      confirmStop(card.__task || t);
+      confirmStop(card.__task || t, e.currentTarget);
     });
     header.querySelector('.task-card__rerun').addEventListener('click', function (e) {
       e.stopPropagation();
-      confirmRerun(card.__task || t);
+      confirmRerun(card.__task || t, e.currentTarget);
     });
     header.querySelector('.task-card__continue').addEventListener('click', function (e) {
       e.stopPropagation();
-      confirmContinue(card.__task || t);
+      confirmContinue(card.__task || t, e.currentTarget);
     });
     header.querySelector('.task-card__pause').addEventListener('click', function (e) {
       e.stopPropagation();
@@ -644,8 +720,8 @@
       call('regroup_task', t.id, v).then(function (r) {
         if (!r || !r.ok) { toast('重分组失败：' + ((r && r.error) || '未知错误'), true); return; }
         var msg = '重分组完成：' + (r.regrouped || 0) + ' / ' + (r.total || 0) + ' 个成片已重新分组，拼接日志已同步修改';
-        if (r.errors && r.errors.length) msg += '\n\n部分未处理：\n' + r.errors.slice(0, 5).join('\n');
-        alertDialog(msg);
+        if (r.errors && r.errors.length) alertDialog(msg + '\n\n部分未处理：\n' + r.errors.slice(0, 5).join('\n'));
+        else toast(msg, 'ok');
       }).catch(function (e) { toast('重分组失败：' + e.message, true); });
     };
     overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
@@ -750,12 +826,12 @@
     });
   }
 
-  function confirmStop(t) {
+  function confirmStop(t, anchor) {
     var warn = t.status === 'running' && t.lockState === 'locked'
       ? '\n\n注意：任务可能正在生成视频，停止将中断当前生成并可能留下不完整文件！'
       : '';
-    var msg = (t.status === 'running' ? '确定要停止任务「' + (t.title || t.id) + '」吗？' : '确定要取消任务「' + (t.title || t.id) + '」吗？') + warn;
-    confirmDialog(msg).then(function (ok) {
+    var msg = '任务「' + (t.title || t.id) + '」' + warn;
+    confirmPopover({ title: t.status === 'running' ? '停止任务' : '取消任务', message: msg, okLabel: t.status === 'running' ? '停止' : '取消任务', danger: true }, anchor).then(function (ok) {
       if (!ok) return;
       call('stop_task', t.id).then(function (r) {
         if (!r || !r.ok) toast('停止失败：' + ((r && r.error) || '未知错误'), true);
@@ -775,10 +851,10 @@
   }).catch(function (e) { toast('恢复失败：' + e.message, true); });
 }
 
-  function confirmContinue(t) {
+  function confirmContinue(t, anchor) {
     var failN = (Array.isArray(t.failedVideos) && t.failedVideos.length) ? t.failedVideos.length : 0;
-    var msg = '确定要「继续制作」吗？\n\n仅续跑失败或未完成的' + (failN ? ' ' + failN + ' 个' : '') + '成片，已成功生成的成片和日志将保留。';
-    confirmDialog(msg).then(function (ok) {
+    var msg = '仅续跑失败或未完成的' + (failN ? ' ' + failN + ' 个' : '') + '成片，已成功生成的成片和日志将保留';
+    confirmPopover({ title: '继续制作', message: msg, okLabel: '继续制作' }, anchor).then(function (ok) {
       if (!ok) return;
       call(t.type === 'mask' ? 'continue_mask' : 'continue_replica', t.id).then(function (r) {
         if (!r || !r.ok) toast('继续制作失败：' + ((r && r.error) || '未知错误'), true);
@@ -786,9 +862,9 @@
     });
   }
 
-  function confirmRerun(t) {
-    var msg = '确定要重新开始这个任务吗？\n\n本次重开将使用与最初一致的配置（包括日期、输出目录等），并删除上次执行失败产生的成片和日志文件。';
-    confirmDialog(msg).then(function (ok) {
+  function confirmRerun(t, anchor) {
+    var msg = '本次重开将使用与最初一致的配置（包括日期、输出目录等），并删除上次执行失败产生的成片和日志文件';
+    confirmPopover({ title: '重新开始', message: msg, okLabel: '重新开始', danger: true }, anchor).then(function (ok) {
       if (!ok) return;
       call('rerun_task', t.id).then(function (r) {
         if (!r || !r.ok) toast('重新开始失败：' + ((r && r.error) || '未知错误'), true);
@@ -1010,7 +1086,7 @@
   function doClearDone(day, scope, statuses, ids) {
     call('clear_done_tasks', { day: day || null, scope: scope, statuses: statuses, ids: ids || null }).then(function (r) {
       if (!r || !r.ok) { toast('清除失败：' + ((r && r.error) || '未知错误'), true); return; }
-      if (r.errors && r.errors.length) alertDialog('部分项目清除失败：\n' + r.errors.slice(0, 5).join('\n'));
+      if (r.errors && r.errors.length) toast('部分项目清除失败：' + r.errors.slice(0, 3).join('；'), true);
       var api = getApi();
       if (api && api.list_tasks) api.list_tasks().then(renderTasks).catch(function () {});
     }).catch(function (e) { toast('清除失败：' + e.message, true); });

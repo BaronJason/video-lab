@@ -310,10 +310,39 @@
     }).catch(function () { setStatus('读取设置失败'); });
   }
 
+  // 轻量角落提示（toast）：仅告知、无需操作，自动消失。type：ok/error/info/warn
+  function toast(message, type) {
+    var host = document.getElementById('toastHost');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'toastHost';
+      host.className = 'toast-host';
+      document.body.appendChild(host);
+    }
+    var el = document.createElement('div');
+    var t = type === true ? 'error' : (String(type || 'info'));
+    var ic = t === 'ok' ? '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>'
+      : t === 'error' ? '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg>'
+      : '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="16" y2="12"/><line x1="12" x2="12.01" y1="8" y2="8"/></svg>';
+    el.className = 'toast toast--' + t;
+    el.innerHTML = '<span class="toast__icon">' + ic + '</span><span class="toast__text"></span>';
+    el.querySelector('.toast__text').textContent = String(message || '');
+    host.appendChild(el);
+    requestAnimationFrame(function () { el.classList.add('toast--show'); });
+    setTimeout(function () {
+      el.classList.remove('toast--show');
+      setTimeout(function () { try { el.remove(); } catch (e) {} }, 300);
+    }, 3200);
+  }
   function setStatus(msg, ok) {
     var el = $('settingsStatus');
     el.textContent = msg;
     el.classList.toggle('is-error', !ok);
+    // 结果类提示一并 toast（失败必弹、成功也弹），「正在…」等过程提示跳过以免打扰
+    var s = String(msg || '');
+    if (s && !/^正在/.test(s) && !/…$/.test(s) && !/\.\.\.$/.test(s)) {
+      toast(s, ok === false ? 'error' : 'ok');
+    }
   }
   function statusTimer() { setStatus('', true); }
 

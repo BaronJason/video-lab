@@ -72,6 +72,83 @@
       setTimeout(function () { try { el.remove(); } catch (e) {} }, 300);
     }, 3200);
   }
+  // 记录最后一次点击的可作为锚点的元素：气泡确认未显式传 anchor 时用它定位，
+  // 使既有 showDialog 调用点改成气泡时几乎无需改动（气泡内部交互不更新锚点）
+  var _popAnchor = null;
+  document.addEventListener('mousedown', function (e) {
+    var t = e.target;
+    if (!t || !t.closest) return;
+    if (t.closest('.vl-pop')) return;
+    var el = t.closest('button, .btn, [role="button"], a, .menu-item, .list-row, .log-row');
+    if (el) _popAnchor = el;
+  }, true);
+  // 锚定气泡确认：贴着触发元素弹小浮层（取代居中大窗），仅「取消 / 一个动作」两选一。
+  // opts: { title, message, okLabel, cancelLabel, danger }；anchor 省略时用最后点击的元素。
+  // 返回 Promise：确认 → true；取消 / 点外部 / ESC → null
+  function confirmPopover(opts, anchor) {
+    var o = opts || {};
+    return new Promise(function (resolve) {
+      var prevMask = document.querySelector('.vl-pop-mask');
+      if (prevMask) prevMask.remove();
+      var prevPop = document.querySelector('.vl-pop');
+      if (prevPop) prevPop.remove();
+      var a = anchor || _popAnchor;
+      if (!a || !a.getBoundingClientRect || !a.isConnected) a = null;
+      var mask = document.createElement('div');
+      mask.className = 'vl-pop-mask';
+      var pop = document.createElement('div');
+      pop.className = 'vl-pop';
+      var html = '<div class="vl-pop__arrow"></div>';
+      if (o.title) html += '<div class="vl-pop__title"></div>';
+      if (o.message) html += '<div class="vl-pop__msg"></div>';
+      html += '<div class="vl-pop__actions">'
+        + '<button type="button" class="vl-pop__btn" data-k="cancel"></button>'
+        + '<button type="button" class="vl-pop__btn ' + (o.danger ? 'vl-pop__btn--danger' : 'vl-pop__btn--primary') + '" data-k="ok"></button>'
+        + '</div>';
+      pop.innerHTML = html;
+      if (o.title) pop.querySelector('.vl-pop__title').textContent = o.title;
+      if (o.message) pop.querySelector('.vl-pop__msg').textContent = o.message;
+      pop.querySelector('[data-k="cancel"]').textContent = o.cancelLabel || '取消';
+      pop.querySelector('[data-k="ok"]').textContent = o.okLabel || '确定';
+      document.body.appendChild(mask);
+      document.body.appendChild(pop);
+
+      // 定位：优先贴触发元素下方居中；下方空间不足转上方；水平夹紧在视口内
+      var vw = window.innerWidth, vh = window.innerHeight, gap = 8;
+      var pr = pop.getBoundingClientRect();
+      var left, top, below = true;
+      if (a) {
+        var r = a.getBoundingClientRect();
+        left = r.left + r.width / 2 - pr.width / 2;
+        top = r.bottom + gap;
+        if (top + pr.height > vh - 8) { top = r.top - pr.height - gap; below = false; }
+        if (top < 8) { top = Math.min(r.bottom + gap, Math.max(8, vh - pr.height - 8)); below = true; }
+        left = Math.max(8, Math.min(left, vw - pr.width - 8));
+        pop.classList.add(below ? 'vl-pop--below' : 'vl-pop--above');
+        var arrow = pop.querySelector('.vl-pop__arrow');
+        arrow.style.left = Math.max(12, Math.min(r.left + r.width / 2 - left, pr.width - 22)) + 'px';
+      } else {
+        left = Math.max(8, vw / 2 - pr.width / 2);
+        top = Math.max(8, vh / 2 - pr.height / 2);
+        pop.classList.add('vl-pop--below');
+        pop.querySelector('.vl-pop__arrow').style.display = 'none';
+      }
+      pop.style.left = left + 'px';
+      pop.style.top = top + 'px';
+
+      var done = function (v) {
+        document.removeEventListener('keydown', onKey, true);
+        if (mask.parentNode) mask.remove();
+        if (pop.parentNode) pop.remove();
+        resolve(v);
+      };
+      var onKey = function (e) { if (e.key === 'Escape') done(null); };
+      document.addEventListener('keydown', onKey, true);
+      mask.addEventListener('mousedown', function () { done(null); });
+      pop.querySelector('[data-k="cancel"]').addEventListener('click', function () { done(null); });
+      pop.querySelector('[data-k="ok"]').addEventListener('click', function () { done(true); });
+    });
+  }
   function showDialog(opts) {
     return new Promise(function (resolve) {
       var overlay = document.createElement('div');
@@ -226,10 +303,11 @@
         }).then(function (v) {
           if (!v) return;
           if (v === 'all') {
-            showDialog({
+            confirmPopover({
               title: '确认批量替换水印',
-              message: '将把本项目全部 TXT（含日志）中的水印行更换为：\n' + curWm + '\n\n删除后无法按原样恢复，是否继续？',
-              buttons: [ { label: '取消', value: false }, { label: '确认替换', value: true, danger: true, primary: true } ]
+              message: '将把本项目全部 TXT（含日志）中的水印行更换为：\n' + curWm + '\n\n删除后无法按原样恢复',
+              okLabel: '确认替换',
+              danger: true
             }).then(function (ok) { if (ok) doSave(true); });
           } else doSave(false);
         });
@@ -1422,7 +1500,7 @@
       };
       // noConfirm（切换/关闭前确认弹窗场景）：已确认过，跳过「确认覆盖」二次弹窗
       if (noConfirm) return go();
-      return showDialog({ title: '确认覆盖', message: '将覆盖原文件：\n' + path + '\n是否继续？', buttons: [ { label: '取消', value: false }, { label: '确认覆盖', value: true, danger: true, primary: true } ] }).then(function (ok) {
+      return confirmPopover({ title: '确认覆盖', message: '将覆盖原文件：\n' + path, okLabel: '确认覆盖', danger: true }).then(function (ok) {
         if (!ok) { setStatus('已取消保存'); return false; }
         return go();
       });
@@ -2197,10 +2275,11 @@
   // 取消预检测：二次确认后终止当前探测（已检测结果保留，物理缓存按原子替换策略处理）
   function cancelProbeFlow() {
     if (!state._probeActive) { setStatus('当前没有进行中的预检测'); return; }
-    showDialog({
+    confirmPopover({
       title: '取消预检测',
-      message: '确定要取消当前预检测吗？已检测到的结果会保留，未完成的部分不会写入缓存。',
-      buttons: [ { label: '继续检测', value: false, primary: true }, { label: '取消预检测', value: true, danger: true } ]
+      message: '已检测到的结果会保留，未完成的部分不会写入缓存',
+      okLabel: '取消预检测',
+      danger: true
     }).then(function (ok) {
       if (!ok) return;
       setStatus('正在取消预检测…');
@@ -2240,10 +2319,11 @@
     });
   }
   function resetPrecheckFlow() {
-    showDialog({
+    confirmPopover({
       title: '重置预检测',
-      message: '将重置预检测物理缓存，并对所有配置指向的路径重新预检测（重复文件自动跳过）。视频数量较多时可能耗时较长，是否继续？',
-      buttons: [ { label: '取消', value: null }, { label: '确认重置', value: 1, danger: true } ]
+      message: '将重置预检测物理缓存，并重新预检测所有配置指向的路径（重复文件自动跳过）。视频较多时可能耗时较长',
+      okLabel: '确认重置',
+      danger: true
     }).then(function (v) {
       if (!v) { setStatus('已取消重置预检测'); return; }
       showBusyProgress('正在重置预检测缓存并全量检测，请耐心等待…');
@@ -2303,10 +2383,11 @@
         refreshData(true, '正在重新扫描工作路径…', function () { setStatusDone('重新检测完成'); }, true);
         return;
       }
-      showDialog({
+      confirmPopover({
         title: '发现重复配置',
-        message: '发现 ' + pending.length + ' 个与成片文件夹正本内容完全一致的外部 * 配置（历史遗留副本）。删除它们不影响正本与其他日期分支，是否删除？',
-        buttons: [ { label: '取消', value: null }, { label: '删除并刷新', value: 1, danger: true } ]
+        message: '发现 ' + pending.length + ' 个与正本内容完全一致的外部 * 配置（历史遗留副本）。删除不影响正本与其他日期分支',
+        okLabel: '删除并刷新',
+        danger: true
       }).then(function (v) {
         if (!v) { setStatus('已取消清理，仅刷新列表'); refreshData(true, '正在重新扫描工作路径…', function () { setStatusDone('重新检测完成'); }, true); return; }
         showBusy('正在清理重复配置…');
@@ -2773,14 +2854,12 @@
         : '不可用（该日期下没有对应的【' + otherName + '】TXT）';
       // 外部 * 配置（isExternal）：位于成片文件夹之外，无自成片文件夹，仅能移除该配置 → 直接简化确认
       if (isExternal) {
-        showDialog({
+        confirmPopover({
           title: '移除该' + modeName,
-          message: target + '\n\n确认移除该外部配置（仅删除当前【' + modeName + '】文件，不影响成片）？',
-          buttons: [
-            { label: '取消', value: 0 },
-            { label: '移除该' + modeName, value: 1, primary: true, danger: true }
-          ]
-        }).then(function (v) { if (v === 1) doRemoveBranch(target, 'txt'); });
+          message: target + '\n\n仅删除当前【' + modeName + '】文件，不影响成片',
+          okLabel: '移除',
+          danger: true
+        }).then(function (v) { if (v) doRemoveBranch(target, 'txt'); });
         return;
       }
       showDialog({
@@ -2799,10 +2878,11 @@
         if (!v) return;
         if (v === 'folder') {
           var targetDir = String(target).replace(/[\\/][^\\/]*$/, '');
-          showDialog({
-            title: '确认整体删除',
-            message: '将整个文件夹（含成片视频及全部子项）移入回收站：\n' + targetDir + '\n\n如误删可从回收站还原，是否继续？',
-            buttons: [ { label: '继续删除', value: 'go', danger: true, primary: true } ]
+          confirmPopover({
+            title: '整体删除',
+            message: '将整个文件夹（含成片视频及全部子项）移入回收站：\n' + targetDir + '\n\n如误删可从回收站还原',
+            okLabel: '继续删除',
+            danger: true
           }).then(function (ok) { if (ok) doRemoveBranch(target, v); });
         } else doRemoveBranch(target, v);
       });
@@ -3547,8 +3627,8 @@
   function maskRebuildCache() {
     if (!maskOn() || !maskState.project) { setStatus('未选择遮罩叠加项目'); return; }
     var p = maskState.project;
-    showDialog({ title: '重建缓存', message: '将清空本项目的原片/遮罩持久化缓存并全量重建扫描（已选状态将重置）。继续？', buttons: [ { label: '取消', value: 0 }, { label: '重建', value: 1, primary: true } ] }).then(function (v) {
-      if (v !== 1) return;
+    confirmPopover({ title: '重建缓存', message: '将清空本项目的原片/遮罩持久化缓存并全量重建扫描（已选状态将重置）', okLabel: '重建' }).then(function (v) {
+      if (!v) return;
       setStatus('正在重建遮罩缓存…');
       call('clear_mask_session', p.name).then(function () {
         if (!maskOn() || !maskState.project || maskState.project.name !== p.name) return;
@@ -3563,14 +3643,17 @@
       }).catch(function () { setStatus('重建失败'); });
     });
   }
-  // 删除/操作结果弹窗告知（列入本次删除事件的要求：完成后弹窗显示结果）
+  // 删除/操作结果告知：轻量 toast 呈现（失败为红、其余为绿），不再开窗打断
   function maskTellResult(title, msg) {
-    showDialog({ title: title || '提示', message: String(msg == null ? '' : msg), buttons: [ { label: '知道了', value: 0, primary: true } ] });
+    var t = String(title || '');
+    var isErr = /失败|错误|异常|无法/.test(t);
+    var text = String(msg == null ? '' : msg);
+    toast((t ? t + '：' : '') + text, isErr ? 'error' : 'ok');
   }
   // 删除所有使用该原片素材产生的遮罩叠加成片（按本遮罩日志精确匹配）
   function maskDeleteByRaw(full) {
-    showDialog({ title: '删除素材成片', message: '确定删除所有使用该素材产生的遮罩叠加成片吗？\n' + full + '\n（按本遮罩叠加日志精确匹配）', buttons: [ { label: '取消', value: 0 }, { label: '删除', value: 1, danger: true } ] }).then(function (v) {
-      if (v !== 1) return;
+    confirmPopover({ title: '删除素材成片', message: '将删除所有使用该素材产生的遮罩叠加成片（按本遮罩叠加日志精确匹配）\n' + full, okLabel: '删除', danger: true }).then(function (v) {
+      if (!v) return;
       call('delete_mask_related', maskState.project.path, [full]).then(function (r) {
         if (!r || !r.ok) { maskTellResult('删除失败', ((r && r.error) || '未知错误')); return; }
         maskTellResult('删除结果', '已删除 ' + ((r.deleted || []).length) + ' 个成片');
@@ -4629,8 +4712,8 @@
         }).catch(function () {});
       }
       function doDeleteOne(vn) {
-        showDialog({ title: '删除成片', message: '确定删除成片「' + vn + '」？日志中将同步移除该条目。', buttons: [ { label: '取消', value: 0 }, { label: '删除', value: 1, danger: true } ] }).then(function (v) {
-          if (v !== 1) return;
+        confirmPopover({ title: '删除成片', message: '将删除成片「' + vn + '」，日志中同步移除该条目', okLabel: '删除', danger: true }).then(function (v) {
+          if (!v) return;
           call('delete_mask_videos', maskState.project.path, [vn]).then(function (r) {
             if (!r || !r.ok) { maskTellResult('删除失败', ((r && r.error) || '未知错误')); return; }
             maskTellResult('删除结果', '已删除 ' + ((r.deleted || []).length) + ' 个成片');
@@ -4640,8 +4723,8 @@
       }
       function doDeleteRelated(clip) {
         var base = baseNameNoExt(clip);
-        showDialog({ title: '删除相关成片', message: '确定删除所有使用素材「' + base + '」的遮罩叠加成片吗？', buttons: [ { label: '取消', value: 0 }, { label: '删除', value: 1, danger: true } ] }).then(function (v) {
-          if (v !== 1) return;
+        confirmPopover({ title: '删除相关成片', message: '将删除所有使用素材「' + base + '」的遮罩叠加成片', okLabel: '删除', danger: true }).then(function (v) {
+          if (!v) return;
           call('delete_mask_related', maskState.project.path, [clip]).then(function (r) {
             if (!r || !r.ok) { maskTellResult('删除失败', ((r && r.error) || '未知错误')); return; }
             maskTellResult('删除结果', '已删除 ' + ((r.deleted || []).length) + ' 个相关成片');

@@ -180,6 +180,7 @@
     clear_done_tasks: function (opts) { return invokeArgs('clear_done_tasks', opts); },
     get_changelog: function () { return invoke('get_changelog', []); },
     get_changelog_popup: function () { return invoke('get_changelog_popup', []); },
+    ack_changelog_popup: function () { return invoke('ack_changelog_popup', []); },
     get_readme: function () { return invoke('get_readme', []); },
     clear_task: function (id) { return invokeArgs('clear_task', id); },
     regroup_task: function (id, groupCount) { return invokeArgs('regroup_task', id, groupCount); },

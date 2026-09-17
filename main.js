@@ -1013,9 +1013,18 @@ function buildHttpExtraRoutes() {
         if (String(cfg.last_changelog_version || '') === APP_VERSION) return { ok: true, show: false };
         const r = api.getChangelog();
         if (!r || !r.ok) return { ok: false, error: (r && r.error) || '读取更新日志失败' };
-        cfg.last_changelog_version = APP_VERSION; saveConfig(cfg);
-        try { Object.assign(config, cfg); } catch (e) {}
+        // 此处不写 last_changelog_version：标记由前端在弹窗关闭时经 ack_changelog_popup 回写，
+        // 避免「静默启动时主窗口 JS 已执行但用户没看到弹窗」就把展示机会消耗掉
         return { ok: true, show: true, content: r.content };
+      } catch (e) { return { ok: false, error: String(e) }; }
+    },
+    ack_changelog_popup: () => {
+      try {
+        const cfg = loadConfig();
+        cfg.last_changelog_version = APP_VERSION;
+        saveConfig(cfg);
+        try { Object.assign(config, cfg); } catch (e) {}
+        return { ok: true };
       } catch (e) { return { ok: false, error: String(e) }; }
     },
     get_runtime: () => ({ is_portable: IS_PORTABLE, version: APP_VERSION }),
@@ -1097,17 +1106,27 @@ function registerIpc() {
   ipcMain.handle('clear_done_tasks', (e, opts) => api.clearDoneTasks(opts || {}));
   ipcMain.handle('get_changelog', () => api.getChangelog());
   ipcMain.handle('get_readme', () => api.getReadme());
-  // 启动弹更新日志：仅当配置里记录的上次展示版本与当前版本不同（含初次启动 / 版本更新后）才返回内容，并即刻记录为已展示
+  // 启动弹更新日志：仅当配置里记录的上次展示版本与当前版本不同（含初次启动 / 版本更新后）才返回内容。
+  // 标记（last_changelog_version）改由前端在弹窗关闭时经 ack_changelog_popup 回写，
+  // 避免「静默到托盘启动时主窗口 JS 已执行、用户却没看到弹窗」白白消耗掉展示机会
   ipcMain.handle('get_changelog_popup', () => {
     try {
       const cfg = loadConfig();
       if (String(cfg.last_changelog_version || '') === APP_VERSION) return { ok: true, show: false };
       const r = api.getChangelog();
       if (!r || !r.ok) return { ok: false, error: (r && r.error) || '读取更新日志失败' };
+      return { ok: true, show: true, content: r.content };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  });
+  ipcMain.handle('ack_changelog_popup', () => {
+    try {
+      const cfg = loadConfig();
       cfg.last_changelog_version = APP_VERSION;
       saveConfig(cfg);
       try { Object.assign(config, cfg); } catch (e) {}
-      return { ok: true, show: true, content: r.content };
+      return { ok: true };
     } catch (e) {
       return { ok: false, error: String(e) };
     }

@@ -3304,7 +3304,12 @@
       '<div class="changelog-card__actions"><button type="button" class="modal-btn modal-btn--primary">知道了</button></div>';
     var body = card.querySelector('.changelog-card__body');
     body.innerHTML = renderMdMd(content);
-    var done = function () { overlay.remove(); };
+    var done = function () {
+      overlay.remove();
+      // 用户确已看到 → 记录展示版本，避免下次重复弹出（标记在关闭时回写，
+      // 故静默到托盘启动时不会白消耗掉本次展示机会）
+      try { call('ack_changelog_popup'); } catch (e) {}
+    };
     card.querySelector('.modal-close').addEventListener('click', done);
     card.querySelector('.modal-btn').addEventListener('click', done);
     overlay.addEventListener('click', function (e) { if (e.target === overlay) done(); });

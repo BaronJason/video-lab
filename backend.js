@@ -3641,7 +3641,7 @@ class Api {
       BATCH_SPEED_LIMIT: String(b.speed_limit),
       BATCH_TXT_PREFIX: (Array.isArray(b.txt_prefix) ? b.txt_prefix : String(b.txt_prefix == null ? '' : b.txt_prefix)).map(String).filter((x) => String(x).trim() !== '').join(';'),
       BATCH_PRODUCER: String(b.producer).trim(),
-      BATCH_SUFFIX_MARK: (Array.isArray(b.suffix_mark) ? b.suffix_mark : String(b.suffix_mark == null ? '' : b.suffix_mark)).map(String).filter((x) => String(x).trim() !== '').join(';'),
+      BATCH_SUFFIX_MARK: String(b.suffix_mark == null ? '' : b.suffix_mark).trim(),
     });
     const countStr = String(count).trim();
     if (/^\d+$/.test(countStr) && parseInt(countStr, 10) > 0) env.BATCH_COUNT = countStr;

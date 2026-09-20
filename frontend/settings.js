@@ -17,7 +17,7 @@
     { id: 'Maid_Atelier', label: '深海女仆', bg: '#0e1d49', theme: '#c5a468' }
   ];
   var state = {
-    batch: { max_duration: '', max_retry: '', speed_limit: '', txt_prefix: [], producer: '', suffix_mark: [] },
+    batch: { max_duration: '', max_retry: '', speed_limit: '', txt_prefix: [], producer: '', suffix_mark: '' },
     replica: { max_duration: '', speed_limit: '', dedup_ratio: '' },
     mask: { root: '', watermark_mov: '', watermark_alpha: '' }
   };
@@ -284,7 +284,7 @@
   function updatePreview() {
     var prefix = Array.isArray(state.batch.txt_prefix) ? state.batch.txt_prefix.join('-') : String(state.batch.txt_prefix || '');
     var producer = $('batchProducer').value.trim();
-    var suffixMark = Array.isArray(state.batch.suffix_mark) ? state.batch.suffix_mark.join('-') : String(state.batch.suffix_mark || '');
+    var suffixMark = String(state.batch.suffix_mark || '');
     var now = new Date();
     var datePrefix = String(now.getFullYear()).slice(2)
       + String(now.getMonth() + 1).padStart(2, '0')
@@ -294,7 +294,7 @@
     if (prefix) items.push(prefix.replace(/-+$/g, ''));
     items.push('项目文件夹');
     items.push('TXT配置名');
-    var name = items.join('-').replace(/-{2,}/g, '-') + (suffixMark ? '-' + suffixMark : '') + '1.mp4';
+    var name = items.join('-').replace(/-{2,}/g, '-') + '-' + suffixMark + '1.mp4';
     $('batchNamePreview').textContent = name;
   }
 
@@ -384,7 +384,7 @@
       if (pp) pp.textContent = s.config_path_program || '';
       if (pa) pa.textContent = s.config_path_appdata || '';
       var b = s.batch || {};
-      state.batch.suffix_mark = toArr(b.suffix_mark);
+      $('batchSuffixMark').value = b.suffix_mark != null ? b.suffix_mark : '';
       $('batchMaxDuration').value = b.max_duration != null ? b.max_duration : '';
       $('batchMaxRetry').value = b.max_retry != null ? b.max_retry : '';
       $('batchSpeedLimit').value = b.speed_limit != null ? b.speed_limit : '';
@@ -399,7 +399,6 @@
       $('maskWatermark').value = mk.watermark_mov || '';
       $('maskAlpha').value = mk.watermark_alpha != null && String(mk.watermark_alpha).trim() !== '' ? mk.watermark_alpha : '';
       setupMultiTags('batchTxtPrefix', 'batchTxtPrefixTags', state.batch.txt_prefix, onBatchTagsChanged, 'batchTxtPrefixCaret');
-      setupMultiTags('batchSuffixMark', 'batchSuffixMarkTags', state.batch.suffix_mark, onBatchTagsChanged, 'batchSuffixMarkCaret');
       updatePreview();
       captureOriginals();
       recomputeDirty();
@@ -530,7 +529,7 @@
       state.batch.speed_limit = $('batchSpeedLimit').value.trim();
       state.batch.txt_prefix = (state.batch.txt_prefix || []).slice();
       state.batch.producer = $('batchProducer').value.trim();
-      state.batch.suffix_mark = (state.batch.suffix_mark || []).slice();
+      state.batch.suffix_mark = $('batchSuffixMark').value.trim();
       state.replica.max_duration = $('replicaMaxDuration').value.trim();
       state.replica.speed_limit = $('replicaSpeedLimit').value.trim();
       state.replica.dedup_ratio = $('replicaDedupRatio').value.trim();
@@ -636,7 +635,7 @@
       if (discardPop && discardPop.style.display !== 'none' && !discardPop.contains(e.target)) hideDiscardPop();
     });
     setupMultiTags('batchTxtPrefix', 'batchTxtPrefixTags', state.batch.txt_prefix, onBatchTagsChanged, 'batchTxtPrefixCaret');
-    setupMultiTags('batchSuffixMark', 'batchSuffixMarkTags', state.batch.suffix_mark, onBatchTagsChanged, 'batchSuffixMarkCaret');
+    $('batchSuffixMark').addEventListener('input', updatePreview);
     $('batchProducer').addEventListener('input', updatePreview);
   }
 

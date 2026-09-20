@@ -110,7 +110,7 @@ function readEnv(env = process.env) {
     speedThreshold: num('BATCH_SPEED_LIMIT', 1.2),
     txtNamePrefix: list('BATCH_TXT_PREFIX'),
     producerName: s('BATCH_PRODUCER', '默认'),
-    suffixMark: list('BATCH_SUFFIX_MARK'),
+    suffixMark: s('BATCH_SUFFIX_MARK'),
     // 续跑过滤：失败成片名（分号分隔）。据此反解序号只重做这些，其余按原始 totalOutput/groupCount 计算
     onlyNames: s('BATCH_ONLY_NAMES'),
     count: intOrNull('BATCH_COUNT'),
@@ -1118,9 +1118,7 @@ async function run(ctx, env = process.env) {
       for (const p of hitPrefixes) nameItems.push(String(p).replace(/-+$/, ''));
       nameItems.push(parentFolder);
       nameItems.push(txtNameSuffix.replace(/^-+/, ''));
-      // 多后缀：按设置顺序全部拼接（`-` 分隔），后接序号
-      const suffixStr = cfg.suffixMark.length ? '-' + cfg.suffixMark.join('-') : '';
-      let finalOutName = `${nameItems.join('-').replace(/-{2,}/g, '-')}${suffixStr}${outIndex}.mp4`;
+      let finalOutName = `${nameItems.join('-').replace(/-{2,}/g, '-')}-${cfg.suffixMark}${outIndex}.mp4`;
       let finalOut = path.join(outDir, finalOutName);
 
       // ── 输入文件存在性 ──

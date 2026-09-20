@@ -2339,7 +2339,7 @@
     call('refresh_precache').then(function (r) {
       if (state.precheckBackground) hideProbeMini(); else hideBusy();
       cleanup();
-      setStatus('预缓存已刷新：更新 ' + ((r && r.updated) || 0) + ' / ' + ((r && r.total) || 0) + ' 个视频' + ((r && r.cancelled) ? '（已中断，失效缓存稍后后台清理）' : '，失效缓存已后台清理'));
+      setStatus('预缓存已刷新：本次更新 ' + ((r && r.updated) || 0) + ' 个视频，共 ' + ((r && r.total) || 0) + ' 个视频' + ((r && r.cancelled) ? '（已中断，失效缓存稍后后台清理）' : '，失效缓存已后台清理'));
       if (state.activeTxt && state.activeVersion) runPrecheck();
     }).catch(function (e) {
       hideBusy();

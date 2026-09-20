@@ -647,8 +647,15 @@
     // 继续制作按钮：复刻/批量任务失败、中断、停止且存在失败记录时显示（不删除已成功产物）
     // 批量任务的续跑按「失败成片名的序号」补做，命名前缀/输出目录/拼接日志与首次一致
     var continueBtn = rec.header.querySelector('.task-card__continue');
+    // 有无失败记录不足以判定能否续跑：中断/停止（手动停止、进程被杀）不会留下「❌ 失败成片」行，
+    // 成片失败记录也可能是空的（如整片在选片阶段就失败）。这种情形 backend 的 continueReplica
+    // 会用第三层兜底 —— 依任务标记里已产出的成片清单 + 源 TXT 反推未完成项，
+    // 所以「进度未走完」同样应当给出续跑入口，否则用户只剩「重新开始」（会删掉已成功产物）。
+    var progDone = (t.progress && t.progress.current) || 0;
+    var progTotal = (t.progress && t.progress.total) || 0;
     var hasFail = (Array.isArray(t.failedVideos) && t.failedVideos.length > 0)
-      || (t.log || []).some(function (l) { return /❌ 失败成片/.test(String(l)); });
+      || (t.log || []).some(function (l) { return /❌ 失败成片/.test(String(l)); })
+      || (progTotal > 0 && progDone < progTotal);
     var canContinue = (t.type === 'replica' || t.type === 'batch') && canRerun && hasFail;
     continueBtn.style.display = (canContinue && state.tab !== 'running') ? '' : 'none';
     // 进度条：数字行（当前/总）+ 下方进度条，仅解析到总进度后显示；
@@ -880,7 +887,7 @@
   }
 
   function confirmRerun(t, anchor) {
-    var msg = '将使用最初配置重新制作，并删除上次失败的成片与日志';
+    var msg = '将删除上次的成片与日志、从第 1 个成片重新制作；若只想补做缺失的成片，请改用「继续制作」';
     confirmPopover({ title: '重新开始', message: msg, okLabel: '重新开始', danger: true }, anchor).then(function (ok) {
       if (!ok) return;
       call('rerun_task', t.id).then(function (r) {

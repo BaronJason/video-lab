@@ -3707,8 +3707,7 @@ class Api {
       const marker = this._loadMarker(t);
       const doneVideos = (marker && Array.isArray(marker.videos) ? marker.videos : []);
       if (doneVideos.length) {
-        // 有已完成产物但无失败记录 → 可能是中途停止，需从源日志推断剩余条目
-        // 通过 REPLICA_TXT 读取源日志的成片名，减去已完成的，剩余即是未完成的
+        // 路由 A（复刻）：源 TXT 本身就是成片名清单，减去已完成的即为未完成项
         const srcEnv = t.env || {};
         const srcPath = srcEnv.REPLICA_TXT ? String(srcEnv.REPLICA_TXT).trim() : '';
         if (srcPath && fs.existsSync(srcPath)) {
@@ -3720,6 +3719,25 @@ class Api {
               if (ln.endsWith('.mp4') && !ln.includes('\\') && !ln.includes('/') && !doneBases.has(ln)) failNames.add(ln);
             }
           } catch (e) {}
+        }
+        // 路由 B（批量）：源 TXT 是素材配置而非成片名清单，路由 A 必然一无所获。
+        // 改为「应有 total 片 − 已产出序号」反推缺失序号，再用已产出成片名作模板构造名字 ——
+        // 引擎只从名字里反解序号（parseOnlyNameIndex），不比对完整名，故模板 + 目标序号即足够。
+        if (!failNames.size && t.type === 'batch') {
+          const plannedTotal = (t.progress && t.progress.total) || 0;
+          const idxOf = (n) => { const m = /-(\d+)[A-Z]?\.mp4$/i.exec(String(n)); return m ? parseInt(m[1], 10) : 0; };
+          const doneIdx = new Set();
+          for (const v of doneVideos) { const i = idxOf(path.basename(String(v))); if (i > 0) doneIdx.add(i); }
+          // 成片目录里实际存在的文件也算已完成（标记可能未含最后一刻的产出）
+          const markerOutDir = marker && marker.batchOutDir ? String(marker.batchOutDir) : '';
+          if (markerOutDir && fs.existsSync(markerOutDir)) {
+            try { for (const f of fs.readdirSync(markerOutDir)) { const i = idxOf(f); if (i > 0) doneIdx.add(i); } } catch (e) {}
+          }
+          if (plannedTotal > 0 && doneIdx.size > 0) {
+            const sample = path.basename(String(doneVideos[0]));
+            const mkName = (i) => sample.replace(/-(\d+)([A-Z]?)\.mp4$/i, '-' + i + '$2.mp4');
+            for (let i = 1; i <= plannedTotal; i++) if (!doneIdx.has(i)) failNames.add(mkName(i));
+          }
         }
       }
     }

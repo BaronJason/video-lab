@@ -916,15 +916,12 @@ async function run(ctx, env = process.env) {
     if (!exists(logFilePath)) fs.writeFileSync(logFilePath, '', 'utf8');
 
     logger.info('');
-    logger.info(`开始批量生成（共 ${totalOutput} 个）`);
-    const dPrefix = datePrefix(taskDate(cfg.submitTs));
-    const parentFolder = path.basename(baseDir);
-    const maxAllowedEstimate = cfg.maxTotalDuration * cfg.speedThreshold;
 
     // 续跑：仅重做 BATCH_ONLY_NAMES 指定的序号；totalOutput / groupCount 保持原始值不动，
     // 使成片命名（-序号）与分组后缀（A/B/C）与首次运行完全一致
     let indexList = [];
     for (let i = 1; i <= totalOutput; i++) indexList.push(i);
+    let resumeMode = false;
     if (cfg.onlyNames) {
       const onlyIdx = [];
       for (const nm of String(cfg.onlyNames).split(';').map((x) => x.trim()).filter(Boolean)) {
@@ -935,8 +932,17 @@ async function run(ctx, env = process.env) {
         return fail(`续跑过滤未从成片名解析出序号：${cfg.onlyNames}（应为 <成片名>-<序号>.mp4）`, '续跑过滤');
       }
       indexList = Array.from(new Set(onlyIdx)).sort((a, b) => a - b);
-      logger.info(`🔁 续跑模式：仅重做 ${indexList.length} 个成片（序号 ${indexList.join(', ')}）`);
+      resumeMode = true;
     }
+    // 先声明模式与范围、再报总数：否则续跑时那句「开始批量生成（共 N 个）」
+    // 会被误读成「要重做 N 个」，看上去像重新开始
+    logger.info(resumeMode
+      ? `🔁 续跑模式：仅重做 ${indexList.length} 个成片（序号 ${indexList.join(', ')}）—— 本批共 ${totalOutput} 个，其余保留既有产物`
+      : `开始批量生成（共 ${totalOutput} 个）`);
+
+    const dPrefix = datePrefix(taskDate(cfg.submitTs));
+    const parentFolder = path.basename(baseDir);
+    const maxAllowedEstimate = cfg.maxTotalDuration * cfg.speedThreshold;
 
     for (const outIndex of indexList) {
       logger.info('');

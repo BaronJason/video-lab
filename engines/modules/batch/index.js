@@ -1124,7 +1124,9 @@ async function run(ctx, env = process.env) {
       for (const p of hitPrefixes) nameItems.push(String(p).replace(/-+$/, ''));
       nameItems.push(parentFolder);
       nameItems.push(txtNameSuffix.replace(/^-+/, ''));
-      let finalOutName = `${nameItems.join('-').replace(/-{2,}/g, '-')}-${cfg.suffixMark}${outIndex}.mp4`;
+      // 多后缀：按设置顺序以 `-` join；为空不加 `-`。整串统一合并连续 `--`，避免无后缀时出现 `--序号`
+      const suffixStr = cfg.suffixMark.length ? cfg.suffixMark.join('-') : '';
+      let finalOutName = `${nameItems.join('-')}${suffixStr ? '-' + suffixStr : ''}${outIndex}.mp4`.replace(/-{2,}/g, '-');
       let finalOut = path.join(outDir, finalOutName);
 
       // ── 输入文件存在性 ──

@@ -211,8 +211,7 @@
     var summarize = function () {
       var store = getStore();
       if (!store.length) return '输入后回车添加，可添加多个';
-      var head = store.slice(0, 3).join(' · ');
-      return '已设 ' + store.length + ' 项：' + head + (store.length > 3 ? ' …' : '') + '（点击展开可调整顺序）';
+      return '已设 ' + store.length + ' 项，点击可调整前后顺序';
     };
     var applyFold = function () {
       list.hidden = !expanded;
@@ -290,7 +289,9 @@
   }
 
   function updatePreview() {
-    var prefix = Array.isArray(state.batch.txt_prefix) ? state.batch.txt_prefix.join('-') : String(state.batch.txt_prefix || '');
+    // 预览里只用占位符「前缀」表示该段：实际命中哪几个前缀要到运行时才判定
+    // （多命中会按设置顺序全部写入、以 - 分隔），此处展开真实值反而误导
+    var prefixCount = toArr(state.batch.txt_prefix).length;
     var producer = $('batchProducer').value.trim();
     var suffixMark = String(state.batch.suffix_mark || '');
     var now = new Date();
@@ -299,7 +300,7 @@
       + String(now.getDate()).padStart(2, '0');
     var items = [datePrefix];
     if (producer) items.push(producer);
-    if (prefix) items.push(prefix.replace(/-+$/g, ''));
+    if (prefixCount) items.push('前缀');
     items.push('项目文件夹');
     items.push('TXT配置名');
     var name = items.join('-').replace(/-{2,}/g, '-') + '-' + suffixMark + '1.mp4';

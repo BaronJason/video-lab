@@ -4,19 +4,9 @@
    素材来源：maid-atelier (CC BY-NC-SA 4.0)
    ═══════════════════════════════════════════════════════════════ */
 
-/* 品牌名片标题字体：Cinzel（SIL OFL 1.1，可商用分发，见 assets/fonts/OFL-Cinzel.txt）。
-   内嵌 Regular/Bold 两字重，确保各端渲染一致、不依赖客户端装字体；
-   url() 相对本 CSS（frontend/skins/）解析到 assets/fonts/ */
-@font-face {
-  font-family: 'Cinzel';
-  font-weight: 400;
-  src: url('assets/fonts/Cinzel-Regular.ttf') format('truetype');
-}
-@font-face {
-  font-family: 'Cinzel';
-  font-weight: 600 900;
-  src: url('assets/fonts/Cinzel-Bold.ttf') format('truetype');
-}
+/* 品牌名片标题字体 Cinzel（SIL OFL 1.1，可商用分发，见 frontend/assets/fonts/OFL-Cinzel.txt）：
+   @font-face 已由 styles.css 全局声明（Regular 400 / Bold 700，主窗口标题栏与品牌名片共用），
+   此处不再重复声明 —— 皮肤启停不影响该字体可用性。 */
 
 html[data-skin="Maid_Atelier"] {
   /* ── 背景层：深海蓝色阶 ── */

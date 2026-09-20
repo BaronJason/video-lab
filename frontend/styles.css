@@ -9,19 +9,21 @@
 
 :root{--bg-input-default:#FFFFFF;}
 
-/* 品牌字体 Cinzel（SIL OFL 1.1，可商用分发，见 skins/assets/fonts/OFL-Cinzel.txt）：
-   品牌名片与主窗口标题栏共用，确保全局一致 */
+/* 品牌字体 Cinzel（SIL OFL 1.1，可商用分发，见 assets/fonts/OFL-Cinzel.txt）：
+   品牌名片与主窗口标题栏共用，确保全局一致。
+   与 JetBrains Mono 同处 assets/fonts/ —— 两者都是应用级字体、不随皮肤启停；
+   此前放在 skins/assets/fonts/ 下，会让主窗口标题栏反向依赖皮肤目录。 */
 @font-face {
   font-family: 'Cinzel';
   font-style: normal;
   font-weight: 400;
-  src: url('skins/assets/fonts/Cinzel-Regular.ttf') format('truetype');
+  src: url('assets/fonts/Cinzel-Regular.ttf') format('truetype');
 }
 @font-face {
   font-family: 'Cinzel';
   font-style: normal;
   font-weight: 700;
-  src: url('skins/assets/fonts/Cinzel-Bold.ttf') format('truetype');
+  src: url('assets/fonts/Cinzel-Bold.ttf') format('truetype');
 }
 
 /**

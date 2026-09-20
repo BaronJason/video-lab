@@ -133,6 +133,58 @@ let configFile = resolveConfigLocation();
 const SETTINGS_DB = 'settings.db';
 const CACHE_DB = 'cache.db';
 const storageDir = () => path.dirname(configFilePath());
+
+// ── 运行日志（排查用，保留 7 天）──
+// 任务记录 / 任务标记 / 成片产物都可能被清除或删除，一旦清除就只剩"反推"。
+// 本日志独立留存、任何清除操作都不触碰它 —— 它是事后唯一还在的证据。
+// 位置与三库同级：<storageDir>\log\app-YYYY-MM-DD.log
+const runLog = require(path.join(resolveEnginesDir(), 'base', 'runlog.js'));
+runLog.init(path.join(storageDir(), 'log'));
+const _pruned = runLog.pruneOld();
+runLog.sys('app.start',
+  '启动 · 版本 ' + app.getVersion() + ' · ' + (app.isPackaged ? (IS_PORTABLE ? '便携形态' : '安装形态') : '源码形态')
+  + (_pruned.removed ? ' · 已清理 ' + _pruned.removed + ' 个过期日志' : ''),
+  { version: app.getVersion(), packaged: app.isPackaged, portable: IS_PORTABLE, storageDir: storageDir(), enginesDir: resolveEnginesDir(), keepDays: runLog.KEEP_DAYS });
+
+// ── IPC 统一留痕：一处覆盖全部通道 ──
+// 回答"用户到底点了什么"——任务窗口与主窗口的写操作都会经过这里，
+// 包括删除配置、新增配置、添加/删除路径、重分组、清除产物等。
+// 只读与展示类通道跳过（list_/get_/open_ 等），否则日志会被轮询淹成噪音。
+const _IPC_SILENT = /^(list_|get_|read_|open_|window_|check_|resolve_|search_|find_|locate_|precheck|scan_|respond_|ack_|on_|task_replica_outdir)/;
+function _scrubSecrets(s) {
+  return String(s == null ? '' : s).replace(/("(?:[a-z_]*token[a-z_]*|password|secret|passwd)"\s*:\s*)"[^"]*"/gi, '$1"***"');
+}
+function _brief(v, max) {
+  try {
+    if (v == null) return '';
+    const s = _scrubSecrets(typeof v === 'string' ? v : JSON.stringify(v));
+    if (!s || s === '{}' || s === '[]' || s === 'null' || s === '""') return '';
+    return s.length > max ? s.slice(0, max) + '…' : s;
+  } catch (e) { return ''; }
+}
+const _origIpcHandle = ipcMain.handle.bind(ipcMain);
+ipcMain.handle = function (channel, fn) {
+  return _origIpcHandle(channel, async function (e, ...args) {
+    const t0 = Date.now();
+    try {
+      const r = await fn(e, ...args);
+      if (!_IPC_SILENT.test(channel)) {
+        const failed = !!(r && typeof r === 'object' && r.ok === false);
+        const payload = _brief(args, 700);
+        const res = _brief(r, 300);
+        runLog.ipc(channel,
+          (failed ? '失败' : 'ok') + ' · ' + (Date.now() - t0) + 'ms'
+          + (failed && r && r.error ? ' · ' + String(r.error).slice(0, 160) : '')
+          + (payload ? ' · 入参 ' + payload : ''),
+          res ? { result: res } : null);
+      }
+      return r;
+    } catch (err) {
+      runLog.err('ipc.' + channel, err, { args: _brief(args, 400) });
+      throw err;
+    }
+  });
+};
 // 切换配置保存位置：复制到目标位置并删除旧位置文件（迁移式，不留两份）
 function moveConfigFile(target) {
   const src = configFile;

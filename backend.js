@@ -301,6 +301,39 @@ class Api {
     return path.join(parent, 'engines');
   }
 
+  // 运行日志出口（懒加载；写日志永不影响主流程）
+  _lg(verb, action, summary, data) {
+    try {
+      if (!this._runLog) this._runLog = require(path.join(this.enginesDir, 'base', 'runlog.js'));
+      this._runLog.logEvent(verb, action, summary, data);
+    } catch (e) {}
+  }
+  // 任务 env 的业务字段快照 —— 复现「成片命名 / 输出目录 / 续跑范围」的唯一凭据，
+  // 任务记录一旦被清除就再也没有别处留存了。
+  _envBrief(env) {
+    const E = env || {};
+    const keys = ['REPLICA_TXT', 'REPLICA_OUTPUT_DIR', 'BATCH_COUNT', 'BATCH_GROUP', 'BATCH_SUBMIT_TS',
+      'BATCH_TXT_PREFIX', 'BATCH_SUFFIX_MARK', 'BATCH_PRODUCER', 'BATCH_ONLY_NAMES',
+      'REPLICA_ONLY_NAMES', 'REPLICA_ONLY_NAME', 'REPLICA_SUBMIT_TS',
+      'MASK_ONLY_NAMES', 'MASK_RAW_DIRS', 'MASK_THEMES', 'MASK_OUTPUT_DIR'];
+    const out = {};
+    for (const k of keys) { const v = E[k]; if (v !== undefined && v !== null && String(v) !== '') out[k] = String(v).slice(0, 240); }
+    return out;
+  }
+  // 被删产物的可复盘清单（路径 + 大小 + 修改时间）—— 必须在删除之前调用
+  _describeForLog(paths) {
+    try {
+      if (!this._runLog) this._runLog = require(path.join(this.enginesDir, 'base', 'runlog.js'));
+      return this._runLog.describeFiles(paths);
+    } catch (e) { return { files: [], count: 0, bytes: 0, truncated: false }; }
+  }
+  _humanSize(n) {
+    try {
+      if (!this._runLog) this._runLog = require(path.join(this.enginesDir, 'base', 'runlog.js'));
+      return this._runLog.humanSize(n);
+    } catch (e) { return String(n) + ' B'; }
+  }
+
   // 引擎入口文件；不存在返回空串（调用方据此判定引擎不可用）
   _engineRunnerPath() {
     const d = this.enginesDir;
@@ -2562,6 +2595,11 @@ class Api {
       return { ok: false, error: isMask ? '原任务缺少遮罩配置，无法重新开始' : '原任务缺少 TXT 配置，无法重新开始' };
     }
     // 删除上次失败残留的成片与日志：有标记按标记精确清单，无标记回退日志解析+目录推算
+    this._lg('DEL', 'task.rerun',
+      '重新开始 · 将删除上次产物并从第 1 片重做 · ' + t.type + ' · ' + String(t.title || '').slice(0, 50),
+      { id: t.id, hasMarker: !!marker,
+        markerVideos: (marker && Array.isArray(marker.videos) ? marker.videos.slice(0, 30) : []),
+        env: this._envBrief(env) });
     if (marker) this._removeMarkerArtifacts(marker);
     else this._removeTaskArtifacts(t);
     this._removeMarker(t);
@@ -2636,6 +2674,22 @@ class Api {
   // 2) batch 专属输出目录内的成片 mp4 与拼接日志（与重制结果同名冲突）；
   //    源 TXT 正本若已被脚本移入输出目录且原位置不存在，先移回原处保证重开可读取。
   _removeMarkerArtifacts(marker) {
+    // 先留痕再删：产物一旦删除，这里是唯一还能还原「删了什么、多大、原修改时间」的地方
+    const targets = (marker.videos || []).slice();
+    if (marker.type === 'batch' && marker.batchOutDir) {
+      try {
+        if (fs.existsSync(marker.batchOutDir)) {
+          for (const f of fs.readdirSync(marker.batchOutDir)) {
+            if (path.extname(f).toLowerCase() === '.mp4' || /拼接日志/.test(f)) targets.push(path.join(marker.batchOutDir, f));
+          }
+        }
+      } catch (e2) {}
+    }
+    const info = this._describeForLog(targets);
+    this._lg('DEL', 'task.artifacts.remove',
+      '清除任务产物 · ' + String(marker.type || '') + ' · ' + info.count + ' 个文件 · 共 ' + this._humanSize(info.bytes),
+      Object.assign({ outDir: marker.batchOutDir || '' }, info));
+
     const rm = (p) => {
       try {
         if (p && fs.existsSync(p)) {
@@ -3164,6 +3218,9 @@ class Api {
       const child = this._spawnNodeEngineChild(task, childEnv);
       if (task) {
         task.pid = child.pid;
+        this._lg('RUN', 'task.start',
+          '任务开始 · ' + task.type + ' · ' + String(task.title || '').slice(0, 60) + ' · pid=' + child.pid,
+          { id: task.id, type: task.type, pid: child.pid, env: this._envBrief(task.env) });
         task.log.push('[引擎] Node 引擎（module=' + task.type + '）');
         this._emitTasks();
         // 任务真正开始：创建任务标记（含 env 快照，供失败重开精确还原）
@@ -3231,7 +3288,13 @@ class Api {
           else if (/互斥锁已释放|任务全部完成|脚本完成/.test(s)) { task.lockState = 'released'; task.progress.liveLine = null; }
           // 产物记录进任务标记：成片完成路径 / batch 专属输出目录（重开时据此精确删除）
           const outpM = s.match(/✅ 成片完成：(.+)$/);
-          if (outpM) this._appendMarkerOut(task, 'videos', String(outpM[1]).trim());
+          if (outpM) {
+            const outp = String(outpM[1]).trim();
+            this._appendMarkerOut(task, 'videos', outp);
+            this._lg('RUN', 'clip.done',
+              '成片产出 · ' + String(task.title || '').slice(0, 40) + ' · ' + path.basename(outp),
+              { task: task.id, path: outp });
+          }
           const outdM = s.match(/✅ 创建输出目录：(.+)$/);
           if (outdM) this._appendMarkerOut(task, 'batchOutDir', String(outdM[1]).trim());
           // 失败成片记录：脚本输出 `❌ 失败成片：<成片名>|<原因>`，供续跑/对账/前端展示
@@ -3266,6 +3329,13 @@ class Api {
           task.status = status;
           task.paused = false;
           if (task.status === 'error' && !task.failReason) task.failReason = this._deriveFailReason(task);
+          this._lg('RUN', 'task.end',
+            '任务结束 · ' + status + ' · ' + task.type + ' · 退出码 ' + code
+            + ' · 成片 ' + ((task.progress && task.progress.current) || 0) + '/' + ((task.progress && task.progress.total) || 0)
+            + ' · 失败记录 ' + ((task.failedVideos || []).length) + ' 条'
+            + (task.failReason ? ' · ' + String(task.failReason).slice(0, 80) : ''),
+            { id: task.id, status: status, code: code,
+              failed: (task.failedVideos || []).slice(0, 20).map((f) => f && f.name) });
           // 任务标记统一保留：done 也保留供「清除成片/日志」精确删除（不误伤同目录其他任务的产物）
           this._emitTasks();
           // 运行任务结束：清空运行位并启动执行队列中的下一个任务（暂停/继续不影响插入后的推进）
@@ -3741,7 +3811,12 @@ class Api {
         }
       }
     }
-    if (!failNames.size) return { ok: false, error: '没有发现需要续跑的成片，请检查任务日志' };
+    if (!failNames.size) {
+      this._lg('RUN', 'resume.fail',
+        '续跑中止 · 既无失败记录也无从标记反推 · ' + t.type + ' · ' + String(t.title || '').slice(0, 50),
+        { id: t.id, failedVideos: (t.failedVideos || []).length, logLines: (t.log || []).length });
+      return { ok: false, error: '没有发现需要续跑的成片，请检查任务日志' };
+    }
     const namesArr = [...failNames].filter(Boolean);
     // 构造续跑环境：复用原任务环境变量，仅追加过滤变量
     const env = Object.assign({}, t.env || {});
@@ -3765,6 +3840,13 @@ class Api {
       task = this._createTask('replica', (t.title || '') + '（续跑）', env, src);
     }
     this._enqueueTask(task);
+    this._lg('RUN', 'resume.create',
+      '续跑已创建 · ' + t.type + ' · 补做 ' + namesArr.length + ' 片'
+      + (t.type === 'batch' ? ' · 沿用原提交时刻（命名与输出目录同首次）' : ' · 刷新提交时刻（按当前日期输出）'),
+      { from: t.id, to: task.id,
+        onlyVar: t.type === 'batch' ? 'BATCH_ONLY_NAMES' : 'REPLICA_ONLY_NAMES',
+        only: namesArr.slice(0, 40),
+        env: this._envBrief(env) });
     return { ok: true, taskId: task.id, count: namesArr.length };
   }
 

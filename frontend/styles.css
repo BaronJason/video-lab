@@ -1,4 +1,4 @@
-/* 等宽字体 JetBrains Mono（SIL OFL 1.1，可商用分发，见 assets/fonts/OFL-JetBrainsMono.txt）：
+/* 等宽字体 JetBrains Mono（SIL OFL 1.1，可商用分发，见 fonts/OFL-JetBrainsMono.txt）：
    内嵌 Regular，用于路径/日志/数值等 mono 场景，不依赖客户端安装。
    用官方标准版（267 KB）而非 Nerd Font Mono 变体（2.4 MB）—— 界面未使用 Nerd Font
    的私用区图标字形（U+E000–U+F8FF 全项目零命中），该变体只贡献体积。 */
@@ -6,26 +6,26 @@
   font-family: 'JetBrains Mono';
   font-style: normal;
   font-weight: 100 900;
-  src: url('assets/fonts/JetBrainsMono-Regular.ttf') format('truetype');
+  src: url('fonts/JetBrainsMono-Regular.ttf') format('truetype');
 }
 
 :root{--bg-input-default:#FFFFFF;}
 
-/* 品牌字体 Cinzel（SIL OFL 1.1，可商用分发，见 assets/fonts/OFL-Cinzel.txt）：
+/* 品牌字体 Cinzel（SIL OFL 1.1，可商用分发，见 fonts/OFL-Cinzel.txt）：
    品牌名片与主窗口标题栏共用，确保全局一致。
-   与 JetBrains Mono 同处 assets/fonts/ —— 两者都是应用级字体、不随皮肤启停；
-   此前放在 skins/assets/fonts/ 下，会让主窗口标题栏反向依赖皮肤目录。 */
+   与 JetBrains Mono 同处 frontend\fonts\ —— 两者都是应用级字体、不随皮肤启停
+   （此前在 skins/assets/fonts/ 下，会让主窗口标题栏反向依赖皮肤目录）。 */
 @font-face {
   font-family: 'Cinzel';
   font-style: normal;
   font-weight: 400;
-  src: url('assets/fonts/Cinzel-Regular.ttf') format('truetype');
+  src: url('fonts/Cinzel-Regular.ttf') format('truetype');
 }
 @font-face {
   font-family: 'Cinzel';
   font-style: normal;
   font-weight: 700;
-  src: url('assets/fonts/Cinzel-Bold.ttf') format('truetype');
+  src: url('fonts/Cinzel-Bold.ttf') format('truetype');
 }
 
 /**

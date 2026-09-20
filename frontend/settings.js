@@ -17,7 +17,7 @@
     { id: 'Maid_Atelier', label: '深海女仆', bg: '#0e1d49', theme: '#c5a468' }
   ];
   var state = {
-    batch: { max_duration: '', max_retry: '', speed_limit: '', txt_prefix: '', producer: '', suffix_mark: '' },
+    batch: { max_duration: '', max_retry: '', speed_limit: '', txt_prefix: [], producer: '', suffix_mark: [] },
     replica: { max_duration: '', speed_limit: '', dedup_ratio: '' },
     mask: { root: '', watermark_mov: '', watermark_alpha: '' }
   };
@@ -181,10 +181,72 @@
     });
   }
 
+  // 兼容旧单值（字符串）与新多值（数组）：字符串按分号/换行拆多值，否则单元素数组
+  function toArr(v) {
+    if (Array.isArray(v)) return v.map(function (x) { return String(x).trim(); }).filter(Boolean);
+    var s = String(v == null ? '' : v).trim();
+    if (!s) return [];
+    return s.split(/[;\n]/).map(function (x) { return x.trim(); }).filter(Boolean);
+  }
+
+  // 多值输入（提取前缀/后缀）：回车添加 → tags 列表展示，可拖拽排序（顺序即成片名前后顺序），点击删除
+  // store 为 state 引用（如 state.batch.txt_prefix），listId 为 tags 容器 id、inputId 为输入框 id
+  function setupMultiTags(inputId, listId, store, onChange) {
+    var input = $(inputId);
+    var list = $(listId);
+    if (!input || !list) return;
+    var render = function () {
+      list.innerHTML = '';
+      list.hidden = store.length === 0;
+      var any = store.length > 0;
+      store.forEach(function (v, i) {
+        var row = document.createElement('div');
+        row.className = 'multi-tags__row';
+        row.draggable = true;
+        row.dataset.idx = i;
+        row.innerHTML = '<span class="multi-tags__drag">&#9776;</span><span class="multi-tags__text" title="' + v.replace(/"/g, '&quot;') + '">' + v + '</span><button type="button" class="multi-tags__del" title="删除该项">&#10005;</button>';
+        // 拖拽排序：行可拖，落到其它行前/后交换位置（顺序即成片名顺序）
+        row.addEventListener('dragstart', function (e) { e.dataTransfer.setData('text/plain', String(i)); row.classList.add('multi-tags__row--drag'); });
+        row.addEventListener('dragend', function () { row.classList.remove('multi-tags__row--drag'); });
+        row.addEventListener('dragover', function (e) { e.preventDefault(); });
+        row.addEventListener('drop', function (e) {
+          e.preventDefault();
+          var from = parseInt(e.dataTransfer.getData('text/plain'), 10);
+          if (Number.isNaN(from) || from === i) return;
+          var v = store.splice(from, 1)[0];
+          store.splice(i, 0, v);
+          render();
+          if (onChange) onChange();
+        });
+        row.querySelector('.multi-tags__del').addEventListener('click', function () {
+          store.splice(i, 1);
+          render();
+          if (onChange) onChange();
+        });
+        list.appendChild(row);
+      });
+      input.placeholder = any ? '回车继续添加…' : '输入后回车添加，可添加多个';
+    };
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        var v = input.value.trim();
+        if (v && store.indexOf(v) === -1) { store.push(v); input.value = ''; render(); if (onChange) onChange(); }
+        else if (!v) { render(); }
+      }
+    });
+    input.addEventListener('blur', function () {
+      var v = input.value.trim();
+      if (v && store.indexOf(v) === -1) { store.push(v); input.value = ''; render(); if (onChange) onChange(); }
+      else render();
+    });
+    render();
+  }
+
   function updatePreview() {
-    var prefix = $('batchTxtPrefix').value.trim();
+    var prefix = Array.isArray(state.batch.txt_prefix) ? state.batch.txt_prefix.join('-') : String(state.batch.txt_prefix || '');
     var producer = $('batchProducer').value.trim();
-    var suffixMark = $('batchSuffixMark').value.trim();
+    var suffixMark = Array.isArray(state.batch.suffix_mark) ? state.batch.suffix_mark.join('-') : String(state.batch.suffix_mark || '');
     var now = new Date();
     var datePrefix = String(now.getFullYear()).slice(2)
       + String(now.getMonth() + 1).padStart(2, '0')
@@ -194,7 +256,7 @@
     if (prefix) items.push(prefix.replace(/-+$/g, ''));
     items.push('项目文件夹');
     items.push('TXT配置名');
-    var name = items.join('-').replace(/-{2,}/g, '-') + '-' + suffixMark + '1.mp4';
+    var name = items.join('-').replace(/-{2,}/g, '-') + (suffixMark ? '-' + suffixMark : '') + '1.mp4';
     $('batchNamePreview').textContent = name;
   }
 
@@ -278,11 +340,11 @@
       if (pp) pp.textContent = s.config_path_program || '';
       if (pa) pa.textContent = s.config_path_appdata || '';
       var b = s.batch || {};
-      $('batchSuffixMark').value = b.suffix_mark != null ? b.suffix_mark : '';
+      state.batch.suffix_mark = toArr(b.suffix_mark);
       $('batchMaxDuration').value = b.max_duration != null ? b.max_duration : '';
       $('batchMaxRetry').value = b.max_retry != null ? b.max_retry : '';
       $('batchSpeedLimit').value = b.speed_limit != null ? b.speed_limit : '';
-      $('batchTxtPrefix').value = b.txt_prefix != null ? b.txt_prefix : '';
+      state.batch.txt_prefix = toArr(b.txt_prefix);
       $('batchProducer').value = b.producer != null ? b.producer : '';
       var r = s.replica || {};
       $('replicaMaxDuration').value = r.max_duration != null ? r.max_duration : '';
@@ -292,6 +354,8 @@
       $('maskRoot').value = mk.root || '';
       $('maskWatermark').value = mk.watermark_mov || '';
       $('maskAlpha').value = mk.watermark_alpha != null && String(mk.watermark_alpha).trim() !== '' ? mk.watermark_alpha : '';
+      setupMultiTags('batchTxtPrefix', 'batchTxtPrefixTags', state.batch.txt_prefix, onBatchTagsChanged);
+      setupMultiTags('batchSuffixMark', 'batchSuffixMarkTags', state.batch.suffix_mark, onBatchTagsChanged);
       updatePreview();
       captureOriginals();
       recomputeDirty();
@@ -416,12 +480,12 @@
 
   function bindSave() {
     $('btnSave').addEventListener('click', function () {
-      state.batch.suffix_mark = $('batchSuffixMark').value.trim();
       state.batch.max_duration = $('batchMaxDuration').value.trim();
       state.batch.max_retry = $('batchMaxRetry').value.trim();
       state.batch.speed_limit = $('batchSpeedLimit').value.trim();
-      state.batch.txt_prefix = $('batchTxtPrefix').value.trim();
+      state.batch.txt_prefix = (state.batch.txt_prefix || []).slice();
       state.batch.producer = $('batchProducer').value.trim();
+      state.batch.suffix_mark = (state.batch.suffix_mark || []).slice();
       state.replica.max_duration = $('replicaMaxDuration').value.trim();
       state.replica.speed_limit = $('replicaSpeedLimit').value.trim();
       state.replica.dedup_ratio = $('replicaDedupRatio').value.trim();
@@ -526,8 +590,9 @@
     document.addEventListener('mousedown', function (e) {
       if (discardPop && discardPop.style.display !== 'none' && !discardPop.contains(e.target)) hideDiscardPop();
     });
-    $('batchSuffixMark').addEventListener('input', updatePreview);
-    $('batchTxtPrefix').addEventListener('input', updatePreview);
+    function onBatchTagsChanged() { updatePreview(); recomputeDirty(); }
+    setupMultiTags('batchTxtPrefix', 'batchTxtPrefixTags', state.batch.txt_prefix, onBatchTagsChanged);
+    setupMultiTags('batchSuffixMark', 'batchSuffixMarkTags', state.batch.suffix_mark, onBatchTagsChanged);
     $('batchProducer').addEventListener('input', updatePreview);
   }
 

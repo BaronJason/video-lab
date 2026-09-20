@@ -153,6 +153,43 @@ body {
 }
 .form-input:focus { border-color: var(--border-brand); }
 
+/* 多值输入（提取前缀/后缀）：回车添加的 tags 列表，可拖拽排序、点击删除 */
+.multi-tags {
+  margin-top: 8px;
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: 6px;
+  background: var(--bg-base-secondary);
+  padding: 4px 6px 0;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.multi-tags__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  margin-bottom: 4px;
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: 4px;
+  background: var(--bg-base);
+  cursor: grab;
+  user-select: none;
+}
+.multi-tags__row--drag { opacity: .45; }
+.multi-tags__drag { color: var(--text-disabled); font-size: 13px; cursor: grab; }
+.multi-tags__text { flex: 1; font-size: 13px; color: var(--text-default); word-break: break-all; }
+.multi-tags__del {
+  border: none;
+  background: transparent;
+  color: var(--text-disabled);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  line-height: 1;
+}
+.multi-tags__del:hover { color: var(--status-error-default, #E5484D); background: var(--bg-base-hover); }
+
 /* 输入框行：* 绝对定位叠加在输入框内部右侧，不移动框体、不改各框尺寸 */
 .field-row { position: relative; }
 .field-row .form-input {

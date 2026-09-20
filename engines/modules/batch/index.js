@@ -101,14 +101,16 @@ function readEnv(env = process.env) {
     const v = s(k).trim();
     return /^\d+$/.test(v) ? parseInt(v, 10) : null;
   };
+  // 多值文本项：分号分隔（设置页多值输入框存储为数组，经 env 用分号连接传递）
+  const list = (k) => String(env[k] == null ? '' : env[k]).split(';').map((x) => x.trim()).filter(Boolean);
   return {
     txt: s('REPLICA_TXT'),
     maxTotalDuration: num('BATCH_MAX_DURATION', 179),
     maxRetry: num('BATCH_MAX_RETRY', 45),
     speedThreshold: num('BATCH_SPEED_LIMIT', 1.2),
-    txtNamePrefix: s('BATCH_TXT_PREFIX'),
+    txtNamePrefix: list('BATCH_TXT_PREFIX'),
     producerName: s('BATCH_PRODUCER', '默认'),
-    suffixMark: s('BATCH_SUFFIX_MARK'),
+    suffixMark: list('BATCH_SUFFIX_MARK'),
     // 续跑过滤：失败成片名（分号分隔）。据此反解序号只重做这些，其余按原始 totalOutput/groupCount 计算
     onlyNames: s('BATCH_ONLY_NAMES'),
     count: intOrNull('BATCH_COUNT'),
@@ -539,9 +541,13 @@ async function run(ctx, env = process.env) {
   const txtName = path.basename(txtFilePath, path.extname(txtFilePath));
   let txtNamePrefixPart = '';
   let txtNameSuffix = txtName;
-  if (cfg.txtNamePrefix && txtName.startsWith(cfg.txtNamePrefix)) {
-    txtNamePrefixPart = cfg.txtNamePrefix;
-    txtNameSuffix = txtName.slice(cfg.txtNamePrefix.length);
+  // 多前缀：取首个命中 TXT 名的作剥离，其余在成片命名时按设置顺序继续命中追加（见命名段）
+  for (const p of cfg.txtNamePrefix) {
+    if (txtName.startsWith(p)) {
+      txtNamePrefixPart = p;
+      txtNameSuffix = txtName.slice(p.length);
+      break;
+    }
   }
 
   // ── baseDir：向上找「N月」或四位年份目录 ──
@@ -1098,16 +1104,23 @@ async function run(ctx, env = process.env) {
 
       // ── 成片命名 ──
       const nameItems = [dPrefix, cfg.producerName];
-      let prefixPart = txtNamePrefixPart;
-      if (!prefixPart && cfg.txtNamePrefix) {
-        for (const part of selectedParts) {
-          if (String(part.fullName).toLowerCase().includes(cfg.txtNamePrefix.toLowerCase())) { prefixPart = cfg.txtNamePrefix; break; }
-        }
+      // 多前缀：全部命中（TXT 名剥离命中 或 任一素材路径包含）的前缀按设置顺序全部写入，`-` 分隔
+      const hitPrefixes = [];
+      const partsLow = selectedParts.map((v) => String(v.fullName).toLowerCase());
+      const checkHit = (p) => {
+        if (p && partsLow.some((f) => f.includes(String(p).toLowerCase()))) return true;
+        return false;
+      };
+      for (const p of cfg.txtNamePrefix) {
+        if (p === txtNamePrefixPart || checkHit(p)) hitPrefixes.push(p);
       }
-      if (prefixPart) nameItems.push(prefixPart.replace(/-+$/, ''));
+      if (txtNamePrefixPart && !hitPrefixes.includes(txtNamePrefixPart)) hitPrefixes.unshift(txtNamePrefixPart);
+      for (const p of hitPrefixes) nameItems.push(String(p).replace(/-+$/, ''));
       nameItems.push(parentFolder);
       nameItems.push(txtNameSuffix.replace(/^-+/, ''));
-      let finalOutName = `${nameItems.join('-').replace(/-{2,}/g, '-')}-${cfg.suffixMark}${outIndex}.mp4`;
+      // 多后缀：按设置顺序全部拼接（`-` 分隔），后接序号
+      const suffixStr = cfg.suffixMark.length ? '-' + cfg.suffixMark.join('-') : '';
+      let finalOutName = `${nameItems.join('-').replace(/-{2,}/g, '-')}${suffixStr}${outIndex}.mp4`;
       let finalOut = path.join(outDir, finalOutName);
 
       // ── 输入文件存在性 ──

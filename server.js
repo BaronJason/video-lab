@@ -288,17 +288,33 @@ function startHttpServer(opts) {
     return false;
   }
 
-  // MIME 类型
+  // MIME 类型（含皮肤素材 .webp、字体与音视频，浏览器端加载图片/字体不得回退 octet-stream）
   const MIME = {
     '.html': 'text/html; charset=utf-8',
     '.js': 'text/javascript; charset=utf-8',
     '.css': 'text/css; charset=utf-8',
     '.json': 'application/json; charset=utf-8',
     '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
     '.ico': 'image/x-icon',
     '.svg': 'image/svg+xml',
+    '.ttf': 'font/ttf',
+    '.otf': 'font/otf',
     '.woff': 'font/woff',
     '.woff2': 'font/woff2',
+    '.eot': 'application/vnd.ms-fontobject',
+    '.mp4': 'video/mp4',
+    '.webm': 'video/webm',
+    '.mov': 'video/quicktime',
+    '.m4a': 'audio/mp4',
+    '.mp3': 'audio/mpeg',
+    '.wav': 'audio/wav',
+    '.txt': 'text/plain; charset=utf-8',
+    '.log': 'text/plain; charset=utf-8',
+    '.xml': 'application/xml',
   };
 
   function serveStatic(req, res, filePath) {

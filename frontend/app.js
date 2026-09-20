@@ -2494,6 +2494,8 @@
       if (mfT) mfT.classList.add('mode-toggle--active');
       if (mlT) mlT.classList.remove('mode-toggle--active');
       state.activeProject = project; state.activeTxt = name;
+      // 跳转后自动展开目标配置所在项目（与 jumpToVersionPath 行为一致），树中可见并高亮，避免跳转后侧栏无选中项
+      state.expandedProject = project;
       call('list_versions', project, name).then(function (versions) {
         state.versions = versions || []; state.activeVersion = null;
         if (state.versions.length > 0) { var target = prevLabel ? state.versions.find(function (v) { return v.label === prevLabel; }) : null; state.activeVersion = target || state.versions[0]; }

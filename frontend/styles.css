@@ -1,10 +1,12 @@
-/* 等宽字体 JetBrainsMono Nerd Font Mono（SIL OFL 1.1，可商用分发）：
-   内嵌 Regular，用于路径/日志/数值等 mono 场景，不依赖客户端安装 */
+/* 等宽字体 JetBrains Mono（SIL OFL 1.1，可商用分发，见 assets/fonts/OFL-JetBrainsMono.txt）：
+   内嵌 Regular，用于路径/日志/数值等 mono 场景，不依赖客户端安装。
+   用官方标准版（267 KB）而非 Nerd Font Mono 变体（2.4 MB）—— 界面未使用 Nerd Font
+   的私用区图标字形（U+E000–U+F8FF 全项目零命中），该变体只贡献体积。 */
 @font-face {
-  font-family: 'JetBrainsMono Nerd Font Mono';
+  font-family: 'JetBrains Mono';
   font-style: normal;
   font-weight: 100 900;
-  src: url('assets/fonts/JetBrainsMonoNerdFontMono-Regular.ttf') format('truetype');
+  src: url('assets/fonts/JetBrainsMono-Regular.ttf') format('truetype');
 }
 
 :root{--bg-input-default:#FFFFFF;}
@@ -88,7 +90,7 @@
   --font-family-default: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-family-heading: "SF Pro", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-family-metric: "Inter", "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-family-mono: "JetBrainsMono Nerd Font Mono", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-family-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --font-weight-default: 400;
   --font-weight-code: 450;
   --font-weight-medium: 500;
@@ -1100,7 +1102,7 @@ pre {
   --font-family-default: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-family-heading: "SF Pro", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-family-metric: "Inter", "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-family-mono: "JetBrainsMono Nerd Font Mono", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-family-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --font-weight-default: 400;
   --font-weight-code: 450;
   --font-weight-medium: 500;

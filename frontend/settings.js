@@ -189,16 +189,35 @@
     return s.split(/[;\n]/).map(function (x) { return x.trim(); }).filter(Boolean);
   }
 
-  // 多值输入（提取前缀/后缀）：回车添加 → tags 列表展示，可拖拽排序（顺序即成片名前后顺序），点击删除
+  // 多值输入（提取前缀/后缀）：回车添加 → tags 列表展示，可拖拽排序（顺序即成片名前后顺序），点击删除。
+  // 列表默认折叠：输入框兼作折叠开关 —— 点击输入框/箭头展开，点击两者之外折叠；
+  // 折叠态下 placeholder 显示已设项摘要，因此不展开也能看清配了什么。
   // store 为 state 引用（如 state.batch.txt_prefix），listId 为 tags 容器 id、inputId 为输入框 id
-  function setupMultiTags(inputId, listId, store, onChange) {
+  function setupMultiTags(inputId, listId, store, onChange, caretId) {
     var input = $(inputId);
     var list = $(listId);
     if (!input || !list) return;
+    // 幂等：本函数在两条初始化流程中各被调用一次，重复绑定会让回车/失焦处理各跑两遍；
+    // 但第二次仍需重新渲染 —— 配置可能在这两次调用之间才加载完，直接 return 会让已设项不显示
+    if (input.dataset.mtBound === '1') { if (input._mtRender) input._mtRender(); return; }
+    input.dataset.mtBound = '1';
+    var caret = caretId ? $(caretId) : null;
+    var group = input.closest ? input.closest('.form-group') : null;
+    var expanded = false; // 默认折叠
+
+    var summarize = function () {
+      if (!store.length) return '输入后回车添加，可添加多个';
+      var head = store.slice(0, 3).join(' · ');
+      return '已设 ' + store.length + ' 项：' + head + (store.length > 3 ? ' …' : '') + '（点击展开可调整顺序）';
+    };
+    var applyFold = function () {
+      list.hidden = !expanded;
+      if (caret) caret.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      if (group) group.classList.toggle('is-tags-open', expanded);
+      input.placeholder = !store.length ? '输入后回车添加，可添加多个' : (expanded ? '回车继续添加…' : summarize());
+    };
     var render = function () {
       list.innerHTML = '';
-      list.hidden = store.length === 0;
-      var any = store.length > 0;
       store.forEach(function (v, i) {
         var row = document.createElement('div');
         row.className = 'multi-tags__row';
@@ -213,8 +232,8 @@
           e.preventDefault();
           var from = parseInt(e.dataTransfer.getData('text/plain'), 10);
           if (Number.isNaN(from) || from === i) return;
-          var v = store.splice(from, 1)[0];
-          store.splice(i, 0, v);
+          var moved = store.splice(from, 1)[0];
+          store.splice(i, 0, moved);
           render();
           if (onChange) onChange();
         });
@@ -225,21 +244,40 @@
         });
         list.appendChild(row);
       });
-      input.placeholder = any ? '回车继续添加…' : '输入后回车添加，可添加多个';
+      applyFold();
     };
+    var expand = function (focusInput) {
+      if (!expanded) { expanded = true; render(); }
+      if (focusInput && document.activeElement !== input) input.focus();
+    };
+    var collapse = function () { if (expanded) { expanded = false; render(); } };
+
+    input.addEventListener('mousedown', function () { expand(false); });
+    input.addEventListener('focus', function () { expand(false); });
+    if (caret) {
+      caret.addEventListener('mousedown', function (e) { e.preventDefault(); }); // 不让箭头抢走输入焦点
+      caret.addEventListener('click', function () { if (expanded) collapse(); else expand(true); });
+    }
     input.addEventListener('keydown', function (e) {
       if (e.key === 'Enter') {
         e.preventDefault();
         var v = input.value.trim();
-        if (v && store.indexOf(v) === -1) { store.push(v); input.value = ''; render(); if (onChange) onChange(); }
+        if (v && store.indexOf(v) === -1) { store.push(v); input.value = ''; expanded = true; render(); if (onChange) onChange(); }
         else if (!v) { render(); }
       }
     });
     input.addEventListener('blur', function () {
       var v = input.value.trim();
       if (v && store.indexOf(v) === -1) { store.push(v); input.value = ''; render(); if (onChange) onChange(); }
-      else render();
     });
+    // 点击输入框与列表之外的区域折叠；列表内部的拖拽/删除不触发，否则无法连续操作
+    document.addEventListener('mousedown', function (e) {
+      if (!expanded) return;
+      var t = e.target;
+      if (input.contains(t) || list.contains(t) || (caret && caret.contains(t))) return;
+      collapse();
+    });
+    input._mtRender = render; // 供重复调用时刷新（见上方幂等分支）
     render();
   }
 
@@ -259,6 +297,12 @@
     var name = items.join('-').replace(/-{2,}/g, '-') + (suffixMark ? '-' + suffixMark : '') + '1.mp4';
     $('batchNamePreview').textContent = name;
   }
+
+  // 多值标签（提取前缀 / 后缀）增删或改序后：刷新成片名预览并重算「未保存」标记。
+  // ⚠ 必须定义在顶层：loadSettings 的回调与 bindSave 两处都要引用它 ——
+  // 曾误定义在 bindSave 内部，导致 loadSettings 回调求值该标识符时抛 ReferenceError，
+  // 被外层 .catch 捕获后报「读取设置失败」，且整个设置页只加载到一半。
+  function onBatchTagsChanged() { updatePreview(); recomputeDirty(); }
 
   // 每日定时检查更新时间下拉：24 小时制整点选项（默认 9:00）
   function fillCheckUpdateHourOptions() {
@@ -354,12 +398,12 @@
       $('maskRoot').value = mk.root || '';
       $('maskWatermark').value = mk.watermark_mov || '';
       $('maskAlpha').value = mk.watermark_alpha != null && String(mk.watermark_alpha).trim() !== '' ? mk.watermark_alpha : '';
-      setupMultiTags('batchTxtPrefix', 'batchTxtPrefixTags', state.batch.txt_prefix, onBatchTagsChanged);
-      setupMultiTags('batchSuffixMark', 'batchSuffixMarkTags', state.batch.suffix_mark, onBatchTagsChanged);
+      setupMultiTags('batchTxtPrefix', 'batchTxtPrefixTags', state.batch.txt_prefix, onBatchTagsChanged, 'batchTxtPrefixCaret');
+      setupMultiTags('batchSuffixMark', 'batchSuffixMarkTags', state.batch.suffix_mark, onBatchTagsChanged, 'batchSuffixMarkCaret');
       updatePreview();
       captureOriginals();
       recomputeDirty();
-    }).catch(function () { setStatus('读取设置失败'); });
+    }).catch(function (e) { setStatus('读取设置失败：' + ((e && e.message) || e), false); });
   }
 
   // 轻量角落提示（toast）：仅告知、无需操作，自动消失。type：ok/error/info/warn
@@ -398,6 +442,7 @@
     }
     el.textContent = '';
     el.classList.remove('is-error');
+    // ⚠ ok 必须显式传：省略会被当作成功（走 'ok' 样式），错误提示务必传 false
     if (s) toast(s, ok === false ? 'error' : 'ok');
   }
   function statusTimer() { setStatus('', true); }
@@ -590,9 +635,8 @@
     document.addEventListener('mousedown', function (e) {
       if (discardPop && discardPop.style.display !== 'none' && !discardPop.contains(e.target)) hideDiscardPop();
     });
-    function onBatchTagsChanged() { updatePreview(); recomputeDirty(); }
-    setupMultiTags('batchTxtPrefix', 'batchTxtPrefixTags', state.batch.txt_prefix, onBatchTagsChanged);
-    setupMultiTags('batchSuffixMark', 'batchSuffixMarkTags', state.batch.suffix_mark, onBatchTagsChanged);
+    setupMultiTags('batchTxtPrefix', 'batchTxtPrefixTags', state.batch.txt_prefix, onBatchTagsChanged, 'batchTxtPrefixCaret');
+    setupMultiTags('batchSuffixMark', 'batchSuffixMarkTags', state.batch.suffix_mark, onBatchTagsChanged, 'batchSuffixMarkCaret');
     $('batchProducer').addEventListener('input', updatePreview);
   }
 

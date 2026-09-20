@@ -198,6 +198,9 @@ function moveStorage(fromDir, toDir) {
   }
 }
 function defaultRoot() { return path.dirname(projectDir()); }
+// 已废弃的配置键：PS1 双轨期遗留（scripts_dir = 旧脚本目录、use_node_engine = 引擎开关）。
+// 代码已不再读取，但不显式剔除就会随 saveConfig 一直写回磁盘，成为永久残留。
+const OBSOLETE_CONFIG_KEYS = ['scripts_dir', 'use_node_engine'];
 function loadConfig() {
   const cfg = Object.assign({}, DEFAULT_CONFIG);
   try {
@@ -209,6 +212,7 @@ function loadConfig() {
       if (data && typeof data === 'object' && !Array.isArray(data)) Object.assign(cfg, data);
     }
   } catch (e) {}
+  for (const k of OBSOLETE_CONFIG_KEYS) delete cfg[k];
   return cfg;
 }
 function saveConfig(config) {
@@ -407,11 +411,9 @@ function openSettingsWindow() {
 let settingsDirty = false;
 let settingsPickingDir = false;
 function sysBeep() {
-  try {
-    const { spawn } = require('child_process');
-    const p = spawn('pwsh', ['-NoProfile', '-Command', '[System.Media.SystemSounds]::Exclamation.Play()'], { stdio: 'ignore', detached: true });
-    p.unref();
-  } catch (e) {}
+  // 用 Electron 原生 shell.beep() 播放系统提示音：不再 spawn pwsh
+  // （PS1 双轨期残留的最后一处活代码依赖，无 pwsh 环境下会静默失效）
+  try { require('electron').shell.beep(); } catch (e) {}
 }
 function handleSettingsBlur() {
   if (!settingsWin || settingsWin.isDestroyed() || settingsPickingDir || settingsForceClose) return;

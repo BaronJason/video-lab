@@ -2372,7 +2372,6 @@ class Api {
             outDir: t.outDir || '', _stopRequested: !!t._stopRequested,
             groupDate: typeof t.groupDate === 'string' ? t.groupDate : '',
             failedVideos: Array.isArray(t.failedVideos) ? t.failedVideos.slice(-100) : [],
-            engine: t.engine || '',   // 'node' | 'pwsh'：本次任务由哪条路径执行（供事后核对是否发生回退）
           };
           store.upsertTask({
             id: t.id, seq: parseInt(String(t.id).replace(/\D/g, ''), 10) || 0,
@@ -2612,7 +2611,7 @@ class Api {
   // 任务真正开始执行时初始化标记（含 env 快照，重开可完整还原环境）
   _touchMarker(task) {
     this._saveMarker(task, {
-      taskId: task.id, type: task.type, title: task.title || '', engine: task.engine || '',
+      taskId: task.id, type: task.type, title: task.title || '',
       env: Object.assign({}, task.env || {}), createdAt: task.createdAt || Date.now(),
       videos: [], batchOutDir: '',
     });
@@ -3165,7 +3164,6 @@ class Api {
       const child = this._spawnNodeEngineChild(task, childEnv);
       if (task) {
         task.pid = child.pid;
-        task.engine = 'node';
         task.log.push('[引擎] Node 引擎（module=' + task.type + '）');
         this._emitTasks();
         // 任务真正开始：创建任务标记（含 env 快照，供失败重开精确还原）

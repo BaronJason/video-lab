@@ -192,11 +192,14 @@
   // 多值输入（提取前缀/后缀）：回车添加 → tags 列表展示，可拖拽排序（顺序即成片名前后顺序），点击删除。
   // 列表默认折叠：输入框兼作折叠开关 —— 点击输入框/箭头展开，点击两者之外折叠；
   // 折叠态下 placeholder 显示已设项摘要，因此不展开也能看清配了什么。
-  // store 为 state 引用（如 state.batch.txt_prefix），listId 为 tags 容器 id、inputId 为输入框 id
-  function setupMultiTags(inputId, listId, store, onChange, caretId) {
+  // storeRef 传「取数组的函数」（如 function () { return state.batch.txt_prefix; }）或直接传数组。
+  // ⚠ 必须按函数取最新引用：loadSettings / bindSave 会整份替换 state.batch.txt_prefix 的引用，
+  // 若此处捕获旧引用，渲染读到的会是空数组（已存项不显示），输入的新值也 push 进废弃数组（存不进去）。
+  function setupMultiTags(inputId, listId, storeRef, onChange, caretId) {
     var input = $(inputId);
     var list = $(listId);
     if (!input || !list) return;
+    var getStore = (typeof storeRef === 'function') ? storeRef : function () { return storeRef; };
     // 幂等：本函数在两条初始化流程中各被调用一次，重复绑定会让回车/失焦处理各跑两遍；
     // 但第二次仍需重新渲染 —— 配置可能在这两次调用之间才加载完，直接 return 会让已设项不显示
     if (input.dataset.mtBound === '1') { if (input._mtRender) input._mtRender(); return; }
@@ -206,6 +209,7 @@
     var expanded = false; // 默认折叠
 
     var summarize = function () {
+      var store = getStore();
       if (!store.length) return '输入后回车添加，可添加多个';
       var head = store.slice(0, 3).join(' · ');
       return '已设 ' + store.length + ' 项：' + head + (store.length > 3 ? ' …' : '') + '（点击展开可调整顺序）';
@@ -214,9 +218,10 @@
       list.hidden = !expanded;
       if (caret) caret.setAttribute('aria-expanded', expanded ? 'true' : 'false');
       if (group) group.classList.toggle('is-tags-open', expanded);
-      input.placeholder = !store.length ? '输入后回车添加，可添加多个' : (expanded ? '回车继续添加…' : summarize());
+      input.placeholder = !getStore().length ? '输入后回车添加，可添加多个' : (expanded ? '回车继续添加…' : summarize());
     };
     var render = function () {
+      var store = getStore(); // 每次渲染都取最新引用
       list.innerHTML = '';
       store.forEach(function (v, i) {
         var row = document.createElement('div');
@@ -232,13 +237,14 @@
           e.preventDefault();
           var from = parseInt(e.dataTransfer.getData('text/plain'), 10);
           if (Number.isNaN(from) || from === i) return;
-          var moved = store.splice(from, 1)[0];
-          store.splice(i, 0, moved);
+          var arr = getStore();
+          var moved = arr.splice(from, 1)[0];
+          arr.splice(i, 0, moved);
           render();
           if (onChange) onChange();
         });
         row.querySelector('.multi-tags__del').addEventListener('click', function () {
-          store.splice(i, 1);
+          getStore().splice(i, 1);
           render();
           if (onChange) onChange();
         });
@@ -262,13 +268,15 @@
       if (e.key === 'Enter') {
         e.preventDefault();
         var v = input.value.trim();
-        if (v && store.indexOf(v) === -1) { store.push(v); input.value = ''; expanded = true; render(); if (onChange) onChange(); }
+        var arr = getStore();
+        if (v && arr.indexOf(v) === -1) { arr.push(v); input.value = ''; expanded = true; render(); if (onChange) onChange(); }
         else if (!v) { render(); }
       }
     });
     input.addEventListener('blur', function () {
       var v = input.value.trim();
-      if (v && store.indexOf(v) === -1) { store.push(v); input.value = ''; render(); if (onChange) onChange(); }
+      var arr = getStore();
+      if (v && arr.indexOf(v) === -1) { arr.push(v); input.value = ''; render(); if (onChange) onChange(); }
     });
     // 点击输入框与列表之外的区域折叠；列表内部的拖拽/删除不触发，否则无法连续操作
     document.addEventListener('mousedown', function (e) {
@@ -398,7 +406,7 @@
       $('maskRoot').value = mk.root || '';
       $('maskWatermark').value = mk.watermark_mov || '';
       $('maskAlpha').value = mk.watermark_alpha != null && String(mk.watermark_alpha).trim() !== '' ? mk.watermark_alpha : '';
-      setupMultiTags('batchTxtPrefix', 'batchTxtPrefixTags', state.batch.txt_prefix, onBatchTagsChanged, 'batchTxtPrefixCaret');
+      setupMultiTags('batchTxtPrefix', 'batchTxtPrefixTags', function () { return state.batch.txt_prefix; }, onBatchTagsChanged, 'batchTxtPrefixCaret');
       updatePreview();
       captureOriginals();
       recomputeDirty();
@@ -634,7 +642,7 @@
     document.addEventListener('mousedown', function (e) {
       if (discardPop && discardPop.style.display !== 'none' && !discardPop.contains(e.target)) hideDiscardPop();
     });
-    setupMultiTags('batchTxtPrefix', 'batchTxtPrefixTags', state.batch.txt_prefix, onBatchTagsChanged, 'batchTxtPrefixCaret');
+    setupMultiTags('batchTxtPrefix', 'batchTxtPrefixTags', function () { return state.batch.txt_prefix; }, onBatchTagsChanged, 'batchTxtPrefixCaret');
     $('batchSuffixMark').addEventListener('input', updatePreview);
     $('batchProducer').addEventListener('input', updatePreview);
   }

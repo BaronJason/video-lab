@@ -3870,7 +3870,10 @@ class Api {
         // 引擎只从名字里反解序号（parseOnlyNameIndex），不比对完整名，故模板 + 目标序号即足够。
         if (!failNames.size && t.type === 'batch') {
           const plannedTotal = (t.progress && t.progress.total) || 0;
-          const idxOf = (n) => { const m = /-(\d+)[A-Z]?\.mp4$/i.exec(String(n)); return m ? parseInt(m[1], 10) : 0; };
+          // 序号反解与名字构造须与引擎的 parseOnlyNameIndex 同口径：末段 = 可选后缀标识
+          // （不含短横与数字）+ 序号 + 可选组后缀。既兼容「配置了后缀标识」的名字
+          // （...-A2A.mp4），也兼容曾经漏掉分隔符产出的名字（...-resume2A.mp4）。
+          const idxOf = (n) => { const m = /-([^-\d]*)(\d+)([A-Z]?)\.mp4$/i.exec(String(n)); return m ? parseInt(m[2], 10) : 0; };
           const doneIdx = new Set();
           for (const v of doneVideos) { const i = idxOf(path.basename(String(v))); if (i > 0) doneIdx.add(i); }
           // 成片目录里实际存在的文件也算已完成（标记可能未含最后一刻的产出）
@@ -3880,7 +3883,9 @@ class Api {
           }
           if (plannedTotal > 0 && doneIdx.size > 0) {
             const sample = path.basename(String(doneVideos[0]));
-            const mkName = (i) => sample.replace(/-(\d+)([A-Z]?)\.mp4$/i, '-' + i + '$2.mp4');
+            // 捕获组顺序：$1 后缀标识 / $2 原序号 / $3 组后缀 —— 替换串只能用 $1 与 $3，
+            // 用 $2 会把「原序号」当成组后缀拼进去（...-21.mp4）
+            const mkName = (i) => sample.replace(/-([^-\d]*)(\d+)([A-Z]?)\.mp4$/i, '-$1' + i + '$3.mp4');
             for (let i = 1; i <= plannedTotal; i++) if (!doneIdx.has(i)) failNames.add(mkName(i));
           }
         }

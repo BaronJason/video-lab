@@ -416,14 +416,17 @@ function selectVideo({ srcPath, track, folderData, excludedPaths, excludedSubGro
 }
 
 // ────────────────────────── 分组重命名 ──────────────────────────
-/** 从成片名反解序号（续跑过滤 BATCH_ONLY_NAMES 用）：容忍分组后缀 A/B/C。
- *  分组任务的成片名形如 <配置名>-<序号><组后缀>.mp4（如 ...-2A.mp4），
- *  若只用 -(\d+)$ 匹配，带后缀的名字全部解析失败 → 分组任务的续跑永不命中。 */
+/** 从成片名反解序号（续跑过滤 BATCH_ONLY_NAMES 用）：容忍分组后缀 A/B/C 与序号标识后缀。
+ *  分组任务的成片名形如 <配置名>-<序号><组后缀>.mp4（如 ...-2A.mp4）；配置了后缀标识时形如
+ *  <配置名>-<后缀><序号><组后缀>.mp4（如 ...-A2A.mp4）。若只用 -(\d+)$ 匹配，
+ *  这类名字全部解析失败 → 分组 / 带后缀任务的续跑永不命中。 */
 function parseOnlyNameIndex(name) {
   const s = String(name || '');
   const base = path.basename(s, path.extname(s));
-  const m = /-(\d+)[A-Z]?$/.exec(base);
-  return m ? parseInt(m[1], 10) : 0;
+  // 末段 = 可选后缀标识（不含短横与数字）+ 序号 + 可选组后缀。
+  // `[^-\d]*` 同时兼容历史上漏掉分隔符的名字（...-resume2A.mp4），已产出的成片仍可续跑。
+  const m = /-([^-\d]*)(\d+)([A-Z]?)$/.exec(base);
+  return m ? parseInt(m[2], 10) : 0;
 }
 
 /** 组后缀：第 idx（1 起）个成片属于第几组 → A/B/C…（对齐 PS 的分桶公式） */
@@ -1124,9 +1127,12 @@ async function run(ctx, env = process.env) {
       for (const p of hitPrefixes) nameItems.push(String(p).replace(/-+$/, ''));
       nameItems.push(parentFolder);
       nameItems.push(txtNameSuffix.replace(/^-+/, ''));
-      // 多后缀：按设置顺序以 `-` join；为空不加 `-`。整串统一合并连续 `--`，避免无后缀时出现 `--序号`
-      const suffixStr = cfg.suffixMark.length ? cfg.suffixMark.join('-') : '';
-      let finalOutName = `${nameItems.join('-')}${suffixStr ? '-' + suffixStr : ''}${outIndex}.mp4`.replace(/-{2,}/g, '-');
+      // 后缀：单值字符串（多值已回滚），兼容数组形态；为空则不加内容
+      const mk = cfg.suffixMark;
+      const suffixStr = (Array.isArray(mk) ? mk.join('-') : String(mk == null ? '' : mk)).trim();
+      // 序号前的 `-` 分隔必须保留 —— 续跑要按 `-<序号>` 反解成片名（parseOnlyNameIndex）；
+      // 整串再合并连续 `--`，消除 txtNameSuffix 为空时出现的 `--序号`
+      let finalOutName = `${nameItems.join('-')}-${suffixStr}${outIndex}.mp4`.replace(/-{2,}/g, '-');
       let finalOut = path.join(outDir, finalOutName);
 
       // ── 输入文件存在性 ──

@@ -851,7 +851,9 @@
     // 配置间切换（silent）时不给进场动画：与徽章 --static 同思路，避免重建页面时的滑入感
     var html = '<div class="config-editor' + (silent ? ' config-editor--static' : '') + '">';
     html += '<div class="config-editor__col config-editor__col--paths">';
-    html += '<div class="config-path-subheader"><span class="config-path-subheader__sort">排序</span><span class="config-path-subheader__nopoll">取消轮询</span><span class="config-path-subheader__path">路径</span><span class="config-path-subheader__check">预检测结果</span><span class="config-path-subheader__browse"></span><span class="config-path-subheader__open"></span><span class="config-path-subheader__remove"></span></div>';
+    html += '<div class="config-path-subheader"><span class="config-path-subheader__sort">排序</span><span class="config-path-subheader__nopoll">取消轮询</span><span class="config-path-subheader__path">路径</span><span class="config-path-subheader__check">预检测结果'
+      + '<button type="button" class="config-path-subheader__refresh" id="btnRefreshPrecache" title="刷新预缓存（增量更新、不重置：只重探缺失或已变化的视频）">' + icon('refresh-cw', 12) + '</button>'
+      + '</span><span class="config-path-subheader__browse"></span><span class="config-path-subheader__open"></span><span class="config-path-subheader__remove"></span></div>';
     html += '<div class="config-editor__path-list" id="pathList">';
     folders.forEach(function (f, idx) {
       html += '<div class="config-path-row" data-index="' + idx + '" data-orig="' + escapeHtml(f.path) + '" data-orig-idx="' + idx + '">';
@@ -1245,6 +1247,19 @@
   function refreshPreviewIfModified() { if (state.rightPreview) buildRightPanel(); }
   function bindEditorEvents() {
     var pathList = $('pathList');
+    // 表头「预检测结果」右侧的刷新按钮：直接复用刷新预缓存流程（增量、不重置、带进度与取消）。
+    // 表头会随配置切换重建，故用 dataset 标记避免重复绑定。
+    var btnRefresh = $('btnRefreshPrecache');
+    if (btnRefresh && btnRefresh.dataset.bound !== '1') {
+      btnRefresh.dataset.bound = '1';
+      btnRefresh.addEventListener('click', function () {
+        if (btnRefresh.disabled) return;
+        btnRefresh.disabled = true;
+        btnRefresh.classList.add('is-spinning');
+        var restore = function () { btnRefresh.disabled = false; btnRefresh.classList.remove('is-spinning'); };
+        Promise.resolve(refreshPrecacheFlow()).then(restore, restore);
+      });
+    }
     var dragged = null;
     var container = $('centerBottom');
     function onContainerClick(e) {
@@ -2336,7 +2351,8 @@
     state._probeActive = true;
     state.precheckBackground = false;
     showBusyProgress('正在刷新预缓存（增量更新，不重置）…');
-    call('refresh_precache').then(function (r) {
+    // 返回 Promise：供调用方（如表头刷新按钮）在流程收敛后恢复自身状态
+    return call('refresh_precache').then(function (r) {
       if (state.precheckBackground) hideProbeMini(); else hideBusy();
       cleanup();
       setStatus('预缓存已刷新：本次更新 ' + ((r && r.updated) || 0) + ' 个视频，共 ' + ((r && r.total) || 0) + ' 个视频' + ((r && r.cancelled) ? '（已中断，失效缓存稍后后台清理）' : '，失效缓存已后台清理'));

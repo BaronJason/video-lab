@@ -43,6 +43,7 @@ function restartHttpServer() {
     httpPort: parseInt(config.http_port, 10) || 9527,
     httpToken: httpToken,
     extraRoutes: buildHttpExtraRoutes(),
+    runLog: runLog,
     broadcast: function (event, data) { /* webContents.send 由各 send 函数完成，此处仅占位 */ }
   }).then(function (info) {
     httpServerInfo = info;
@@ -149,38 +150,18 @@ runLog.sys('app.start',
 // ── IPC 统一留痕：一处覆盖全部通道 ──
 // 回答"用户到底点了什么"——任务窗口与主窗口的写操作都会经过这里，
 // 包括删除配置、新增配置、添加/删除路径、重分组、清除产物等。
-// 只读与展示类通道跳过（list_/get_/open_ 等），否则日志会被轮询淹成噪音。
-const _IPC_SILENT = /^(list_|get_|read_|open_|window_|check_|resolve_|search_|find_|locate_|precheck|scan_|respond_|ack_|on_|task_replica_outdir)/;
-function _scrubSecrets(s) {
-  return String(s == null ? '' : s).replace(/("(?:[a-z_]*token[a-z_]*|password|secret|passwd)"\s*:\s*)"[^"]*"/gi, '$1"***"');
-}
-function _brief(v, max) {
-  try {
-    if (v == null) return '';
-    const s = _scrubSecrets(typeof v === 'string' ? v : JSON.stringify(v));
-    if (!s || s === '{}' || s === '[]' || s === 'null' || s === '""') return '';
-    return s.length > max ? s.slice(0, max) + '…' : s;
-  } catch (e) { return ''; }
-}
+// 只读与展示类通道、以及保存设置时的冗余配置项，都由 runlog 侧统一过滤。
+// 浏览器端（HTTP）走 server.js，用同一套 chEvent 留痕，两边格式一致。
 const _origIpcHandle = ipcMain.handle.bind(ipcMain);
 ipcMain.handle = function (channel, fn) {
   return _origIpcHandle(channel, async function (e, ...args) {
     const t0 = Date.now();
     try {
       const r = await fn(e, ...args);
-      if (!_IPC_SILENT.test(channel)) {
-        const failed = !!(r && typeof r === 'object' && r.ok === false);
-        const payload = _brief(args, 700);
-        const res = _brief(r, 300);
-        runLog.ipc(channel,
-          (failed ? '失败' : 'ok') + ' · ' + (Date.now() - t0) + 'ms'
-          + (failed && r && r.error ? ' · ' + String(r.error).slice(0, 160) : '')
-          + (payload ? ' · 入参 ' + payload : ''),
-          res ? { result: res } : null);
-      }
+      runLog.chEvent('ipc', channel, args, r, Date.now() - t0);
       return r;
     } catch (err) {
-      runLog.err('ipc.' + channel, err, { args: _brief(args, 400) });
+      runLog.err('ipc.' + channel, err, { args: runLog.briefArgs(args, 400) });
       throw err;
     }
   });
@@ -251,6 +232,25 @@ function moveStorage(fromDir, toDir) {
     }
     for (const [srcPath] of moved) { if (fs.existsSync(srcPath)) recycleFile(srcPath); } // 跨盘复制留下的源文件
     if (api && typeof api.onStorageMoved === 'function') api.onStorageMoved(toDir);
+    // 运行日志随存储位置一起搬：否则切换后日志继续写在旧位置，用户在新位置找不到，
+    // 重启后又写到新位置，等于把历史割成两处。
+    try {
+      const oldLog = path.join(fromDir, 'log');
+      const newLog = path.join(toDir, 'log');
+      if (path.resolve(oldLog) !== path.resolve(newLog)) {
+        runLog.close();                       // 先断开旧文件句柄，否则 Windows 上 rename 会失败
+        if (fs.existsSync(oldLog)) {
+          fs.mkdirSync(newLog, { recursive: true });
+          for (const f of fs.readdirSync(oldLog)) {
+            const s = path.join(oldLog, f);
+            try { fs.renameSync(s, path.join(newLog, f)); }
+            catch (e) { try { fs.copyFileSync(s, path.join(newLog, f)); } catch (e2) {} }
+          }
+          try { if (!fs.readdirSync(oldLog).length) fs.rmdirSync(oldLog); } catch (e) {}
+        }
+        runLog.init(newLog);                  // 无论搬移是否顺利，都把写入口切到新位置
+      }
+    } catch (e) {}
     recycleIfEmpty(fromDir); // 旧位置已搬空则整目录入回收站，避免留下空壳（非空则保留）
     return { ok: true, moved: true, count: moved.length };
   } catch (e) {
@@ -346,6 +346,7 @@ let mainWin = null;
 // 系统托盘：关闭主窗口仅最小化到托盘，右键托盘图标菜单可退出或显示主窗口
 let tray = null;
 let isQuitting = false;
+let exitLogged = false;   // 退出留痕只记一次（before-quit 因 preventDefault 会被多次触发）
 let quitConfirmed = false; // 有运行中任务退出时，经主窗口确认后才真正退出
 let settingsForceClose = false; // 应用退出路径：允许带未保存修改强制关闭设置窗口
 let closeAskOpen = false; // 关闭主窗口行为引导弹窗打开中：避免重复弹窗/重复触发
@@ -991,8 +992,11 @@ function buildHttpExtraRoutes() {
         http_port: parseInt(c.http_port, 10) || 9527,
         http_token: String(c.http_token || ''),
         http_url: httpUrl(),
+        log_dir: runLog.getDir(),
       };
     },
+    // 运行日志目录（设置页「维护」区）
+    get_log_dir: () => ({ ok: true, dir: runLog.getDir() }),
     save_settings: (args) => {
       const s = args[0];
       const cfg = loadConfig();
@@ -1390,6 +1394,8 @@ function registerIpc() {
   });
   ipcMain.handle('get_skin', () => String(config.skin || 'white_blue'));
   ipcMain.handle('set_skin', (e, skin) => { const v = String(skin || '').trim(); config.skin = v || 'white_blue'; saveConfig(config); return config.skin; });
+  // 运行日志目录（设置页「维护」区展示与打开）
+  ipcMain.handle('get_log_dir', () => ({ ok: true, dir: runLog.getDir() }));
   ipcMain.handle('open_path', async (e, p) => { const target = path.resolve(p); if (fs.existsSync(target)) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '路径不存在' }; });
   ipcMain.handle('open_parent', async (e, p) => { const target = path.dirname(path.resolve(p)); if (fs.existsSync(target)) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '路径不存在' }; });
   // 打开单个文件所在的文件夹并在资源管理器中选中该文件（项目所有「打开文件夹」类操作统一走此逻辑）
@@ -1595,7 +1601,47 @@ app.on('before-quit', (e) => {
   // 收尾：运行中→已中断、排队→暂停，随后持久化任务列表并退出
   api.shutdownTasks();
   quitConfirmed = true;
+  // 退出留痕要用同步写 —— 此刻进程即将结束，流缓冲里的最后几行等不到 flush
+  if (!exitLogged) {
+    exitLogged = true;
+    try {
+      runLog.logEventSync('SYS', 'app.exit', '退出 · 任务已收尾（运行中→已中断、排队→暂停）', {});
+      runLog.close();
+    } catch (err) {}
+  }
 });
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin' && isQuitting) app.quit();
+});
+
+// ── 崩溃留痕 ──
+// 程序异常退出后，"发生了什么"往往只剩这一行 —— 这是本日志最该覆盖的场景。
+// 注意：监听 uncaughtException 会让 Node 不再自动退出，因此记录后仍需 process.exit(1)
+// 保持「未捕获异常即退出」的原有行为，避免进程带病继续运行。
+process.on('uncaughtException', (err) => {
+  try {
+    runLog.logEventSync('ERR', 'app.uncaughtException',
+      String((err && err.message) || err).slice(0, 300),
+      { stack: String((err && err.stack) || '').slice(0, 1200) });
+    runLog.close();
+  } catch (e) {}
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  try { runLog.err('app.unhandledRejection', reason); } catch (e) {}
+});
+// 渲染进程 / 子进程异常退出（主进程仍在运行，但往往正是故障现场）
+app.on('render-process-gone', (e, contents, details) => {
+  try {
+    runLog.err('app.renderGone',
+      '渲染进程退出 · ' + String((details && details.reason) || ''),
+      { exitCode: details && details.exitCode, url: contents && contents.getURL && contents.getURL() });
+  } catch (err) {}
+});
+app.on('child-process-gone', (e, details) => {
+  try {
+    runLog.err('app.childGone',
+      '子进程退出 · ' + String((details && details.type) || '') + '/' + String((details && details.reason) || ''),
+      { exitCode: details && details.exitCode, name: details && details.name });
+  } catch (err) {}
 });

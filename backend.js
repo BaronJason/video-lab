@@ -833,11 +833,17 @@ class Api {
         if (!dup) continue;
         pending.push(s.full);
         if (commit) {
-          try { fs.unlinkSync(s.full); deleted.push(s.full); } catch (e) {}
+          this._recycleFile(s.full);
+          deleted.push(s.full);
         }
       }
     }
-    if (commit && deleted.length) this._markConfigModified();
+    if (commit && deleted.length) {
+      const info = this._describeForLog(deleted);
+      this._lg('DEL', 'clean.duplicate.sources',
+        '清理重复星标素材 · ' + info.count + ' 个文件 · 共 ' + this._humanSize(info.bytes), info);
+      this._markConfigModified();
+    }
     return { ok: true, pending, deleted };
   }
 
@@ -972,18 +978,6 @@ class Api {
     } catch (e) { return { ok: false, error: String(e) }; }
   }
 
-  // 递归删除目录树（含内部全部文件与子目录）
-  _rmtree(p) {
-    let entries = [];
-    try { entries = fs.readdirSync(p, { withFileTypes: true }); } catch (e) { return; }
-    for (const ent of entries) {
-      const full = path.join(p, ent.name);
-      if (ent.isDirectory()) this._rmtree(full);
-      else { try { fs.unlinkSync(full); } catch (e) {} }
-    }
-    try { fs.rmdirSync(p); } catch (e) {}
-  }
-
   // 判断给定分支的所在目录是否存在「另一模式」的 TXT（配置↔日志；如 * 外部配置无对应日志）
   branchOtherTxt(filePath) {
     try {
@@ -1052,17 +1046,25 @@ class Api {
     return !!store;
   }
 
-  // 移入系统回收站（可还原）；Electron 不可用时降级为重命名备份，绝不静默删除
+  // 移入系统回收站（可还原）。两步走：① 同步把原路径改名摘除 —— 调用方（如重跑前清旧产物）
+  // 需要"旧文件立刻不再冲突"，异步送站做不到这一点；② 再异步送回收站。
+  // 送站失败时文件以 .bak 形态保留，绝不静默永久删除。
   _recycleFile(p) {
     if (!p || !fs.existsSync(p)) return false;
+    let target = p;
+    try {
+      const bak = p + '.bak';
+      fs.renameSync(p, bak);
+      target = bak;
+    } catch (e) { /* 改名失败：退回直接送回收站 */ }
     try {
       const { shell } = require('electron');
       if (shell && typeof shell.trashItem === 'function') {
-        shell.trashItem(p).catch(() => { try { fs.renameSync(p, p + '.bak'); } catch (e) {} });
+        shell.trashItem(target).catch(() => {});   // 失败则保留 target，数据不丢
         return true;
       }
     } catch (e) {}
-    try { fs.renameSync(p, p + '.bak'); return true; } catch (e) { return false; }
+    return true;   // 非 Electron 环境：已摘除原路径，以 .bak 形态保留
   }
 
   // 标记缓存变更：记录具体键，据此做增量写（避免每次全量 upsert）
@@ -2664,9 +2666,17 @@ class Api {
     if (!task || !this._useDbCache()) return;
     try { this._cacheStore.setMark(task.id, JSON.stringify(data), data && data.createdAt); } catch (e2) {}
   }
-  _removeMarker(task) {
+  // 删除任务标记（cache.db 的 task_marks 记录）。标记是「产物归属」的判定依据 ——
+  // 一旦删除，任务身份/环境快照就再无别处留存，故默认留痕；批量场景传 silent 由调用方汇总。
+  _removeMarker(task, opts) {
     if (!task || !this._useDbCache()) return;
-    try { this._cacheStore.removeMark(task.id); } catch (e2) {}
+    let removed = false;
+    try { removed = this._cacheStore.removeMark(task.id) !== false; } catch (e2) {}
+    if (removed && !(opts && opts.silent)) {
+      this._lg('DEL', 'task.marker.remove',
+        '删除任务标记 · ' + String(task.type || '') + ' · ' + String(task.title || '').slice(0, 40),
+        { id: task.id, env: this._envBrief(task.env) });
+    }
   }
   // 孤儿任务标记回收：标记对应的任务已不存在于列表（清除/历史遗留）时删除；
   // 仍存在的任务（含 done 历史，供「清除成片/日志」精确删除）标记保留。
@@ -2726,14 +2736,8 @@ class Api {
       '清除任务产物 · ' + String(marker.type || '') + ' · ' + info.count + ' 个文件 · 共 ' + this._humanSize(info.bytes),
       Object.assign({ outDir: marker.batchOutDir || '' }, info));
 
-    const rm = (p) => {
-      try {
-        if (p && fs.existsSync(p)) {
-          const st = fs.statSync(p);
-          if (st.isFile()) fs.unlinkSync(p); else fs.rmSync(p, { recursive: true, force: true });
-        }
-      } catch (e2) {}
-    };
+    // 一律移入回收站（可还原），不做永久删除
+    const rm = (p) => { try { if (p && fs.existsSync(p)) this._recycleFile(p); } catch (e2) {} };
     for (const v of (marker.videos || [])) rm(v);
     if (marker.type === 'batch' && marker.batchOutDir) {
       const src = (marker.env && marker.env.REPLICA_TXT) ? String(marker.env.REPLICA_TXT) : '';
@@ -2809,8 +2813,8 @@ class Api {
         const out = [];
         for (let i = 0; i < lines.length; i++) if (!delIdx.has(i)) out.push(lines[i]);
         while (out.length && !(out[out.length - 1] || '').trim()) out.pop();
-        // 仅剩分隔线/空行视为已空 → 删除日志文件，否则重写
-        if (!out.some((l) => (l || '').trim() && !/^=+$/.test((l || '').trim()))) { try { fs.unlinkSync(logPath); } catch (e) {} }
+        // 仅剩分隔线/空行视为已空 → 移除日志文件（走回收站），否则重写
+        if (!out.some((l) => (l || '').trim() && !/^=+$/.test((l || '').trim()))) this._recycleFile(logPath);
         else fs.writeFileSync(logPath, out.join('\n'), 'utf-8');
       } catch (e) {}
     }
@@ -2856,8 +2860,8 @@ class Api {
         const out = [];
         for (let i = 0; i < lines.length; i++) if (!delIdx.has(i)) out.push(lines[i]);
         while (out.length && !(out[out.length - 1] || '').trim()) out.pop();
-        // 仅剩分隔线/空行视为已空 → 删除遮罩日志文件，否则重写
-        if (!out.some((l) => (l || '').trim() && !/^=+$/.test((l || '').trim()))) { try { fs.unlinkSync(lp); } catch (e) {} }
+        // 仅剩分隔线/空行视为已空 → 移除遮罩日志文件（走回收站），否则重写
+        if (!out.some((l) => (l || '').trim() && !/^=+$/.test((l || '').trim()))) this._recycleFile(lp);
         else fs.writeFileSync(lp, out.join('\n'), 'utf-8');
       } catch (e) {}
     }
@@ -2869,14 +2873,8 @@ class Api {
   //    （目录内确有日志列出的成片文件）。推算目录在同日同名任务间会撞车，
   //    无归属证据时一律不动：找不到就是找不到，不猜。
   _removeTaskArtifacts(task) {
-    const rm = (p) => {
-      try {
-        if (p && fs.existsSync(p)) {
-          const st = fs.statSync(p);
-          if (st.isFile()) fs.unlinkSync(p); else fs.rmSync(p, { recursive: true, force: true });
-        }
-      } catch (e2) {}
-    };
+    // 一律移入回收站（可还原），不做永久删除
+    const rm = (p) => { try { if (p && fs.existsSync(p)) this._recycleFile(p); } catch (e2) {} };
     // 1) 日志中列出的成片
     const listed = [];
     for (const line of (task.log || [])) {
@@ -2979,8 +2977,14 @@ class Api {
   clearFinishedTasks(statuses) {
     // 仅清理指定的已结束状态任务（缺省：完成/停止/失败）；运行中、排队中、暂停中的任务保留
     const allow = new Set(Array.isArray(statuses) && statuses.length ? statuses : ['done', 'stopped', 'error']);
+    const removed = [];
     for (const [id, t] of this.tasks) {
-      if (allow.has(t.status)) { this.tasks.delete(id); this._removeMarker(t); }
+      if (allow.has(t.status)) { this.tasks.delete(id); this._removeMarker(t, { silent: true }); removed.push(t); }
+    }
+    if (removed.length) {
+      this._lg('DEL', 'task.marker.remove.batch',
+        '批量清除任务标记 · ' + removed.length + ' 个 · 状态 ' + [...allow].join('/'),
+        { ids: removed.slice(0, 50).map((t) => t.id) });
     }
     this._emitTasks();
     return { ok: true };
@@ -3002,8 +3006,18 @@ class Api {
     const targets = [...this.tasks.values()].filter((t) => (inIds ? inIds.has(t.id) : (allow.has(t.status) && (!day || dayOf(t.endedAt) === day))));
     // 先缓存每个任务的标记（文件删除用精确产物清单，删除前读取；任务记录清掉后再删标记文件）
     const marked = targets.map((t) => ({ t, marker: this._loadMarker(t) }));
-    // 先清任务列表（连带任务标记文件）
-    for (const { t } of marked) { this.tasks.delete(t.id); this._removeMarker(t); }
+    // 清除动作留痕：范围 + 任务清单。任务记录与标记随后都会消失，这里是唯一的凭据。
+    if (marked.length) {
+      this._lg('DEL', 'task.clearDone',
+        '清除已完成任务 · ' + marked.length + ' 个 · 范围 ' + String(scope || 'list') + (day ? ' · 日期 ' + day : ''),
+        { scope: scope || 'list', day: day || '',
+          tasks: marked.slice(0, 50).map(({ t }) => ({
+            id: t.id, type: t.type, title: String(t.title || '').slice(0, 40),
+            outDir: t.outDir || '', clips: (t.progress && t.progress.current) || 0,
+          })) });
+    }
+    // 先清任务列表（连带任务标记）
+    for (const { t } of marked) { this.tasks.delete(t.id); this._removeMarker(t, { silent: true }); }
     const errors = [];
     if (scope && scope !== 'list') {
       const { shell } = require('electron');
@@ -3038,6 +3052,17 @@ class Api {
               catch (e) { errors.push('清除成片失败：' + fp); }
             }
           };
+          // 删除前留痕：产物进回收站后，「删了什么、多大、原修改时间」就只剩这一行了
+          const toRemove = (scope === 'all' && path.basename(abs).endsWith('成片') && exclusive)
+            ? [abs]
+            : mp4s.map((f) => path.join(abs, f)).filter((fp) => owned.has(path.resolve(fp)));
+          if (toRemove.length) {
+            const info = this._describeForLog(toRemove);
+            this._lg('DEL', 'task.artifacts.clear',
+              '清除任务产物 · ' + t.type + ' · ' + info.count + ' 个 · 共 ' + this._humanSize(info.bytes)
+              + ' · 范围 ' + String(scope),
+              Object.assign({ id: t.id, title: String(t.title || '').slice(0, 40) }, info));
+          }
           if (scope === 'video') {
             await trashOwned();
           } else if (scope === 'all') {
@@ -3059,6 +3084,14 @@ class Api {
         // outDir 可能指向源日志目录（复刻历史日志时产物在提交日目录），按目录整删会误伤原始日志旁的产物
         if (!exactVideos.length) continue;
         const uniq = [...new Set(exactVideos)];
+        // 删除前留痕（同上）
+        {
+          const info = this._describeForLog(uniq);
+          this._lg('DEL', 'task.artifacts.clear',
+            '清除任务产物 · ' + t.type + ' · ' + info.count + ' 个 · 共 ' + this._humanSize(info.bytes)
+            + ' · 范围 ' + String(scope),
+            Object.assign({ id: t.id, title: String(t.title || '').slice(0, 40) }, info));
+        }
         for (const p of uniq) {
           try { if (p && fs.existsSync(p)) await trash(p); }
           catch (e) { errors.push('清除成片失败：' + p); }
@@ -3383,10 +3416,16 @@ class Api {
           task.status = 'error';
           task.failReason = '内置引擎启动失败，请重新安装或校验程序文件';
           task.endedAt = Date.now();
+          this._lg('ERR', 'engine.spawn',
+            '内置引擎启动失败 · ' + task.type + ' · ' + String(task.title || '').slice(0, 40),
+            { id: task.id, enginesDir: this.enginesDir, error: String(err2) });
           this._emitTasks();
         });
       }
-      child.on('error', (err2) => resolve({ ok: false, error: String(err2) }));
+      child.on('error', (err2) => {
+        this._lg('ERR', 'engine.spawn', '引擎子进程异常 · ' + String(err2));
+        resolve({ ok: false, error: String(err2) });
+      });
       child.unref();
       resolve({ ok: true });
     });
@@ -4387,17 +4426,25 @@ let themes = [];
         i++;
       }
       if (changed) {
-        // 删除对应成片文件（优先日志 @out，其次视频缓存定位）
+        // 删除对应成片文件（优先日志 @out，其次视频缓存定位）：
+        // 先采集清单留痕（路径/大小/原修改时间），再一律移入回收站
+        const outs = [];
         for (const vn of removedVideos) {
           const op = this._maskOutFromLog(fp, vn) || this._findMaskOut(vn);
-          if (op && fs.existsSync(op)) { try { fs.unlinkSync(op); } catch (e) {} deleted.push(op); }
+          if (op && fs.existsSync(op)) outs.push(op);
         }
-        // 写回日志（原子写）
-        // 仅剩分隔线/空行时视为已空，删除日志文件；否则原子写回
+        if (outs.length) {
+          const info = this._describeForLog(outs);
+          this._lg('DEL', 'mask.related.remove',
+            '删除遮罩相关成片 · ' + info.count + ' 个文件 · 共 ' + this._humanSize(info.bytes)
+            + ' · 日志 ' + path.basename(fp), Object.assign({ project: pdir }, info));
+        }
+        for (const op of outs) { this._recycleFile(op); deleted.push(op); }
+        // 仅剩分隔线/空行时视为已空，移除日志文件（走回收站）；否则原子写回
         const outText = keep.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
         const hasContent = keep.some((l) => (l || '').trim() && !/^=+$/.test((l || '').trim()));
         if (hasContent) atomicWrite(fp, outText);
-        else { try { fs.unlinkSync(fp); } catch (e) {} }
+        else this._recycleFile(fp);
       }
     }
     return { ok: true, deleted, videos: removedVideos };
@@ -4443,15 +4490,24 @@ let themes = [];
         i++;
       }
       if (changed) {
+        // 先采集清单留痕，再一律移入回收站
+        const outs = [];
         for (const vn of names) {
           const op = this._maskOutFromLog(fp, vn) || this._findMaskOut(vn);
-          if (op && fs.existsSync(op)) { try { fs.unlinkSync(op); } catch (e) {} deleted.push(op); }
+          if (op && fs.existsSync(op)) outs.push(op);
         }
-        // 仅剩分隔线/空行时视为已空，删除日志文件；否则原子写回
+        if (outs.length) {
+          const info = this._describeForLog(outs);
+          this._lg('DEL', 'mask.videos.remove',
+            '删除遮罩成片 · ' + info.count + ' 个文件 · 共 ' + this._humanSize(info.bytes)
+            + ' · 日志 ' + path.basename(fp), Object.assign({ project: pdir }, info));
+        }
+        for (const op of outs) { this._recycleFile(op); deleted.push(op); }
+        // 仅剩分隔线/空行时视为已空，移除日志文件（走回收站）；否则原子写回
         const outText = keep.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
         const hasContent = keep.some((l) => (l || '').trim() && !/^=+$/.test((l || '').trim()));
         if (hasContent) atomicWrite(fp, outText);
-        else { try { fs.unlinkSync(fp); } catch (e) {} }
+        else this._recycleFile(fp);
       }
     }
     return { ok: true, deleted };
@@ -4472,7 +4528,12 @@ let themes = [];
     if (!rl.toLowerCase().endsWith('.txt')) return { ok: false, error: '仅支持移除遮罩日志 TXT' };
     try {
       if (!fs.existsSync(rl)) return { ok: false, error: '日志文件不存在：' + lp };
-      fs.unlinkSync(rl);
+      // 先留痕（路径/大小/原修改时间），再移入回收站
+      const info = this._describeForLog([rl]);
+      this._lg('DEL', 'mask.log.remove',
+        '删除遮罩日志 · ' + path.basename(rl) + ' · ' + this._humanSize(info.bytes),
+        Object.assign({ project: pdir }, info));
+      this._recycleFile(rl);
       try {
         const rest = fs.readdirSync(rdir);
         if (!rest.length) { try { fs.rmdirSync(rdir); } catch (e) {} }
@@ -4603,6 +4664,7 @@ let themes = [];
       const text = readText(fp);
       const lines = text.split(/\r?\n/).map((l) => l.replace(/\r$/, ''));
       const keep = [];
+      const fileVideos = [];   // 本文件命中的成片（不跨文件累积，避免同一成片被重复定位）
       let i = 0;
       let changed = false;
       while (i < lines.length) {
@@ -4624,7 +4686,7 @@ let themes = [];
           if (hit) {
             changed = true;
             const vname = (block[0] || '').trim();
-            if (vname) removedVideos.push(vname);
+            if (vname) { fileVideos.push(vname); removedVideos.push(vname); }
             i = j;
             continue;
           }
@@ -4637,15 +4699,24 @@ let themes = [];
       }
       if (changed) {
         const logDir = path.dirname(fp);
-        for (const vn of removedVideos) {
+        // 先采集清单留痕，再一律移入回收站
+        const outs = [];
+        for (const vn of fileVideos) {
           const op = path.join(logDir, vn);
-          if (fs.existsSync(op)) { try { fs.unlinkSync(op); } catch (e) {} deleted.push(op); }
+          if (fs.existsSync(op)) outs.push(op);
         }
-        // 仅剩分隔线/空行时视为已空，删除日志文件；否则原子写回
+        if (outs.length) {
+          const info = this._describeForLog(outs);
+          this._lg('DEL', 'secondary.products.remove',
+            '删除二次拼接产物 · ' + info.count + ' 个文件 · 共 ' + this._humanSize(info.bytes)
+            + ' · 日志 ' + path.basename(fp), Object.assign({ project: pdir }, info));
+        }
+        for (const op of outs) { this._recycleFile(op); deleted.push(op); }
+        // 仅剩分隔线/空行时视为已空，移除日志文件（走回收站）；否则原子写回
         const outText = keep.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
         const hasContent = keep.some((l) => (l || '').trim() && !/^=+$/.test((l || '').trim()));
         if (hasContent) atomicWrite(fp, outText);
-        else { try { fs.unlinkSync(fp); } catch (e) {} }
+        else this._recycleFile(fp);
       }
     }
     return { ok: true, deleted, videos: removedVideos };

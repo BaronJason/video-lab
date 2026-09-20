@@ -22,10 +22,8 @@ const path = require('node:path');
 const KEEP_DAYS = 7;
 
 let logDir = '';
-let stream = null;
-let streamDay = '';
 
-/** 指定日志目录（调用方给出 storageDir\..\log 或 storageDir\log） */
+/** 指定日志目录（调用方给出 storageDir\log） */
 function init(dir) {
   logDir = String(dir || '');
   if (!logDir) return;
@@ -39,19 +37,6 @@ function stampOf(d) {
     + '.' + pad(d.getMilliseconds(), 3);
 }
 function fileOf(day) { return path.join(logDir, 'app-' + day + '.log'); }
-
-function ensureStream() {
-  if (!logDir) return null;
-  const day = dayOf(new Date());
-  if (stream && streamDay === day) return stream;
-  if (stream) { try { stream.end(); } catch (e) {} stream = null; }
-  try {
-    stream = fs.createWriteStream(fileOf(day), { flags: 'a' });
-    stream.on('error', () => { stream = null; });   // 写失败不得影响主流程
-    streamDay = day;
-  } catch (e) { stream = null; }
-  return stream;
-}
 
 /** 敏感值脱敏：令牌 / 口令一律不入日志。两道正则 ——
  *  ① 带引号的键（JSON 形态）："http_token":"abc"  → "http_token":"***"
@@ -73,8 +58,78 @@ function briefData(data) {
   } catch (e) { return ''; }
 }
 
+/** 通道入参/结果摘要：脱敏 + 压缩成单行 + 截断。IPC 与 HTTP 共用。 */
+function briefArgs(v, max) {
+  try {
+    if (v == null) return '';
+    const s = scrub(typeof v === 'string' ? v : JSON.stringify(v));
+    if (!s || s === '{}' || s === '[]' || s === 'null' || s === '""') return '';
+    return s.length > max ? s.slice(0, max) + '…' : s;
+  } catch (e) { return ''; }
+}
+
+// 只读/展示类通道不记 —— 否则轮询会把日志淹成噪音。
+// 覆盖：列表、读取、打开、窗口、检测、解析、搜索、定位、预检测、扫描、应答、事件推送。
+const SILENT_CHANNEL = /^(list_|get_|read_|open_|window_|check_|resolve_|search_|find_|locate_|precheck|scan_|respond_|ack_|on_|task_replica_outdir)/;
+function isSilentChannel(ch) { return SILENT_CHANNEL.test(String(ch == null ? '' : ch)); }
+
+// 配置保存类通道只记「变更了的键」：全量配置一次数百字符，改几次皮肤就把日志刷满了。
+// 快照放在本模块，IPC 与 HTTP 共用一份，避免两边互相误报差异。
+const SETTINGS_DELTA_CHANNEL = /^save_settings$/;
+let _lastSettingsSnap = '';
+function deltaArgs(channel, args) {
+  if (!SETTINGS_DELTA_CHANNEL.test(String(channel == null ? '' : channel))) return args;
+  const cur = args && args[0];
+  if (!cur || typeof cur !== 'object') return args;
+  let prev = {};
+  try { prev = JSON.parse(_lastSettingsSnap || '{}'); } catch (e) { prev = {}; }
+  const keys = new Set(Object.keys(prev).concat(Object.keys(cur)));
+  const delta = {};
+  let n = 0;
+  for (const k of keys) {
+    if (JSON.stringify(prev[k]) === JSON.stringify(cur[k])) continue;
+    delta[k] = cur[k];
+    n++;
+  }
+  try { _lastSettingsSnap = JSON.stringify(cur); } catch (e) {}
+  return n ? [delta] : [];
+}
+
 /**
- * 写一条事件。
+ * 通道调用留痕（IPC 与 HTTP 共用）。回答"用户到底点了什么"——
+ * 任务窗口、主窗口、浏览器端的写操作都会留下这条。只读通道跳过。
+ * @param {string} transport 'ipc' | 'http'
+ * @param {string} channel   通道名
+ * @param {*} args           入参
+ * @param {*} result         返回值（用于判断 ok / 失败）
+ * @param {number} ms        耗时
+ */
+function chEvent(transport, channel, args, result, ms) {
+  try {
+    if (isSilentChannel(channel)) return;
+    const failed = !!(result && typeof result === 'object' && result.ok === false);
+    const payload = briefArgs(deltaArgs(channel, args), 700);
+    const res = briefArgs(result, 300);
+    logEvent('IPC', String(channel),
+      String(transport) + ' · ' + (failed ? '失败' : 'ok') + ' · ' + (Number(ms) || 0) + 'ms'
+      + (failed && result && result.error ? ' · ' + String(result.error).slice(0, 160) : '')
+      + (payload ? ' · 入参 ' + payload : ''),
+      res ? { result: res } : null);
+  } catch (e) { /* 静默 */ }
+}
+
+/** 单行格式化：时间 · 动词 · 动作 · 摘要 · 细节（脱敏与换行折叠都在这里） */
+function formatLine(verb, action, summary, data) {
+  const s = scrub(String(summary || '').replace(/\s*\n\s*/g, ' '));
+  const d = briefData(data);
+  const head = stampOf(new Date()) + '  ' + String(verb || 'SYS').padEnd(3) + '  ' + String(action || '-').padEnd(26);
+  return head + (s ? '  ' + s : '') + (d ? '  · ' + d : '') + '\n';
+}
+
+/**
+ * 写一条事件。刻意用同步追加 —— 本日志是"事后唯一证据"，可靠性优先于性能：
+ * 流式写入的缓冲在进程退出（尤其是崩溃）时等不到 flush，最后几条恰好最可能是关键线索。
+ * 写入失败一律静默，绝不影响主流程。
  * @param {string} verb    SYS/RUN/DEL/ADD/MOD/ERR/IPC/CFG
  * @param {string} action  点分动作名，如 task.artifacts.remove
  * @param {string} summary 中文一句话摘要（含关键数字），可为空
@@ -82,14 +137,13 @@ function briefData(data) {
  */
 function logEvent(verb, action, summary, data) {
   try {
-    const ws = ensureStream();
-    if (!ws) return;
-    const s = scrub(String(summary || '').replace(/\s*\n\s*/g, ' '));
-    const d = briefData(data);
-    const head = stampOf(new Date()) + '  ' + String(verb || 'SYS').padEnd(3) + '  ' + String(action || '-').padEnd(26);
-    ws.write(head + (s ? '  ' + s : '') + (d ? '  · ' + d : '') + '\n');
+    if (!logDir) return;
+    fs.appendFileSync(fileOf(dayOf(new Date())), formatLine(verb, action, summary, data), 'utf8');
   } catch (e) { /* 静默 */ }
 }
+
+/** 同 logEvent（保留别名：退出/崩溃路径用它表达"必须落盘"的语义） */
+const logEventSync = logEvent;
 
 // 便捷包装
 const sys = (action, summary, data) => logEvent('SYS', action, summary, data);
@@ -147,9 +201,11 @@ function pruneOld(keepDays = KEEP_DAYS) {
   } catch (e) { return { removed: 0 }; }
 }
 
-function close() {
-  try { if (stream) stream.end(); } catch (e) {}
-  stream = null; streamDay = '';
-}
+/** 每条都是同步追加，没有待 flush 的缓冲；保留此函数供退出路径表达「日志收尾」语义 */
+function close() {}
 
-module.exports = { init, logEvent, sys, run, del, add, mod, cfg, ipc, err, humanSize, describeFiles, pruneOld, close, scrub, KEEP_DAYS };
+/** 当前日志目录（供设置页展示与打开） */
+function getDir() { return logDir; }
+
+module.exports = { init, getDir, logEvent, logEventSync, sys, run, del, add, mod, cfg, ipc, err, humanSize, describeFiles,
+  pruneOld, close, scrub, briefArgs, chEvent, isSilentChannel, KEEP_DAYS };

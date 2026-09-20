@@ -104,6 +104,8 @@ function startHttpServer(opts) {
   // 固定 token：main.js 注入（config.http_token，首次启动生成后持久化，此后长期复用）；
   // 未注入（如独立测试）时才临时随机生成
   const httpToken = (typeof opts.httpToken === 'string' && opts.httpToken) || crypto.randomBytes(16).toString('hex');
+  // 运行日志：main.js 注入；浏览器端的写操作也要留痕（IPC 包装只覆盖 Electron 侧）
+  const runLog = opts.runLog || null;
   const sseClients = new Set();
 
   // SSE 广播：遍历所有连接的 SSE 客户端推送事件
@@ -321,10 +323,13 @@ function startHttpServer(opts) {
       res.end(JSON.stringify({ ok: false, error: '未知接口: ' + channel }));
       return;
     }
+    const t0 = Date.now();
     Promise.resolve().then(() => handler(args)).then((result) => {
+      if (runLog) runLog.chEvent('http', channel, args, result, Date.now() - t0);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true, data: result === undefined ? null : result }));
     }).catch((err) => {
+      if (runLog) runLog.err('http.' + channel, err, { args: runLog.briefArgs(args, 400) });
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: String(err && err.message || err) }));
     });

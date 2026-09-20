@@ -392,6 +392,8 @@
       var pp = $('cfgPathProgram'), pa = $('cfgPathAppdata');
       if (pp) pp.textContent = s.config_path_program || '';
       if (pa) pa.textContent = s.config_path_appdata || '';
+      var ld = $('logDirPath');
+      if (ld) ld.textContent = s.log_dir || '';
       var b = s.batch || {};
       $('batchSuffixMark').value = b.suffix_mark != null ? b.suffix_mark : '';
       $('batchMaxDuration').value = b.max_duration != null ? b.max_duration : '';
@@ -704,6 +706,16 @@
       var pp = document.getElementById('cfgPathProgram'), pa = document.getElementById('cfgPathAppdata');
       var dir = isAppdata ? (pa ? pa.textContent : '') : (pp ? pp.textContent : '');
       if (!dir) { setStatus('尚未确定保存目录', false); return; }
+      api.open_path(dir).then(function (r) {
+        if (!(r && r.ok)) setStatus('打开失败：' + ((r && r.error) || '路径不存在'), false);
+      }).catch(function () { setStatus('打开失败', false); });
+    });
+    // 「运行日志」行：打开日志目录（排查时先找到文件）
+    var openLog = document.getElementById('btnOpenLogDir');
+    if (openLog && api && api.open_path) openLog.addEventListener('click', function () {
+      var el = document.getElementById('logDirPath');
+      var dir = el ? el.textContent : '';
+      if (!dir) { setStatus('日志目录尚未就绪', false); return; }
       api.open_path(dir).then(function (r) {
         if (!(r && r.ok)) setStatus('打开失败：' + ((r && r.error) || '路径不存在'), false);
       }).catch(function () { setStatus('打开失败', false); });

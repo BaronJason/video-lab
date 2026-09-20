@@ -1,6 +1,6 @@
 // -*- coding: utf-8 -*-
 // Video Lab — 后端逻辑（Node.js 移植，与 main.py 行为一致）
-// 负责扫描项目/TXT、解析配置、预检测、调用 PowerShell 脚本。
+// 负责扫描项目/TXT、解析配置、预检测、调度内置任务引擎。
 'use strict';
 
 const fs = require('fs');
@@ -24,9 +24,6 @@ const REPLICA_MARK = 'REPLICA:'; // 复刻项目虚拟版本的 path 前缀，�
 
 // 默认配置
 const DEFAULT_CONFIG = {
-  scripts_dir: '',
-  // 任务执行引擎：auto=引擎可用即走 Node 引擎（缺失/异常自动回退 legacy PS1）；off=强制 legacy PS1
-  use_node_engine: 'auto',
   skin: 'white_blue',
   auto_check_update: true,    // 启动时自动检查更新
   check_update_daily: false,  // 每日定时检查更新（整点触发，需 app 保持运行）
@@ -224,10 +221,9 @@ function zhLiveLine(kv) {
 }
 
 class Api {
-  constructor(root, config, scriptsDir, enginesDir, storageDir) {
+  constructor(root, config, enginesDir, storageDir) {
     this.root = root;
     this.config = Object.assign({}, DEFAULT_CONFIG, config || {});
-    this.scriptsDirFixed = scriptsDir || ''; // 脚本位置（main 进程动态解析：源码形态用仓库内 scripts，分发形态用 resources\Scripts）
     this.enginesDirFixed = enginesDir || ''; // Node 引擎位置（源码形态 app\engines，分发形态 resources\Engines）
     this.storageDir = storageDir || '';      // 数据目录：引导文件与两个库（config.json / settings.db / cache.db）同目录
     this._persistTimer = null;                          // 任务持久化节流定时器
@@ -249,7 +245,6 @@ class Api {
     this._cacheBackendMode = '';   // 'db' | 'mem'：首次使用时判定一次（mem = 库不可用，退化纯内存不落盘）
     this._settingsStore = null;    // 设置库（<storageDir>\settings.db），惰性打开
     this._settingsMode = '';       // 'db' | 'mem'
-    this._legacyCacheDirPath = ''; // legacy 引擎的 JSON 镜像目录（仅 PS1 回退路径使用，见 _prepareLegacyCache）
     this._lnkCache = new Map();    // .lnk 解析结果缓存（lnk 路径 → { mtimeMs, target }），lnk 未变则免重复解析
     this._lnkParser = undefined;   // .lnk 解析器（惰性取底座引擎实现）
     this._txtTree = null;
@@ -293,21 +288,11 @@ class Api {
     return this.storageDir ? path.join(this.storageDir, 'settings.db') : '';
   }
 
-  get scriptsDir() {
-    // 脚本位置由 main 按形态动态解析传入（源码形态用仓库内 scripts，分发形态用 resources\Scripts），不再读取 config.scripts_dir
-    if (this.scriptsDirFixed) return this.scriptsDirFixed;
-    let d = this.config.scripts_dir;
-    if (!d || !fs.existsSync(d)) d = DEFAULT_CONFIG.scripts_dir;
-    return d;
-  }
-
   // Node 引擎根目录：由 main 按形态动态解析传入（源码形态 app\engines，分发形态 resources\Engines）；
-  // 未传入时按脚本目录同级推断作为兜底
+  // 未传入时按本文件所在目录同级探测作为兜底
   get enginesDir() {
     if (this.enginesDirFixed) return this.enginesDirFixed;
-    const s = this.scriptsDir;
-    if (!s) return '';
-    const parent = path.dirname(s);
+    const parent = __dirname;
     // 源码形态为 app\engines，分发形态为 resources\Engines：逐一探测并取回真实大小写
     for (const name of ['engines', 'Engines']) {
       const cand = path.join(parent, name);
@@ -316,7 +301,7 @@ class Api {
     return path.join(parent, 'engines');
   }
 
-  // 引擎入口文件；不存在返回空串（调用方据此回退 legacy）
+  // 引擎入口文件；不存在返回空串（调用方据此判定引擎不可用）
   _engineRunnerPath() {
     const d = this.enginesDir;
     if (!d) return '';
@@ -324,86 +309,17 @@ class Api {
     try { return fs.existsSync(p) ? p : ''; } catch (e) { return ''; }
   }
 
-  // legacy 脚本路径：脚本目录下 legacy\ 子目录优先，
-  // 回退脚本目录根（旧布局/尚未同步该目录结构的分发形态）
-  _legacyScriptPath(name) {
-    const root = this.scriptsDir;
-    if (!root) return name;
-    const inLegacy = path.join(root, 'legacy', name);
-    try { if (fs.existsSync(inLegacy)) return inLegacy; } catch (e) {}
-    return path.join(root, name);
-  }
-
-  // ── 引擎缓存出口 ──
-  // Node 引擎：直接读同一个库（VL_CACHE_DB 指向 <storageDir>\cache.db），无中间文件。
-  // legacy PS1：只认 JSON —— 任务启动前把库导出为镜像、以 VL_CACHE_DIR 指向系统临时目录，
-  //             任务结束后把镜像里的使用计数回收进库。镜像不落数据目录，扁平布局不被破坏。
-  _legacyCacheDir() {
-    if (!this._legacyCacheDirPath) this._legacyCacheDirPath = path.join(os.tmpdir(), 'video-lab-legacy');
-    return this._legacyCacheDirPath;
-  }
-
-  // 传给任务的缓存环境变量（两条路径的变量都带上，由启动时按实际引擎二选一）
+  // 传给任务的缓存环境变量：引擎直读同一个库（<storageDir>\cache.db），无中间文件
   _cacheEnvBase() {
-    return { VL_CACHE_DB: this.cacheDbPath || '', VL_CACHE_DIR: this._legacyCacheDir() };
+    return { VL_CACHE_DB: this.cacheDbPath || '' };
   }
 
-  // legacy 启动前导出 JSON 镜像；库不可用时返回空串（脚本按无缓存运行）
-  _prepareLegacyCache() {
-    if (!this._useDbCache()) return '';
-    const dir = this._legacyCacheDir();
-    try {
-      fs.mkdirSync(dir, { recursive: true });
-      const n = this._cacheStore.exportVideoJson(path.join(dir, 'video_cache.json'));
-      const usage = this._cacheStore.listUsage();
-      const out = {};
-      for (const k of Object.keys(usage)) out[k] = { UsageCount: usage[k] };
-      atomicWrite(path.join(dir, 'usage_cache.json'), JSON.stringify(out));
-      if (n > 0) console.log('[cache] 已导出 ' + n + ' 条缓存供 legacy 引擎使用');
-      return dir;
-    } catch (e) { return ''; }
-  }
-
-  // legacy 结束后回收镜像里的使用计数（JSON 侧为权威快照，覆盖式写回；不再回写探测数据，库内已有更完整结果）
-  _harvestLegacyUsage(dir) {
-    if (!dir || !this._useDbCache()) return 0;
-    const p = path.join(dir, 'usage_cache.json');
-    if (!fs.existsSync(p)) return 0;
-    try {
-      const data = JSON.parse(fs.readFileSync(p, 'utf-8'));
-      if (!data || typeof data !== 'object' || Array.isArray(data)) return 0;
-      const store = this._cacheStore;
-      let n = 0;
-      store.transaction(() => {
-        for (const k of Object.keys(data)) {
-          const c = Number((data[k] || {}).UsageCount || 0);
-          if (!k || !(c > 0)) continue;
-          store.setVideoUsage(k, c);
-          n++;
-        }
-      });
-      return n;
-    } catch (e) { return 0; }
-  }
-
-  // 回收 legacy 镜像目录（应用自建的临时镜像，位于系统临时目录，非用户数据）；
-  // 计数未成功回收时保留目录供下次启动重试与排查
-  _cleanupLegacyCache(dir, harvested) {
-    if (!dir || !harvested) return;
-    try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
-  }
-
-  // 引擎是否为主执行路径：环境变量/配置未强制 legacy，且引擎文件就绪
+  // 引擎是否为当前执行路径：引擎入口文件就绪即可用
   _nodeEnginePrimary() {
-    const envFlag = String(process.env.VL_USE_NODE_ENGINE || '').trim();
-    const cfgFlag = this.config && this.config.use_node_engine != null ? String(this.config.use_node_engine).trim() : '';
-    const flag = (envFlag || cfgFlag || 'auto').toLowerCase();
-    if (flag === 'off' || flag === 'false' || flag === '0' || flag === 'legacy' || flag === 'pwsh') return false;
     return !!this._engineRunnerPath();
   }
 
-  // 任务执行引擎选择：off/0/false/legacy/pwsh → 强制 legacy PS1；其余（含 auto）→ 引擎可用即走 Node 引擎，
-  // 引擎缺失自动回退 legacy（任何环境下都不至于无法出片）。
+  // 任务是否可分发到内置引擎：未知任务类型一律不分发
   shouldUseNodeEngine(type) {
     if (!type) return false;
     return this._nodeEnginePrimary();
@@ -2183,10 +2099,10 @@ class Api {
     return { ok: true, dir: outc.outDir };
   }
 
-  _createTask(type, title, scriptPath, env, srcPath) {
+  _createTask(type, title, env, srcPath) {
     const id = 'task_' + (++this.taskSeq) + '_' + Date.now().toString(36);
     const task = {
-      id, type, title, script: scriptPath, env: Object.assign({}, env),
+      id, type, title, env: Object.assign({}, env),
       pid: null, status: 'queued', lockState: 'unknown', progress: { current: 0, total: 0 },
       failReason: '', log: [],
       createdAt: Date.now(), startedAt: null, endedAt: null, _stopRequested: false,
@@ -2246,7 +2162,7 @@ class Api {
       task.status = 'running';
       task.log.push('[开始运行]');
       this._emitTasks();
-      this._spawnPowerShell(task.script, task.env, task);
+      this._spawnEngine(task.type, task.env, task);
     } else {
       task.status = 'queued';
       task.log.push('[已加入执行队列，等待前序任务完成]');
@@ -2266,7 +2182,7 @@ class Api {
       t.status = 'running';
       t.log.push('[前序任务完成，开始运行本任务]');
       this._emitTasks();
-      this._spawnPowerShell(t.script, t.env, t);
+      this._spawnEngine(t.type, t.env, t);
       return;
     }
   }
@@ -2378,7 +2294,7 @@ class Api {
       // 首次进入运行态时打点（惰性：覆盖直接启动/队列轮到/恢复启动所有路径）
       if (t.status === 'running' && !t.startedAt) t.startedAt = Date.now();
       list.push({
-        id: t.id, type: t.type, title: t.title, script: t.script, pid: t.pid,
+        id: t.id, type: t.type, title: t.title, pid: t.pid,
         status: t.status, lockState: t.lockState, paused: !!t.paused,
         progress: t.progress || { current: 0, total: 0 }, failReason: t.failReason || '',
         createdAt: t.createdAt, endedAt: t.endedAt, outDir: t.outDir || '',
@@ -2448,7 +2364,7 @@ class Api {
         for (const id of store.listTaskIds()) { if (!keep.has(id)) store.removeTask(id); }
         for (const t of this.tasks.values()) {
           const body = {
-            id: t.id, type: t.type, title: t.title, script: t.script, env: t.env || {},
+            id: t.id, type: t.type, title: t.title, env: t.env || {},
             status: t.status, lockState: t.lockState, progress: t.progress || { current: 0, total: 0 },
             failReason: t.failReason || '', paused: !!t.paused,
             createdAt: t.createdAt, startedAt: t.startedAt || null, endedAt: t.endedAt, planPos: t.planPos || 0,
@@ -2651,7 +2567,7 @@ class Api {
     else this._removeTaskArtifacts(t);
     this._removeMarker(t);
     this.tasks.delete(id);
-    const task = this._createTask(t.type, t.title || this._taskTitle(src), t.script, env, src);
+    const task = this._createTask(t.type, t.title || this._taskTitle(src), env, src);
     // 保留预填的进度结构（如批量任务的预计成片数/分组数），其余进度归零
     task.progress = { current: 0, total: 0 };
     if (t.progress && t.progress.groupCount > 0) task.progress.groupCount = t.progress.groupCount;
@@ -3240,39 +3156,17 @@ class Api {
     });
   }
 
-  _spawnPowerShell(script, env, task) {
-    // 引擎分发：Node 引擎可用（且未被开关关掉）即走引擎，否则以 pwsh 启动 legacy 脚本
-    // （绕过 cmd /c start 中转，避免中文路径被代码页转码导致脚本无法加载）。
-    // 两条路径的 stdout/stderr 形态一致，实时捕获与协议行解析完全复用，供任务窗口显示。
+  _spawnEngine(type, env, task) {
+    // 以内置 Node 引擎执行任务；stdout/stderr 实时捕获与协议行解析供任务窗口显示。
     const { spawn } = require('child_process');
-    const useNode = !!(task && this.shouldUseNodeEngine(task.type));
-    // 缓存出口按实际引擎二选一：Node 引擎直读库；legacy 只认 JSON，启动前导出镜像
     const childEnv = Object.assign({}, env);
-    if (useNode) {
-      delete childEnv.VL_CACHE_DIR;
-      childEnv.VL_CACHE_DB = this.cacheDbPath || '';
-    } else {
-      delete childEnv.VL_CACHE_DB;
-      const dir = this._prepareLegacyCache();
-      if (dir) childEnv.VL_CACHE_DIR = dir; else delete childEnv.VL_CACHE_DIR;
-      if (task) task._legacyCacheDir = dir;
-    }
+    childEnv.VL_CACHE_DB = this.cacheDbPath || '';
     return new Promise((resolve) => {
-      const child = useNode
-        ? this._spawnNodeEngineChild(task, childEnv)
-        : spawn('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script], {
-            env: Object.assign({}, process.env, childEnv),
-            cwd: (script ? path.dirname(script) : this.scriptsDir),
-            windowsHide: true,   // 不弹黑窗，输出由任务窗口实时展示
-            detached: false,
-            stdio: ['ignore', 'pipe', 'pipe'],
-          });
+      const child = this._spawnNodeEngineChild(task, childEnv);
       if (task) {
         task.pid = child.pid;
-        task.engine = useNode ? 'node' : 'pwsh';
-        task.log.push(useNode
-          ? '[引擎] Node 引擎（module=' + task.type + '）'
-          : '[引擎] legacy PowerShell（' + path.basename(script || '未指定') + '）');
+        task.engine = 'node';
+        task.log.push('[引擎] Node 引擎（module=' + task.type + '）');
         this._emitTasks();
         // 任务真正开始：创建任务标记（含 env 快照，供失败重开精确还原）
         this._touchMarker(task);
@@ -3383,7 +3277,7 @@ class Api {
         child.on('error', (err2) => {
           task.log.push('[启动失败] ' + String(err2));
           task.status = 'error';
-          task.failReason = '脚本启动失败，请检查脚本目录配置';
+          task.failReason = '内置引擎启动失败，请重新安装或校验程序文件';
           task.endedAt = Date.now();
           this._emitTasks();
         });
@@ -3440,8 +3334,6 @@ class Api {
     if (cfg.batch && typeof cfg.batch === 'object') this.config.batch = Object.assign({}, this.config.batch, cfg.batch);
     if (cfg.replica && typeof cfg.replica === 'object') this.config.replica = Object.assign({}, this.config.replica, cfg.replica);
     if (cfg.mask && typeof cfg.mask === 'object') this.config.mask = Object.assign({}, this.config.mask, cfg.mask);
-    // 任务执行引擎（设置页调试项）：更改后立即生效，新提交的任务按新选择分发，无需重启
-    if (cfg.use_node_engine === 'auto' || cfg.use_node_engine === 'off') this.config.use_node_engine = cfg.use_node_engine;
   }
 
   // 水印归属校验：以本项目「主流水印」为基准做一致性判定；仅在用户启用判定时参与判断。
@@ -3740,9 +3632,7 @@ class Api {
   }
 
   runBatch(filePath, count, group) {
-    const script = this._legacyScriptPath('video_batch.ps1');
-    // 走 Node 引擎时不再要求 legacy 脚本存在（引擎为执行路径，legacy 仅回退用）
-    if (!this.shouldUseNodeEngine('batch') && !fs.existsSync(script)) return { ok: false, error: '未找到脚本：' + script };
+    if (!this.shouldUseNodeEngine('batch')) return { ok: false, error: '内置引擎不可用（resources\\Engines\\engine-runner.js 缺失），请重新安装或校验程序文件' };
     const notSet = this._settingsError('batch');
     if (notSet.length) return { ok: false, error: '批量拼接参数未设置：' + notSet.join('、') + '，请到 设置-批量拼接 中配置后再启动' };
     const b = this.config.batch || {};
@@ -3762,7 +3652,7 @@ class Api {
     // 任务提交时刻：排队跨天运行时，成片命名/日志/输出目录按提交日期而非运行日期
     env.BATCH_SUBMIT_TS = String(Date.now());
     env.REPLICA_NO_WAIT = '1';
-    const task = this._enqueueTask(this._createTask('batch', this._taskTitle(filePath), script, env, filePath));
+    const task = this._enqueueTask(this._createTask('batch', this._taskTitle(filePath), env, filePath));
     // 排队即预填预计成片数/分组数（配置底部输入），运行后由输出解析覆写 total
     const preTotal = parseInt(String(count), 10) || 0;
     const preGroup = parseInt(String(group), 10) || 0;
@@ -3772,9 +3662,7 @@ class Api {
   }
 
   runReplica(logPath, mode = 1, entryVideo) {
-    const script = this._legacyScriptPath('video_replica.ps1');
-    // 走 Node 引擎时不再要求 legacy 脚本存在（引擎为执行路径，legacy 仅回退用）
-    if (!this.shouldUseNodeEngine('replica') && !fs.existsSync(script)) return { ok: false, error: '未找到脚本：' + script };
+    if (!this.shouldUseNodeEngine('replica')) return { ok: false, error: '内置引擎不可用（resources\\Engines\\engine-runner.js 缺失），请重新安装或校验程序文件' };
     const notSet = this._settingsError('replica');
     if (notSet.length) return { ok: false, error: '视频复刻参数未设置：' + notSet.join('、') + '，请到 设置-视频复刻 中配置后再启动' };
     const r = this.config.replica || {};
@@ -3791,7 +3679,7 @@ class Api {
     // 仅复刻日志中的单个指定成片（右侧「复刻」按钮/批量选择传入成片名）
     if (entryVideo) env.REPLICA_ONLY_NAME = String(entryVideo).trim();
     const modeLabel = String(mode) === '2' ? '去重' : '原片';
-    const task = this._enqueueTask(this._createTask('replica', this._replicaTaskTitle(logPath, modeLabel), script, env, logPath));
+    const task = this._enqueueTask(this._createTask('replica', this._replicaTaskTitle(logPath, modeLabel), env, logPath));
     return { ok: true, taskId: task.id };
   }
 
@@ -3854,11 +3742,11 @@ class Api {
       // batch：只重做失败成片对应的「序号」，其余逻辑（命名/分组）仍按原始 BATCH_COUNT/BATCH_GROUP 计算；
       // 提交时刻刻意不刷新 → 成片命名前缀、输出目录、拼接日志均与首次一致（续跑即补做同一批的缺片）
       env.BATCH_ONLY_NAMES = namesArr.join(';');
-      task = this._createTask('batch', (t.title || '') + '（续跑）', t.script, env, src);
+      task = this._createTask('batch', (t.title || '') + '（续跑）', env, src);
     } else {
       env.REPLICA_ONLY_NAMES = namesArr.join(';');
       env.REPLICA_SUBMIT_TS = String(Date.now()); // 刷新提交时刻，续跑产物按当前日期输出
-      task = this._createTask('replica', (t.title || '') + '（续跑）', t.script, env, src);
+      task = this._createTask('replica', (t.title || '') + '（续跑）', env, src);
     }
     this._enqueueTask(task);
     return { ok: true, taskId: task.id, count: namesArr.length };
@@ -3909,11 +3797,9 @@ class Api {
   }
 
   // 遮罩叠加任务：payload 来自主窗口遮罩叠加模式（mode/rawDirs/videos/maskDirs/watermark/outputDir），
-  // 经环境变量 MASK_* 驱动 Scripts\video_mask.ps1；无设置页配置组，参数随任务提交
+  // 经环境变量 MASK_* 驱动内置引擎的 mask 模块；无设置页配置组，参数随任务提交
   runMask(p) {
-    const script = this._legacyScriptPath('video_mask.ps1');
-    // 走 Node 引擎时不再要求 legacy 脚本存在（引擎为执行路径，legacy 仅回退用）
-    if (!this.shouldUseNodeEngine('mask') && !fs.existsSync(script)) return { ok: false, error: '未找到脚本：' + script };
+    if (!this.shouldUseNodeEngine('mask')) return { ok: false, error: '内置引擎不可用（resources\\Engines\\engine-runner.js 缺失），请重新安装或校验程序文件' };
     const errs = [];
     const dirs = Array.isArray(p && p.rawDirs) ? p.rawDirs.filter((d) => String(d).trim()) : [];
     if (!dirs.length) errs.push('原片文件夹');
@@ -3963,7 +3849,7 @@ class Api {
       MASK_SUBMIT_TS: String(Date.now()),
     };
     Object.assign(env, this._cacheEnvBase());
-    const task = this._enqueueTask(this._createTask('mask', title, script, env, dirs[0]));
+    const task = this._enqueueTask(this._createTask('mask', title, env, dirs[0]));
     return { ok: true, taskId: task.id };
   }
 
@@ -3999,7 +3885,7 @@ class Api {
     if (!env.MASK_RAW_DIRS) return { ok: false, error: '原任务缺少原片文件夹信息，无法继续制作' };
     this.tasks.delete(id);
     this._removeMarker(t);
-    const task = this._createTask('mask', (t.title || '') + '（续跑）', t.script, env, t.srcPath || '');
+    const task = this._createTask('mask', (t.title || '') + '（续跑）', env, t.srcPath || '');
     this._enqueueTask(task);
     return { ok: true, taskId: task.id, count: namesArr.length };
   }
@@ -4633,34 +4519,18 @@ let themes = [];
 
   resolvePath(filePath) { return path.resolve(filePath); }
 
-  // 检测应用运行所需的外部环境是否可用（pwsh / ffmpeg / ffprobe / Node 引擎）
-  // P6 起 pwsh 不再是硬要求：Node 引擎可用即由引擎执行任务，pwsh 仅用于 legacy 回退与 .lnk 解析
+  // 检测应用运行所需的外部环境是否可用（ffmpeg / ffprobe / 内置引擎）
   checkEnv() {
     const { spawnSync } = require('child_process');
     const have = (name) => {
       try { const r = spawnSync('where', [name], { windowsHide: true, encoding: 'utf8' }); return r.status === 0; }
       catch (e) { return false; }
     };
-    const engine = !!this._engineRunnerPath();
-    const pwsh = have('pwsh');
-    // 当前实际执行路径：引擎可用且未被开关强制关闭 → 走内置引擎；否则回退 legacy PS1
-    const envFlag = String(process.env.VL_USE_NODE_ENGINE || '').trim();
-    const cfgFlag = this.config && this.config.use_node_engine != null ? String(this.config.use_node_engine).trim() : '';
-    const flag = (envFlag || cfgFlag || 'auto').toLowerCase();
-    const forcedOff = (flag === 'off' || flag === 'false' || flag === '0' || flag === 'legacy' || flag === 'pwsh');
-    const nodeEngineActive = engine && !forcedOff;
     return {
-      pwsh,
       ffmpeg: have('ffmpeg'),
       ffprobe: have('ffprobe'),
-      engine,
-      // 是否正在使用内置引擎；false 即处于回退（前端据此显式告警）
-      nodeEngineActive,
-      fallbackReason: nodeEngineActive ? '' : (forcedOff
-        ? '引擎开关已关闭（use_node_engine=' + flag + (envFlag ? '，来自环境变量 VL_USE_NODE_ENGINE' : '，来自配置文件') + '）'
-        : '未找到内置引擎（resources\\Engines\\engine-runner.js）'),
-      // pwsh 是否仍为必需：回退时才需要
-      pwshRequired: !nodeEngineActive,
+      // 引擎入口是否就绪；false 即任务无法执行（前端据此提示重装）
+      engine: !!this._engineRunnerPath(),
     };
   }
 }

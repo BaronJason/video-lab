@@ -3384,16 +3384,15 @@
     call('check_env').then(function (r) {
       r = r || {};
       var miss = [];
-      // pwsh 仅在「引擎不可用/被开关强制 legacy」时才是必需项
-      if (!r.pwsh && r.pwshRequired !== false) miss.push('pwsh');
       if (!r.ffmpeg) miss.push('ffmpeg');
       if (!r.ffprobe) miss.push('ffprobe');
+      // 内置引擎缺失即无法执行任务：单独提示重装，不与环境缺失混为一谈
+      if (r.engine === false) miss.push('内置引擎');
       state.envMissing = miss;
       var mark = $('envWarnMark');
       if (mark) {
-        if (r.nodeEngineActive === false) {
-          // 回退告警优先：正常走内置引擎时状态栏不打扰，一旦回退就明确显示原因与当前执行者
-          mark.textContent = '已回退 PowerShell 引擎：' + (r.fallbackReason || '未知原因');
+        if (r.engine === false) {
+          mark.textContent = '内置引擎缺失，请重新安装或校验程序文件';
           mark.className = 'status-bar__envwarn';
           mark.style.display = '';
         } else if (miss.length) {
@@ -3406,7 +3405,7 @@
         }
       }
       applyEnvDisabled();
-    }).catch(function () { state.envMissing = ['pwsh', 'ffmpeg', 'ffprobe']; applyEnvDisabled(); });
+    }).catch(function () { state.envMissing = ['内置引擎', 'ffmpeg', 'ffprobe']; applyEnvDisabled(); });
   }
   function _envBad() { return (state.envMissing || []).length > 0; }
   function setBtnHint(b, hint) {
@@ -3419,7 +3418,7 @@
       delete b.dataset.origTitle;
     } else b.removeAttribute('title');
   }
-  // 环境硬拦截：缺 pwsh/ffmpeg/ffprobe 时禁用所有调用脚本的入口，悬浮提示「运行环境缺失」
+  // 环境硬拦截：缺内置引擎/ffmpeg/ffprobe 时禁用所有调用引擎的入口，悬浮提示「运行环境缺失」
   function applyEnvDisabled() {
     var bad = _envBad();
     var targets = document.querySelectorAll('#btnRunScript, #btnBatchReplica1, #btnBatchReplica2, .log-entry__replica, #btnMaskStart');

@@ -552,7 +552,7 @@
       }
     } else {
       titleEl.classList.remove('task-card__title--missing');
-      titleEl.title = t.script || '';
+      titleEl.title = '';
       statusEl.textContent = STATUS_TEXT[t.status] || t.status;
       statusEl.classList.remove('task-card__status-text--deleted');
       statusEl.title = '';

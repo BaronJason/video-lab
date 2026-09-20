@@ -236,7 +236,7 @@ class CacheStore {
 
   // 累加使用计数，行不存在时也能建立计数行。与 bumpVideoUsage 的差别是不要求素材已在缓存表中——
   // 引擎现场探测到的新素材可能尚未入库，用这条能保证计数不丢。
-  // 用途：legacy 退役后使用计数的唯一写入口（JSON 镜像仅作过渡）。
+  // 用途：使用计数的唯一写入口。
   // 注意：此处不写 last_write —— 本方法可能被调用在并无探测结果的场景，指纹由探测写回补齐。
   addVideoUsage(vPath, inc = 1, opts) {
     const sc = Number(opts && opts.scopes) || SCOPES_DEFAULT;
@@ -246,7 +246,7 @@ class CacheStore {
       .run(String(vPath), Number(inc) || 0, sc);
   }
 
-  // 全量读出为 backend 的缓存结构（与 video_cache.json 同形，键为视频路径）。
+  // 全量读出为 backend 的缓存结构（键为视频路径）。
   // 默认只含「批量 + 复刻」作用域：调用方不显式放宽时，遮罩素材不会出现在候选里。
   loadVideoMap(opts) {
     const mask = scopesMaskOf(opts);
@@ -346,7 +346,7 @@ class CacheStore {
     return { replaced: n, orphaned: orphans };
   }
 
-  // 覆盖式设置使用计数（legacy 回写用：JSON 侧计数是权威快照，须覆盖而非累加）；行不存在则新建
+  // 覆盖式设置使用计数（覆盖而非累加，行不存在则新建）
   setVideoUsage(vPath, count, opts) {
     const n = Math.max(0, Number(count) || 0);
     const sc = Number(opts && opts.scopes) || SCOPES_DEFAULT;
@@ -357,8 +357,7 @@ class CacheStore {
     return n;
   }
 
-  // 使用计数全量读出（仅计数 > 0 的行）：供 legacy 出口导出 usage_cache.json。
-  // 默认只导出「批量 + 复刻」的计数 —— 遮罩素材不进 legacy 的 usage 镜像。
+  // 使用计数全量读出（仅计数 > 0 的行），默认只返回「批量 + 复刻」范围。
   listUsage(opts) {
     const mask = scopesMaskOf(opts);
     const rows = this.open()
@@ -716,7 +715,7 @@ class CacheStore {
     return counters;
   }
 
-  // 从库导出为 backend 的 JSON 结构（回退到 legacy 引擎时使用：legacy PS1 只认 JSON）
+  // 从库导出为 JSON 结构（供诊断与测试人工核对库内容）
   exportVideoJson(targetPath, map) {
     const data = map || this.loadVideoMap();
     const out = {};

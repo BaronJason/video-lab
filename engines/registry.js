@@ -3,7 +3,7 @@
 
 const registry = new Map();
 
-// registerModule({ id, title, envVars, legacyScript, mode, run(ctx) })
+// registerModule({ id, title, envVars, mode, run(ctx) })
 function registerModule(mod) {
   if (!mod || !mod.id) throw new Error('模块必须提供 id');
   registry.set(mod.id, mod);

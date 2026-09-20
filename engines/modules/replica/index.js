@@ -22,8 +22,7 @@ function scopes() {
 const VIDEO_EXT_RE = /\.(mp4|mov|avi|mkv|m4v)$/i;
 const PATH_LIKE_RE = /^[A-Za-z]:\\|^\\\\/;
 const MAX_ATTEMPT = 45;          // 渐进压时长轮数上限（与 PS1 一致）
-// video_cache.json 由 PowerShell 以 $fileInfo.LastWriteTimeUtc.Ticks 写入，
-// 即 .NET DateTime.Ticks（0001-01-01 基准），故偏移取 621355968000000000；
+// 缓存写入时间用 .NET DateTime.Ticks（0001-01-01 基准），故偏移取 621355968000000000；
 // 注意不要与 FILETIME（1601 基准）的 116444736000000000 混淆，否则缓存永不命中。
 const DOTNET_TICKS_OFFSET = 621355968000000000;
 
@@ -38,7 +37,6 @@ function readEnv(env = process.env) {
     speedLimit: num('REPLICA_SPEED_LIMIT', 1.2),
     dedupRatio: num('REPLICA_DEDUP_RATIO', 0.4),
     outputDir: n('REPLICA_OUTPUT_DIR'),
-    cacheDir: n('VL_CACHE_DIR'),
     fallbackDir: n('REPLICA_FALLBACK_DIR'),
     onlyNames: n('REPLICA_ONLY_NAMES'),
     onlyName: n('REPLICA_ONLY_NAME'),
@@ -53,7 +51,7 @@ function pad(n) { return String(n).padStart(2, '0'); }
 function round2(v) { return Math.round(Number(v) * 100) / 100; }
 function round1(v) { return Math.round(Number(v) * 10) / 10; }
 
-// ──────────────────── video_cache（只读；PS 亦为只读不写回） ────────────────────
+// ──────────────────── video_cache（只读；复刻只消费不写回） ────────────────────
 /** JS 文件时间 → .NET DateTime.Ticks（与 PS 的 $fileInfo.LastWriteTimeUtc.Ticks 同语义）
  *  用 statSync 的 bigint mtimeNs（100ns 精度，与 Ticks 同单位）换算，避免 mtimeMs 的毫秒精度损失。
  *  返回值经 Number() 转换会引入约 ±128 ticks 误差，故比较处使用 TICKS_TOLERANCE 容差。 */
@@ -68,27 +66,22 @@ function mtimeToTicks(p) {
 /** 缓存时间戳比较容差（1ms = 10000 ticks）：吸收 JSON double 精度（±128）与文件系统精度差异 */
 const TICKS_TOLERANCE = 10000;
 
-function loadVideoCache(cacheDir) {
-  // 持久层优先数据库（VL_CACHE_DB 指向的 cache.db，未注入时取 cacheDir\cache.db）：
-  // 全表读且 Ticks 为精确字符串；库不存在/为空/不可用时回退 video_cache.json（legacy 形态）
-  const dbPath = String(process.env.VL_CACHE_DB || '').trim() || (cacheDir ? path.join(cacheDir, 'cache.db') : '');
-  if (dbPath) {
-    try {
-      if (fs.existsSync(dbPath)) {
-        const CacheStore = require('../../base/cache');
-        const store = new CacheStore(dbPath, { root: '' });
-        store.open({ readOnly: true }); // 只读用途：不建表、不写 meta（replica 仅消费缓存）
-        // 显式声明读取范围（批量 + 复刻）：不显式放宽时看不到遮罩素材条目 ——
-        // 复刻修复依赖「同名即同一片段」，混入其它模式的素材会把修复指向错误的文件
-        const map = store.loadVideoMap({ scopesMask: scopes().batch | scopes().replica });
-        store.close();
-        if (map && Object.keys(map).length) return map;
-      }
-    } catch (e) { /* 回退 JSON */ }
-  }
-  if (!cacheDir) return {};
-  const f = path.join(cacheDir, 'video_cache.json');
-  try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch (e) { return {}; }
+function loadVideoCache() {
+  // 持久层只有数据库一种形态：VL_CACHE_DB 指向 cache.db，由主进程注入（backend 的 _spawnEngine）。
+  // 未注入或库不存在时返回空表，复刻退化为逐文件 ffprobe（不影响正确性，只是慢）。
+  const dbPath = String(process.env.VL_CACHE_DB || '').trim();
+  if (!dbPath) return {};
+  try {
+    if (!fs.existsSync(dbPath)) return {};
+    const CacheStore = require('../../base/cache');
+    const store = new CacheStore(dbPath, { root: '' });
+    store.open({ readOnly: true }); // 只读用途：不建表、不写 meta（replica 仅消费缓存）
+    // 显式声明读取范围（批量 + 复刻）：不显式放宽时看不到遮罩素材条目 ——
+    // 复刻修复依赖「同名即同一片段」，混入其它模式的素材会把修复指向错误的文件
+    const map = store.loadVideoMap({ scopesMask: scopes().batch | scopes().replica });
+    store.close();
+    return map || {};
+  } catch (e) { return {}; }
 }
 
 /** Get-CachedVideoInfo（防御版）：命中缓存用缓存，否则 ffprobe */
@@ -416,8 +409,8 @@ async function run(ctx, env = process.env) {
     return fail('存在重复成片名，已停止', '日志复刻-重复检测');
   }
 
-  // ── 视频信息缓存（只读 video_cache.json） ──
-  const cache = loadVideoCache(cfg.cacheDir);
+  // ── 视频信息缓存（只读缓存库） ──
+  const cache = loadVideoCache();
   const cacheByName = buildCacheByNameIndex(cache);
   const info = makeVideoInfo(cache);
 
@@ -748,8 +741,7 @@ function escapeRegExp(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&
 module.exports = {
   id: 'replica',
   title: '复刻',
-  envVars: ['REPLICA_*', 'VL_CACHE_DIR', 'VL_CACHE_DB'],
-  legacyScript: 'video_replica.ps1',
+  envVars: ['REPLICA_*', 'VL_CACHE_DB'],
   run,
   // 供测试与调用方复用
   _internals: {

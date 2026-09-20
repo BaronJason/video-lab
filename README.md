@@ -4,7 +4,7 @@
 
 **批量成片项目管理器 · Electron 桌面应用**
 
-扫描项目与 TXT 配置，按日期分支管理版本，一键调用脚本批量生成成片。
+扫描项目与 TXT 配置，按日期分支管理版本，一键批量生成成片。
 
 <br>
 
@@ -21,7 +21,7 @@
 
 | 类别 | 说明 |
 | --- | --- |
-| 内置任务引擎 | 遮罩 / 复刻 / 批量任务由随包分发的 Node 引擎执行，无需系统安装 PowerShell（旧脚本保留为一键回退通道） |
+| 内置任务引擎 | 遮罩 / 复刻 / 批量任务由随包分发的 Node 引擎执行，无需系统安装 PowerShell |
 | 遮罩叠加 | 多原片 × 多遮罩自由组合（遮罩+水印 / 仅水印 / 仅遮罩），GPU 硬件编码，失败任务断点续跑 |
 | 复刻与续跑 | 完全复刻 / 去重复刻双模式，失败成片可「继续制作」从断点恢复 |
 | 日期分支管理 | TXT 配置按日期分支归档，历史版本随时比对与跳转 |
@@ -47,7 +47,6 @@ Video Lab/
 │  ├─ base/             # 共享底座（ffmpeg/ffprobe/缓存/锁/日志/路径等）
 │  └─ modules/          # batch / mask / replica 三个任务引擎
 ├─ icon/                # 应用图标
-├─ scripts/             # 旧版成片脚本（legacy 回退通道，extraResources 复制为产物 resources\Scripts）
 ├─ main.js              # Electron 主进程
 ├─ preload.js           # 渲染进程桥接
 ├─ backend.js           # 后端业务逻辑
@@ -79,17 +78,6 @@ Video Lab/
   winget install --id Gyan.FFmpeg
   ```
 
-- **PowerShell 7（可选，仅旧脚本回退通道需要）**
-
-  任务执行默认使用随包分发的内置 Node 引擎，不依赖系统安装 PowerShell；
-  仅当任务执行引擎切换至「旧脚本」回退通道时，才需要 PowerShell 7：
-
-  ```bash
-  winget install --id Microsoft.PowerShell
-  ```
-
-  或前往官方发布页下载：<https://github.com/PowerShell/PowerShell/releases>
-
 ## 首次运行
 
 便携版不预置 `config.json`。首次运行（或未设置工作路径）时，应用会打开「首次设置」引导窗口：
@@ -106,7 +94,7 @@ npm start              # 开发运行
 npx electron-builder --win --x64   # 打包（产出 win-unpacked 与 Setup 安装包）
 ```
 
-> 任务引擎（`engines/`）与旧脚本回退通道（`scripts/legacy`）均随构建内置：引擎复制为产物 `resources\Engines`，旧脚本复制为产物 `resources\Scripts`。任务执行默认走内置 Node 引擎，引擎缺失或切换「旧脚本」时回退 PowerShell。
+> 任务引擎（`engines/`）随构建内置，复制为产物 `resources\Engines`。任务执行全部由内置 Node 引擎完成，不依赖系统安装 PowerShell。
 
 ## 皮肤素材来源与许可
 

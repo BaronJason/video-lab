@@ -85,22 +85,11 @@ function projectDir() {
     const portableFile = process.env.PORTABLE_EXECUTABLE_FILE;
     if (portableFile) return path.dirname(portableFile);
   }
-  // setup 安装版：exe 所在目录即程序根（引导文件与三库、Scripts 同级定位）
+  // setup 安装版：exe 所在目录即程序根（引导文件与三库同级定位）
   return path.dirname(process.execPath);
 }
-// 脚本目录动态解析：成片处理脚本需要真实文件系统路径（供外部 pwsh 执行，无法读 asar）。
-// 源码共存形态（便携开发机，resources\app\scripts 存在）直接用仓库内脚本——项目内只维护这一份，
-// 不再需要顶层 resources\Scripts 副本；构建/分发形态（D 盘/setup/便携包解压，无 resources\app）
-// 回退到构建时 extraResources 生成的 resources\Scripts。
-function resolveScriptsDir() {
-  const base = projectDir();
-  const src = path.join(base, 'resources', 'app', 'scripts');
-  const dist = path.join(base, 'resources', 'Scripts');
-  try { if (fs.existsSync(src)) return src; } catch (e) {}
-  return dist;
-}
-// Node 引擎目录动态解析：与脚本目录同源——源码共存形态用仓库内 resources\app\engines，
-// 构建/分发形态回退到 extraResources 生成的 resources\Engines（引擎同样必须是真实文件系统路径）
+// Node 引擎目录动态解析：引擎必须是真实文件系统路径（asar 内无法被 spawn 执行）。
+// 源码共存形态用仓库内 resources\app\engines，构建/分发形态用 extraResources 生成的 resources\Engines
 function resolveEnginesDir() {
   const base = projectDir();
   const src = path.join(base, 'resources', 'app', 'engines');
@@ -278,7 +267,7 @@ for (const d of listStagingDirs(path.dirname(configFile))) {
 if (pendingTrashDirs.length) {
   app.whenReady().then(() => { for (const d of pendingTrashDirs) { try { recycleFile(d); } catch (e) {} } });
 }
-const api = new Api(root, config, resolveScriptsDir(), resolveEnginesDir(), storageDir());
+const api = new Api(root, config, resolveEnginesDir(), storageDir());
 // 扫描/重建环节进度：推送主窗口渲染层实时状态（walk/收集日志/重建成片索引/水印统计 一一对应）
 api.onScanProgress = (p) => {
   try {
@@ -937,7 +926,6 @@ function buildHttpExtraRoutes() {
         config_path_appdata: path.dirname(appdataConfigPath()),
         autostart: c.autostart === true,
         close_behavior: c.close_behavior === 'exit' ? 'exit' : 'tray',
-      use_node_engine: c.use_node_engine === 'off' ? 'off' : 'auto',
         http_port: parseInt(c.http_port, 10) || 9527,
         http_token: String(c.http_token || ''),
         http_url: httpUrl(),
@@ -958,7 +946,6 @@ function buildHttpExtraRoutes() {
         if (s.check_update_hour !== undefined && s.check_update_hour !== null) { const h = parseInt(s.check_update_hour, 10); if (h >= 0 && h <= 23) cfg.check_update_hour = h; }
         if (typeof s.autostart === 'boolean') cfg.autostart = s.autostart;
         if (s.close_behavior === 'exit' || s.close_behavior === 'tray') cfg.close_behavior = s.close_behavior;
-      if (s.use_node_engine === 'auto' || s.use_node_engine === 'off') cfg.use_node_engine = s.use_node_engine;
         if (s.update_source === 'github' || s.update_source === 'gitee') cfg.update_source = s.update_source;
         if (s.update_mode === 'auto' || s.update_mode === 'notify') cfg.update_mode = s.update_mode;
         if (s.http_port !== undefined && s.http_port !== null) { const p = parseInt(s.http_port, 10); if (p > 0 && p < 65536) cfg.http_port = p; }
@@ -1212,7 +1199,6 @@ function registerIpc() {
       config_path_appdata: path.dirname(appdataConfigPath()),
       autostart: c.autostart === true,
       close_behavior: c.close_behavior === 'exit' ? 'exit' : 'tray',
-      use_node_engine: c.use_node_engine === 'off' ? 'off' : 'auto',
       http_port: parseInt(c.http_port, 10) || 9527,
       http_token: String(c.http_token || ''),
       http_url: httpUrl(),
@@ -1233,7 +1219,6 @@ function registerIpc() {
       if (s.check_update_hour !== undefined && s.check_update_hour !== null) { const h = parseInt(s.check_update_hour, 10); if (h >= 0 && h <= 23) cfg.check_update_hour = h; }
       if (typeof s.autostart === 'boolean') cfg.autostart = s.autostart;
       if (s.close_behavior === 'exit' || s.close_behavior === 'tray') cfg.close_behavior = s.close_behavior;
-      if (s.use_node_engine === 'auto' || s.use_node_engine === 'off') cfg.use_node_engine = s.use_node_engine;
       if (s.update_source === 'github' || s.update_source === 'gitee') cfg.update_source = s.update_source;
       if (s.update_mode === 'auto' || s.update_mode === 'notify') cfg.update_mode = s.update_mode;
       if (s.http_port !== undefined && s.http_port !== null) { const p = parseInt(s.http_port, 10); if (p > 0 && p < 65536) cfg.http_port = p; }

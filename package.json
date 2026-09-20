@@ -42,13 +42,6 @@
     ],
     "extraResources": [
       {
-        "from": "scripts",
-        "to": "Scripts",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
         "from": "engines",
         "to": "Engines",
         "filter": [

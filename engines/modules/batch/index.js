@@ -42,9 +42,8 @@ function ticksOf(stat) {
 
 /**
  * 精确 .NET Ticks（BigInt）。
- * video_cache 写回必须与 PS 的 `$cached.LastWriteTime -eq $fileInfo.LastWriteTimeUtc.Ticks`
- * 精确相等，Number 精度不够；实测 statSync(p,{bigint:true}).mtimeNs/100n + 偏移
- * 与 PS 计算值逐 tick 一致（差 0），故写回统一走本函数。
+ * 缓存写回必须与既有条目的 LastWriteTime 精确相等，Number 精度不够；
+ * 实测 statSync(p,{bigint:true}).mtimeNs/100n + 偏移与 .NET DateTime.Ticks 计算值逐 tick 一致（差 0）。
  */
 function ticksBigOfFile(videoPath) {
   try {
@@ -55,76 +54,11 @@ function ticksBigOfFile(videoPath) {
   }
 }
 
-/**
- * video_cache 专用序列化：LastWriteTime 是 18 位大整数，JSON.stringify 遇 BigInt 会抛错、
- * 转 Number 又会丢精度，故手工拼装数字字面量，保证 PS 侧读到精确 Int64。
- */
-function serializeVideoCache(obj) {
-  const parts = [];
-  for (const k of Object.keys(obj)) {
-    const v = obj[k] || {};
-    const lw = v.LastWriteTime != null ? String(v.LastWriteTime) : '0';
-    parts.push(
-      JSON.stringify(k) + ':{"LastWriteTime":' + lw +
-      ',"Duration":' + (Number(v.Duration) || 0) +
-      ',"Width":' + (Number(v.Width) || 0) +
-      ',"Height":' + (Number(v.Height) || 0) +
-      ',"Valid":' + (v.Valid ? 'true' : 'false') + '}'
-    );
-  }
-  return '{' + parts.join(',') + '}';
-}
-
-/**
- * 精确读 JSON：LastWriteTime 是 18 位大整数，JSON.parse 会降为 double（ulp≈128 ticks）。
- * 用 JSON.parse 的 source text access（Node 21+ 支持；Electron 44 内置 Node 24 满足）
- * 取回原文精确值；运行时不支持或文件损坏时自动回退普通 parse，不影响功能。
- */
-function readJsonExact(file, fallback = {}) {
-  try {
-    if (!exists(file)) return fallback;
-    const raw = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
-    const data = JSON.parse(raw, function (k, v, ctx) {
-      if (k === 'LastWriteTime' && ctx && typeof ctx.source === 'string') {
-        try { return BigInt(ctx.source); } catch (e) { return v; }
-      }
-      return v;
-    });
-    return data && typeof data === 'object' ? data : fallback;
-  } catch (e) {
-    return readJson(file, fallback);
-  }
-}
-
-/** usage_cache 序列化：LastWriteTime 同为 18 位大整数，需精确写入（与 video_cache 同理） */
-function serializeUsageCache(obj) {
-  const parts = [];
-  for (const k of Object.keys(obj)) {
-    const v = obj[k] || {};
-    const lw = v.LastWriteTime != null ? String(v.LastWriteTime) : '0';
-    parts.push(JSON.stringify(k) + ':{"UsageCount":' + (Number(v.UsageCount) || 0) + ',"LastWriteTime":' + lw + '}');
-  }
-  return '{' + parts.join(',') + '}';
-}
-
-/** 原子写：先写临时文件再 rename（与 PS 的"确有变更才落盘 + 原子覆盖"一致，避免写坏共用缓存） */
-function writeFileAtomic(file, text) {
-  const tmp = file + '.tmp' + process.pid;
-  try {
-    fs.writeFileSync(tmp, text, 'utf8');
-    fs.renameSync(tmp, file);
-    return true;
-  } catch (e) {
-    try { fs.unlinkSync(tmp); } catch (e2) { /* 忽略 */ }
-    return false;
-  }
-}
-
-/** video_cache 持久层：优先数据库（VL_CACHE_DB 指向的 cache.db，未注入时取 cacheDir\cache.db），
- *  库不存在/不可用时返回 null 回退 JSON。
- *  收益：全量读从「解析整个 JSON」变为库内全表读（数千条约 3ms），写回只落本次新探测的条目而非重写全量。 */
-function openVideoStore(cacheDir) {
-  const dbPath = String(process.env.VL_CACHE_DB || '').trim() || (cacheDir ? path.join(cacheDir, 'cache.db') : '');
+/** video_cache 持久层：VL_CACHE_DB 指向的 cache.db，由主进程注入（backend 的 _spawnEngine）。
+ *  库未注入或不可用时返回 null，缓存退化为内存态（不影响出片，只是每次重探）。
+ *  收益：全量读为库内全表读（数千条约 3ms），写回只落本次新探测的条目而非重写全量。 */
+function openVideoStore() {
+  const dbPath = String(process.env.VL_CACHE_DB || '').trim();
   if (!dbPath) return null;
   try {
     if (!fs.existsSync(dbPath)) return null;
@@ -133,25 +67,8 @@ function openVideoStore(cacheDir) {
     store.open();
     return store;
   } catch (e) {
-    return null; // 库不可用：静默回退 JSON，不影响任务
+    return null; // 库不可用：静默降级，不影响任务
   }
-}
-
-/** 读 JSON（容忍 BOM；损坏则返回兜底值） */
-function readJson(file, fallback = {}) {
-  try {
-    if (!exists(file)) return fallback;
-    const raw = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
-    const data = JSON.parse(raw);
-    return data && typeof data === 'object' ? data : fallback;
-  } catch (e) {
-    return fallback;
-  }
-}
-
-/** 压缩写 JSON（无 BOM，与 pwsh 的 Set-Content -Encoding UTF8 一致） */
-function writeJson(file, data) {
-  fs.writeFileSync(file, JSON.stringify(data), 'utf8');
 }
 
 // ────────────────────────── .lnk 解析 ──────────────────────────
@@ -186,7 +103,6 @@ function readEnv(env = process.env) {
   };
   return {
     txt: s('REPLICA_TXT'),
-    cacheDir: s('VL_CACHE_DIR'),
     maxTotalDuration: num('BATCH_MAX_DURATION', 179),
     maxRetry: num('BATCH_MAX_RETRY', 45),
     speedThreshold: num('BATCH_SPEED_LIMIT', 1.2),
@@ -527,31 +443,24 @@ async function run(ctx, env = process.env) {
   const { logger } = ctx;
   const cfg = readEnv(env);
   const scriptRoot = __dirname;
-  // 缓存目录：VL_CACHE_DIR 未注入时回退系统临时目录（绝不写模块目录——那会污染源码仓并随打包进入发布物）
-  const cacheDir = cfg.cacheDir || path.join(os.tmpdir(), 'video-lab-engine-cache');
-  // 回退目录可能不存在（Node 引擎未注入 VL_CACHE_DIR 时走系统临时目录），
-  // 互斥锁与缓存回退文件都落在这里，目录缺失会让任务在「互斥锁」步骤失败
+  // 缓存库缺失时的兜底目录：仅用于放互斥锁，绝不写模块目录（那会污染源码仓并随打包进入发布物）
+  const cacheDir = path.join(os.tmpdir(), 'video-lab-engine-cache');
   try { fs.mkdirSync(cacheDir, { recursive: true }); } catch (e) {}
-  const videoCacheFile = path.join(cacheDir, 'video_cache.json');
-  const usageCacheFile = path.join(cacheDir, 'usage_cache.json');
   const fail = (msg, step) => { logger.error(step, msg); return 1; };
 
-  // ── 缓存载入：video_cache 只读复用（避免 Ticks 精度回写风险），usage_cache 保留「≥1 降为 1」的内存重置语义 ──
-  // 持久层优先 sqlite（cache.db）；不存在时回退 JSON（精确读取：未被触碰的条目保留原始 18 位 Ticks）
-  const videoStore = openVideoStore(cacheDir);
+  // ── 缓存载入：缓存库只读复用（避免 Ticks 精度回写风险），计数语义在库内维护 ──
+  const videoStore = openVideoStore();
   // 读取范围收紧为「批量 + 复刻」：遮罩素材的探测条目不得进入批量候选
   const diskVideoCache = videoStore
     ? videoStore.loadVideoMap({ scopesMask: scopes().batch | scopes().replica })
-    : readJsonExact(videoCacheFile, {});
+    : {};
   const memInfo = new Map();          // 本次任务内的探测结果缓存
   // 本次真正探测过的条目 → 任务结束后合并写回（只增/更新，不删；GC 仍归 backend）
-  // 目的：让执行期现场探测的新文件沉淀进 video_cache，供预检测/PS1 复用，避免重复 ffprobe
+  // 目的：让执行期现场探测的新文件沉淀进缓存库，供预检测复用，避免重复 ffprobe
   const probedForWriteBack = new Map();
-  const usageCacheMap = readJson(usageCacheFile, {});
-  for (const k of Object.keys(usageCacheMap)) {
-    const e = usageCacheMap[k];
-    if (e && Number(e.UsageCount) >= 1) e.UsageCount = 1;
-  }
+  // 本任务内的使用计数（文件名 → { UsageCount, LastWriteTime }）：
+  // 由缓存库认领结果填充，出片后再按增量累加，仅作本次调度依据（持久化在库内）
+  const usageCacheMap = {};
 
   /** 视频信息（对齐 Get-CachedVideoInfo：Ticks 命中则复用，否则探测并记内存） */
   const getInfo = (videoPath) => {
@@ -786,11 +695,11 @@ async function run(ctx, env = process.env) {
   logger.info('预检测视频文件');
   const folderVideos = new Map();
   const usageTracker = new Map();
-  const newFiles = [];
 
   // 计数认领：路径发生变化（改名 / 移位）的素材先尝试继承既有条目的使用计数，
   // 避免被当作全新素材重新计数。与 app 侧预检测共用持久层的同一实现，保证两条路径行为一致。
   // 继承的计数沿用既有语义「≥1 归为 1」（脚本只关心「是否用过」）。
+  // 未认领到计数的素材在本次任务内按 0 起算，其计数由出片时的增量写入库。
   const claimUsageFor = (vPath) => {
     if (!videoStore) return null;
     try {
@@ -810,12 +719,7 @@ async function run(ctx, env = process.env) {
     target.push({ fullName, name, duration: info.duration });
     if (Object.prototype.hasOwnProperty.call(usageCacheMap, fullName)) return;
     const claimed = claimUsageFor(fullName);
-    if (claimed) {
-      const c = claimed.usageCount;
-      usageCacheMap[fullName] = { UsageCount: c >= 1 ? 1 : c, LastWriteTime: claimed.ticks };
-      return;
-    }
-    newFiles.push(fullName);
+    if (claimed) usageCacheMap[fullName] = { UsageCount: claimed.usageCount >= 1 ? 1 : claimed.usageCount, LastWriteTime: claimed.ticks };
   };
 
   for (const f of uniqueFolders) {
@@ -963,10 +867,13 @@ async function run(ctx, env = process.env) {
     logger.info(`已通过 BATCH_GROUP 指定分组数: ${groupCount}`);
   }
 
-  // ── 互斥锁（backend 已串行；此处为兜底，语义与 PS 一致） ──
+  // ── 互斥锁（backend 已串行；此处为兜底）──
+  // 位置固定：与缓存库同级（跨进程稳定的同一把锁），库未注入时退回系统临时目录
   logger.info('');
   logger.lockWaiting('准备拼接...');
-  const lockPath = path.join(cacheDir, '.video-lab-batch.lock');
+  const lockDir = path.dirname(String(process.env.VL_CACHE_DB || '').trim() || cacheDir);
+  try { fs.mkdirSync(lockDir, { recursive: true }); } catch (e) {}
+  const lockPath = path.join(lockDir, '.video-lab-batch.lock');
   let lock = null;
   try {
     lock = await acquireLock(lockPath);
@@ -977,28 +884,6 @@ async function run(ctx, env = process.env) {
 
   let hasError = false;
   try {
-    // ── 合并缓存（usage_cache 回写；video_cache 写回见收尾 finally） ──
-    // LastWriteTime 一律用精确 .NET Ticks（BigInt）填写：与 PS 写入值同语义，
-    // 避免 Number 近似（±64 ticks）污染与 PS/backend 共用的缓存
-    const globalUsage = readJsonExact(usageCacheFile, {});
-    for (const nf of newFiles) {
-      if (!Object.prototype.hasOwnProperty.call(globalUsage, nf)) {
-        const tb = ticksBigOfFile(nf);
-        globalUsage[nf] = { UsageCount: 0, LastWriteTime: tb === null ? 0 : tb };
-      }
-    }
-    writeFileAtomic(usageCacheFile, serializeUsageCache(globalUsage));
-    // 用磁盘最新计数刷新内存计数（保留「≥1 降为 1」语义）
-    for (const f of uniqueFolders) {
-      const track = usageTracker.get(f);
-      for (const key of [...track.usedCount.keys()]) {
-        if (Object.prototype.hasOwnProperty.call(globalUsage, key)) {
-          const c = Number(globalUsage[key].UsageCount) || 0;
-          track.usedCount.set(key, c >= 1 ? 1 : c);
-        }
-      }
-    }
-
     // ── 创建输出目录 ──
     logger.info('');
     logger.info('创建输出目录');
@@ -1326,16 +1211,11 @@ async function run(ctx, env = process.env) {
         if (!track.roundUsed.includes(video.fullName)) track.roundUsed.push(video.fullName);
       }
 
-      // usage_cache 增量导出
+      // 计数增量：随出片即时累加进缓存库（唯一持久层）
       const increments = new Map();
       for (const video of selectedParts) increments.set(video.fullName, (increments.get(video.fullName) || 0) + 1);
-      exportUsageCache(increments, usageCacheFile);
-      // 同步累加进缓存库的 usage_count：与 JSON 两份计数从此同步演进，
-      // 为 legacy 退役后的「usage_cache 并库」提前铺路（届时时只需丢掉 JSON，无需迁移数据）
-      if (videoStore) {
-        for (const [p, inc] of increments.entries()) {
-          try { videoStore.addVideoUsage(p, inc); } catch (e) { /* 计数写库失败不影响出片 */ }
-        }
+      for (const [p, inc] of increments.entries()) {
+        try { videoStore.addVideoUsage(p, inc); } catch (e) { /* 计数写库失败不影响出片 */ }
       }
 
       // ── 最终时长 + 完成行 ──
@@ -1365,23 +1245,17 @@ async function run(ctx, env = process.env) {
     logger.info('');
     logger.info('================================================');
   } finally {
-    // video_cache 写回：把本次现场探测到的条目合并进磁盘缓存（只增/更新，不删；GC 仍归 backend）。
-    // 与 PS batch 的 IsCacheUpdated 合并写回语义一致，使执行期新扫描到的素材沉淀下来，
-    // 供预检测/PS1 复用，避免每次重探。写失败不影响任务结果，保持静默（与 PS 一致，不额外输出）。
-    if (probedForWriteBack.size > 0) {
+    // video_cache 写回：把本次现场探测到的条目合并进缓存库（只增/更新，不删；GC 仍归 backend）。
+    // 目的：让执行期新扫描到的素材沉淀下来，供预检测复用，避免每次重探。
+    // 写失败不影响任务结果，保持静默（不额外输出）。
+    if (probedForWriteBack.size > 0 && videoStore) {
       try {
-        if (videoStore) {
-          // sqlite：只写本次新探测的条目（增量事务），无需读全量再整份重写
-          const rows = {};
-          for (const [p, v] of probedForWriteBack) {
-            rows[p] = { LastWriteTime: String(v.LastWriteTime), Duration: v.Duration, Valid: v.Valid, Width: v.Width, Height: v.Height, FileSize: v.FileSize };
-          }
-          videoStore.applyVideoDelta(rows, null);
-        } else {
-          const merged = Object.assign({}, diskVideoCache);
-          for (const [p, v] of probedForWriteBack) merged[p] = v;
-          writeFileAtomic(videoCacheFile, serializeVideoCache(merged));
+        // 只写本次新探测的条目（增量事务），无需读全量再整份重写
+        const rows = {};
+        for (const [p, v] of probedForWriteBack) {
+          rows[p] = { LastWriteTime: String(v.LastWriteTime), Duration: v.Duration, Valid: v.Valid, Width: v.Width, Height: v.Height, FileSize: v.FileSize };
         }
+        videoStore.applyVideoDelta(rows, null);
       } catch (e) { /* 忽略：缓存写回失败不应影响成片产出 */ }
     }
     if (videoStore) { try { videoStore.close(); } catch (e) { /* 忽略 */ } }
@@ -1399,38 +1273,18 @@ async function run(ctx, env = process.env) {
   return 0;
 }
 
-/** usage_cache 增量导出（对齐 Export-UsageCache：读现有 → 累加 → 写回） */
-function exportUsageCache(increments, usageCacheFile) {
-  const globalCache = readJsonExact(usageCacheFile, {});
-  for (const [p, inc] of increments.entries()) {
-    // 精确 Ticks（BigInt）：与 PS 的 LastWriteTimeUtc.Ticks 同语义，避免 Number 近似写回
-    const tb = ticksBigOfFile(p);
-    const ticks = tb === null ? 0 : tb;
-    if (Object.prototype.hasOwnProperty.call(globalCache, p)) {
-      const entry = globalCache[p] || {};
-      entry.UsageCount = (Number(entry.UsageCount) || 0) + inc;
-      entry.LastWriteTime = ticks;
-      globalCache[p] = entry;
-    } else {
-      globalCache[p] = { UsageCount: inc, LastWriteTime: ticks };
-    }
-  }
-  writeFileAtomic(usageCacheFile, serializeUsageCache(globalCache));
-}
-
 module.exports = {
   id: 'batch',
   title: '批量拼接',
-  envVars: ['BATCH_*', 'VL_CACHE_DIR', 'VL_CACHE_DB'],
-  legacyScript: 'video_batch.ps1',
+  envVars: ['BATCH_*', 'VL_CACHE_DB'],
   run,
   // 供测试复用
   _internals: {
-    readEnv, taskDate, timeTag, datePrefix, ticksOf, readJson, writeJson,
+    readEnv, taskDate, timeTag, datePrefix, ticksOf,
     parseLnkTarget, resolveBrokenTarget, collectVideoFiles, isExcluded,
     findIndexInTree, findIndexFile, folderSuffix, loadBatchIndex,
     resolveFolderFromIndex, resolveFolderBySuffix,
-    selectVideo, selectVideoCandidate, registerPickedClip, groupSuffixFor, exportUsageCache,
+    selectVideo, selectVideoCandidate, registerPickedClip, groupSuffixFor,
     openVideoStore, parseOnlyNameIndex,
   },
 };

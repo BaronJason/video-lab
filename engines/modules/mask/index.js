@@ -320,8 +320,7 @@ async function run(ctx, env = process.env) {
 module.exports = {
   id: 'mask',
   title: '遮罩叠加',
-  envVars: ['MASK_*', 'VL_CACHE_DIR'],
-  legacyScript: 'video_mask.ps1',
+  envVars: ['MASK_*'],
   run,
   // 供测试复用
   _internals: { readEnv, buildJobs, filterOnlyNames, scanByExts, getMaskDirName },

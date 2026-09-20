@@ -1,5 +1,5 @@
 // 引擎执行入口：env → 识别模块 → 运行 → 输出协议行。
-// ctx 注入底座能力：{ logger, ffmpeg, probe, lock, paths, retry, repair, dedupe, cacheStore }
+// ctx 注入底座能力：{ logger, ffmpeg, probe, lock, paths, retry, dedupe, cacheStore }
 // 业务模块实现后自动注册；未实现的模块退回占位骨架，保证空跑（--dry）始终可用。
 // 用法：node engine-runner.js --module mask [--dry]
 'use strict';
@@ -23,7 +23,6 @@ const base = {
   lock: require('./base/lock'),
   paths: require('./base/paths'),
   retry: require('./base/retry'),
-  repair: require('./base/repair'),
   dedupe: require('./base/dedupe'),
   cacheStore: require('./base/cache'),
 };

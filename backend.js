@@ -1107,6 +1107,26 @@ class Api {
   // 脚本侧 PowerShell 的 string -eq long 会自动转换比较，仍能正确命中
   _ticksToStr(v) { return String(v == null ? '' : v); }
 
+  // 文件指纹：mtime（Ticks）+ 字节大小。
+  // ⚠ 只比 mtime 不足以判断"素材是否被替换"：Windows 的 CopyFile（含资源管理器粘贴）、
+  //   解压、同步工具都会保留源文件的修改时间 —— 覆盖同名素材后时间戳可能分毫不变，
+  //   指纹不变 → 预检测一直沿用旧结论，表现为"重新覆盖正确文件后仍显示不合格，
+  //   刷新配置/切换配置/刷新预缓存都无效，只有重开软件才好"。
+  //   大小与 mtime 一起比：一次 statSync 同时取到，且分辨率/内容变过的文件大小几乎必变。
+  _fileFingerprint(p) {
+    try {
+      const st = fs.statSync(p, { bigint: true });
+      return { ticks: String((st.mtimeNs / 100n) + 621355968000000000n), size: Number(st.size) || 0 };
+    } catch (e) { return null; }
+  }
+  // 缓存条目是否仍与当前文件一致（size 缺失或为 0 的旧条目退化为只比 mtime）
+  _fingerprintMatches(fp, ticks, size) {
+    if (!fp) return false;
+    if (this._ticksToStr(ticks) !== fp.ticks) return false;
+    const sz = Number(size) || 0;
+    return sz === 0 || sz === fp.size;
+  }
+
   // ffprobe 异步探测（并发限流使用，不阻塞主线程）
   _probeVideoAsync(videoPath) {
     return new Promise((resolve) => {
@@ -1162,13 +1182,20 @@ class Api {
     });
   }
 
-  // 读取缓存视频信息：命中且 mtime 未变则直接复用，否则返回 null（交由并发探测）
+  // 读取缓存视频信息：命中且指纹（mtime + 大小）未变则复用，否则返回 null（交由并发探测）
   _fetchCachedVideoInfo(videoPath) {
-    if (this._videoInfoCache.has(videoPath)) return this._videoInfoCache.get(videoPath);
-    try { fs.statSync(videoPath); } catch (e) { return null; }
+    const fp = this._fileFingerprint(videoPath);
+    if (!fp) return null;
+    const hit = this._videoInfoCache.get(videoPath);
+    if (hit) {
+      // 内存条目不带指纹，必须回缓存核对后才能复用 —— 否则同名覆盖后一直返回旧结论
+      const c0 = this._loadVideoCache()[videoPath];
+      if (this._fingerprintMatches(fp, c0 && c0.LastWriteTime, c0 && c0.FileSize)) return hit;
+      this._videoInfoCache.delete(videoPath);
+    }
     const cache = this._loadVideoCache();
     const cached = cache[videoPath];
-    if (cached && this._ticksToStr(cached.LastWriteTime) === this._ticksToStr(this._mtimeToTicks(videoPath))) {
+    if (this._fingerprintMatches(fp, cached && cached.LastWriteTime, cached && cached.FileSize)) {
       const info = { valid: !!cached.Valid, duration: Number(cached.Duration) || 0, width: cached.Width || 0, height: cached.Height || 0 };
       this._videoInfoCache.set(videoPath, info);
       return info;
@@ -1177,16 +1204,23 @@ class Api {
     return null;
   }
 
-  // 按作用域读取探测结果：指纹（Ticks）未变才命中；命中写入内存缓存键（含作用域，避免与其它模式串用）
+  // 按作用域读取探测结果：指纹未变才命中；命中写入内存缓存键（含作用域，避免与其它模式串用）
   _fetchScopedVideoInfo(videoPath, scope) {
     const key = scope + '\u0000' + videoPath;
-    if (this._videoInfoCache.has(key)) return this._videoInfoCache.get(key);
+    const fp = this._fileFingerprint(videoPath);
+    if (!fp) return null;
+    const hit = this._videoInfoCache.get(key);
+    if (hit) {
+      // 同 _fetchCachedVideoInfo：内存条目不带指纹，须回库核对后才能复用
+      let r0 = null;
+      try { r0 = this._useDbCache() ? this._cacheStore.getVideo(videoPath, { scopesMask: scope }) : null; } catch (e) { r0 = null; }
+      if (this._fingerprintMatches(fp, r0 && r0.last_write, r0 && r0.file_size)) return hit;
+      this._videoInfoCache.delete(key);
+    }
     if (!this._useDbCache()) return null;
-    try { fs.statSync(videoPath); } catch (e) { return null; }
     let row = null;
     try { row = this._cacheStore.getVideo(videoPath, { scopesMask: scope }); } catch (e) { return null; }
-    if (!row) return null;
-    if (this._ticksToStr(row.last_write) !== this._ticksToStr(this._mtimeToTicks(videoPath))) return null;
+    if (!this._fingerprintMatches(fp, row && row.last_write, row && row.file_size)) return null;
     const info = {
       valid: !!row.valid, duration: Number(row.duration) || 0,
       width: Number(row.width) || 0, height: Number(row.height) || 0,
@@ -1659,8 +1693,10 @@ class Api {
     const toProbe = [];
     for (const f of allVideos) {
       const c = cache[f];
-      const ticks = this._ticksToStr(this._mtimeToTicks(f));
-      if (c && String(c.LastWriteTime) === ticks) continue; // 已缓存且文件未变：跳过
+      // 指纹 = mtime + 大小：覆盖同名素材时时间戳可能被保留（CopyFile / 解压 / 同步工具都如此），
+      // 只比 mtime 会漏判 —— 表现为「刷新预缓存」跳过了其实已被替换的文件
+      const fp = this._fileFingerprint(f);
+      if (c && this._fingerprintMatches(fp, c.LastWriteTime, c.FileSize)) continue; // 已缓存且文件未变：跳过
       toProbe.push(f);
     }
     const base = total - toProbe.length; // 进度起点 = 已跳过数

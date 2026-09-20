@@ -89,8 +89,16 @@ function projectDir() {
   return path.dirname(process.execPath);
 }
 // Node 引擎目录动态解析：引擎必须是真实文件系统路径（asar 内无法被 spawn 执行）。
-// 源码共存形态用仓库内 resources\app\engines，构建/分发形态用 extraResources 生成的 resources\Engines
+// 源码共存形态（开发机）：引擎就在 main.js 同级 app\engines；
+// 打包形态：便携/开发形态用 resources\app\engines，setup 安装在 resources\Engines（extraResources 产物）。
+// ⚠ 开发形态不能用 projectDir() 作基准 —— 未打包时它等于 __dirname（app 目录本身），
+//    拼出的 resources\app\engines 并不存在，会让源码形态的实例解析不到引擎。
 function resolveEnginesDir() {
+  if (!app.isPackaged) {
+    const local = path.join(__dirname, 'engines');
+    try { if (fs.existsSync(local)) return fs.realpathSync(local); } catch (e) {}
+    return local;
+  }
   const base = projectDir();
   const src = path.join(base, 'resources', 'app', 'engines');
   const dist = path.join(base, 'resources', 'Engines');

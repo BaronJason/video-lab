@@ -50,6 +50,16 @@ function uniqueSubdir(parent, base) {
 function resolveRunDir(targetDir, stamp) {
   const dir = String(targetDir || '').trim();
   if (!dir) return { dir: '', created: false, reason: '未指定目标目录' };
+  // ★ 目录**不存在**必须先创建（真实数据实测踩到：不存在被当"空目录"放行，
+  //   ffmpeg 写盘直接失败退出码 -2）—— 创建失败才回退错误
+  if (!fs.existsSync(dir)) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      return { dir, created: true, reason: '目标目录不存在，已创建' };
+    } catch (e) {
+      return { dir, created: false, reason: '目标目录不存在且创建失败：' + ((e && e.message) || e) };
+    }
+  }
   if (isEmptyDir(dir)) return { dir, created: false, reason: '目标目录为空，直接输出到该目录' };
   const sub = uniqueSubdir(dir, OUT_SUBDIR_PREFIX + String(stamp || ''));
   try {

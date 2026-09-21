@@ -3243,12 +3243,24 @@ class Api {
     }
   }
 
-  // 暂停：仅排队中的任务可暂停——移出执行队列并冻结当前显示顺位（前方待运行任务数），继续时按该顺位插队
+  // 暂停：排队中的任务移出执行队列并冻结当前显示顺位；**运行中的任务 = 软暂停**——
+  // 不打断当前成片，当前成片完成后终止引擎（本片已完整落盘），恢复顺位提到 1 号，
+  // 下一个任务先跑，剩余部分靠「继续任务」断点续传（用户定案 2026-09-21）
   pauseTask(id) {
     const t = this.tasks.get(id);
     if (!t) return { ok: false, error: '任务不存在' };
+    if (t.status === 'running') {
+      // 视频处理任务按文件粒度重跑语义不匹配，暂不支持软暂停
+      if (t.type === 'tool') return { ok: false, error: '视频处理任务不支持暂停，请使用「停止」后重新提交' };
+      t._softPause = true;
+      this._lg('RUN', 'task.softPause',
+        '软暂停 · 当前成片完成后生效 · ' + t.type + ' · ' + String(t.title || '').slice(0, 50),
+        { id: t.id });
+      t.log.push('[软暂停] 当前成片完成后暂停，让下一个任务先执行；剩余部分可「继续任务」续跑]');
+      this._emitTasks();
+      return { ok: true, soft: true, message: '将在当前成片完成后暂停' };
+    }
     if (t.status !== 'queued') {
-      if (t.status === 'running') return { ok: false, error: '运行中的任务只能停止，不能暂停' };
       return { ok: false, error: '任务已结束' };
     }
     const i = this._taskQueue.indexOf(id);
@@ -3401,6 +3413,16 @@ class Api {
           const outdM = s.match(/✅ 创建输出目录：(.+)$/);
           if (outdM) this._appendMarkerOut(task, 'batchOutDir', String(outdM[1]).trim());
           // 失败成片记录：脚本输出 `❌ 失败成片：<成片名>|<原因>`，供续跑/对账/前端展示
+          // ★ 软暂停触发点：当前成片已完成（该行即当前片的完成标志）——
+          //   此刻终止引擎进程，本片已完整落盘，剩余部分靠「继续任务」断点续传
+          if (task._softPause && !task._softPaused && /成片完成/.test(s)) {
+            task._softPaused = true;
+            task.resumeIdx = 1;   // 恢复队列第 1 号：让被让位的任务优先接续
+            try { if (child.pid) process.kill(child.pid); } catch (e2) {}
+            this._lg('RUN', 'task.softPause.fire',
+              '软暂停生效 · 当前成片已完成，终止引擎让位下一个任务',
+              { id: task.id });
+          }
           const failM = s.match(/❌ 失败成片：(.+)$/);
           if (failM) {
             const parts = String(failM[1]).split('|');

@@ -630,6 +630,21 @@
     var pauseBtn = rec.header.querySelector('.task-card__pause');
     if (!showOps) {
       pauseBtn.style.display = 'none';
+    } else if (t.status === 'running') {
+      // ★ 软暂停（用户定案 2026-09-21）：运行中的任务也可以暂停 —— 不打断当前成片，
+      //   当前成片完成后暂停并让位下一个任务；剩余部分靠「继续任务」断点续传
+      //   （视频处理任务按文件粒度重跑语义不匹配，暂不支持）
+      if (t.type === 'tool') {
+        pauseBtn.style.display = 'none';
+      } else {
+      pauseBtn.style.display = '';
+      pauseBtn.className = 'task-card__pause';
+      pauseBtn.disabled = false;
+      pauseBtn.innerHTML = icon('pause', 12) + '暂停';
+      pauseBtn.title = t.type === 'tool'
+        ? '视频处理任务不支持暂停，请使用「停止」后重新提交'
+        : '当前成片完成后暂停（不打断正在编码的这一片），让下一个任务先执行';
+      }
     } else if (t.status === 'queued') {
       pauseBtn.style.display = '';
       pauseBtn.className = 'task-card__pause';
@@ -861,6 +876,7 @@
     } else if (t.status === 'paused') {
       items.push({ label: '继续任务', action: function () { confirmResume(t); } });
     } else if (t.status === 'running') {
+      if (t.type !== 'tool') items.push({ label: '暂停（当前成片完成后）', action: function () { confirmPause(t); } });
       items.push({ label: '停止任务', action: function () { confirmStop(t); } });
     }
     var folderItem = { label: '打开成片文件夹', action: openFolder };
@@ -890,7 +906,8 @@
 
   function confirmPause(t) {
     call('pause_task', t.id).then(function (r) {
-      if (!r || !r.ok) toast('暂停失败：' + ((r && r.error) || '未知错误'), true);
+      if (!r || !r.ok) { toast('暂停失败：' + ((r && r.error) || '未知错误'), true); return; }
+      if (r.soft) toast('当前成片完成后暂停，剩余部分可「继续任务」续跑');
     }).catch(function (e) { toast('暂停失败：' + e.message, true); });
   }
 

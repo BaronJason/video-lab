@@ -167,6 +167,7 @@ async function run(ctx) {
       + ' · 共 ' + results.total + ' 个视频');
     logger.info('   编码 ' + results.encodes + ' 次'
       + (results.samples ? ('（另含 ' + results.samples + ' 次样本试算，仅用于确定码率）') : ''));
+    if (results.runNote) logger.info(results.runNote);
     if (results.runDir) logger.info('输出目录：' + results.runDir);
     if (results.backupDir) logger.info('备份目录：' + results.backupDir);
     code = failed > 0 ? 1 : 0;

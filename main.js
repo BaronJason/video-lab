@@ -1375,6 +1375,7 @@ function registerIpc() {
       config_path: configFilePath(),
       config_path_program: path.dirname(programConfigPath()),   // 显示目录（含引导文件与三库）
       config_path_appdata: path.dirname(appdataConfigPath()),
+      log_dir: runLog.getDir(),   // 运行日志目录（设置页「打开文件夹」用；与 HTTP 版 get_settings 对齐）
       autostart: c.autostart === true,
       close_behavior: c.close_behavior === 'exit' ? 'exit' : 'tray',
       http_port: parseInt(c.http_port, 10) || 9527,

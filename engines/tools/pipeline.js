@@ -164,7 +164,9 @@ async function processFile(file, steps, opts) {
   const encodeOnce = async (cqNow) => {
     const list = head.concat(built.args).concat(nvencArgs(cqNow)).concat(tail);
     const r = await runFfmpeg(list, { signal: o.signal, onProgress: forward });
-    return { ok: r.code === 0, code: r.code };
+    // 失败时带上 ffmpeg 错误尾部（诊断不丢失）
+    const errTail = String(r.stderr || '').trim().split(/\r?\n/).filter(Boolean).slice(-3).join(' | ');
+    return { ok: r.code === 0, code: r.code, errTail };
   };
 
   let encodes = 0;      // 整片编码次数（正常恒为 1）
@@ -175,6 +177,7 @@ async function processFile(file, steps, opts) {
     const r = await encodeOnce(enc.useAbr ? null : enc.cq);
     if (!r.ok) {
       try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (e) {}
+      pushNote('ffmpeg：' + (r.errTail || '（无错误输出）'));
       return { ok: false, reason: '编码失败（退出码 ' + r.code + '）', encodes: 0, samples, notes };
     }
   } else {
@@ -235,6 +238,7 @@ async function processFile(file, steps, opts) {
     const r = await encodeOnce(chosen);
     if (!r.ok) {
       try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (e) {}
+      pushNote('ffmpeg：' + (r.errTail || '（无错误输出）'));
       return { ok: false, reason: '编码失败（退出码 ' + r.code + '）', encodes: 0, samples, notes };
     }
     // 整片实测复核：样本只是估计，整片仍超目标时按原脚本语义保留原文件
@@ -296,8 +300,11 @@ async function runPipeline(opts) {
     return p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
   })();
   let runDir = '';
+  let runNote = '';
   if (output.mode === outplan.MODE_DIRECTORY) {
-    runDir = outplan.resolveRunDir(output.dir, stamp).dir;
+    const rr = outplan.resolveRunDir(output.dir, stamp);
+    runDir = rr.dir;
+    if (rr.reason) runNote = '输出落点：' + rr.reason;
   }
 
   // 备份目录：用户指定优先，否则落 storageDir 下（源目录之外，避免备份被当素材再处理）
@@ -339,6 +346,7 @@ async function runPipeline(opts) {
     }
   }
   results.runDir = runDir;
+  results.runNote = runNote;
   results.backupDir = backupDir;
   return results;
 }

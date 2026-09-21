@@ -101,21 +101,27 @@ async function processFile(file, steps, opts) {
   }
 
   // ── ③ 合并滤镜链 ──
+  // 步骤滤镜的应用抽成函数：码率试算需要一条**不含时间轴裁剪**的样本链
+  // （样本只测编码器对 CQ 的码率响应，select/setpts 与否不影响该响应）
+  const applyStepFilters = (chain) => {
+    for (const { mod } of steps) {
+      const d = decisions[mod.id];
+      if (!d || d.skip || typeof mod.filter !== 'function') continue;
+      let f = null;
+      try { f = mod.filter(d, info, chain) || null; } catch (e) { f = null; }
+      if (!f) continue;
+      (f.video || []).forEach((x) => chain.vf(x));
+      (f.audio || []).forEach((x) => { if (info.hasAudio) chain.af(x); });
+      if (f.note) pushNote(mod.title + '：' + f.note);
+    }
+  };
+
   const chain = vf.createChain({ hasAudio: info.hasAudio });
   if (trimmed) {
     chain.vf(ranges.videoFilter(keepSet));                       // select + setpts
     if (info.hasAudio) chain.af(ranges.audioFilter(keepSet));    // 同一条件串 → 音画同步
   }
-  for (const { mod } of steps) {
-    const d = decisions[mod.id];
-    if (!d || d.skip || typeof mod.filter !== 'function') continue;
-    let f = null;
-    try { f = mod.filter(d, info, chain) || null; } catch (e) { f = null; }
-    if (!f) continue;
-    (f.video || []).forEach((x) => chain.vf(x));
-    (f.audio || []).forEach((x) => { if (info.hasAudio) chain.af(x); });
-    if (f.note) pushNote(mod.title + '：' + f.note);
-  }
+  applyStepFilters(chain);
   // ── 编码参数（复用三模块的硬约束，CQ 可被「码率控制」步骤覆盖）──
   const enc = decisions.encode || {};
   const ramp = (enc && enc.ramp) ? {
@@ -161,38 +167,84 @@ async function processFile(file, steps, opts) {
     return { ok: r.code === 0, code: r.code };
   };
 
-  let encodes = 0;
+  let encodes = 0;      // 整片编码次数（正常恒为 1）
+  let samples = 0;      // 码率试算的样本编码次数（仅「码率上限 / 目标体积」会出现）
+
   if (!ramp) {
     encodes = 1;
     const r = await encodeOnce(enc.useAbr ? null : enc.cq);
     if (!r.ok) {
       try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (e) {}
-      return { ok: false, reason: '编码失败（退出码 ' + r.code + '）', encodes: 0, notes };
+      return { ok: false, reason: '编码失败（退出码 ' + r.code + '）', encodes: 0, samples, notes };
     }
   } else {
-    // 目标体积 / 码率上限：试编码 → 测码率 → 提高 CQ 重试（到上限仍不达标则保留原文件）
+    // ── 码率上限 / 目标体积：先按 10% 样本试算定 CQ，再整片只编码一遍 ──
+    // NVENC 没有 2-pass，反复整片重编码（原脚本做法）代价太大且画质被反复损失 ——
+    // 计划 §14.4 定案：样本试算 → 整片一遍出片（画质只损失一次）。
     const from = isFinite(ramp.initialCq) ? ramp.initialCq : 26;
     const to = isFinite(ramp.maxCq) ? ramp.maxCq : 40;
-    const tries = Math.max(1, Math.floor((to - from) / ramp.increment) + 1);
-    let reached = false;
-    let lastBitrate = 0;
-    for (let k = 0; k < tries; k++) {
-      const cqNow = Math.min(to, from + k * ramp.increment);
-      const r = await encodeOnce(cqNow);
-      encodes++;
-      if (!r.ok) {
-        try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (e) {}
-        return { ok: false, reason: '编码失败（退出码 ' + r.code + '）', encodes, notes };
+    const inc = ramp.increment;
+    const dur = Number(info.duration) || 0;
+    const sampleLen = dur > 0 ? Math.max(1, Math.min(20, dur * 0.1)) : 0;
+
+    // 样本链：只含步骤滤镜，不含时间轴裁剪（样本测的是编码器对 CQ 的码率响应）
+    const sampleChain = vf.createChain({ hasAudio: info.hasAudio });
+    applyStepFilters(sampleChain);
+    const sBuilt = sampleChain.build();
+    const tmpSample = outplan.tempPathFor(tmp);
+    const sTail = ['-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', tmpSample];
+
+    /** 编一段样本并测码率（失败返回 -1） */
+    const trySample = async (cqNow) => {
+      const sArgs = ['-y', '-hide_banner', '-loglevel', 'error'];
+      if (sampleLen > 0 && dur > sampleLen + 1) {
+        // 从中部取样：片头片尾（黑场、字幕条）通常不能代表整片复杂度
+        sArgs.push('-ss', String(Math.round(dur * 0.45 * 1000) / 1000),
+          '-t', String(Math.round(sampleLen * 1000) / 1000));
       }
-      lastBitrate = await measureBitrateKbps(tmp);
-      if (!(ramp.targetKbps > 0) || (lastBitrate > 0 && lastBitrate <= ramp.targetKbps)) { reached = true; break; }
-      if (o.onProgress) o.onProgress({ phase: 'retry', cq: cqNow, bitrate: lastBitrate, target: ramp.targetKbps });
+      sArgs.push('-i', file);
+      const r = await runFfmpeg(sArgs.concat(sBuilt.inputArgs || []).concat(sBuilt.args)
+        .concat(nvencArgs(cqNow)).concat(sTail), { signal: o.signal });
+      samples++;
+      if (r.code !== 0) return -1;
+      const bit = await measureBitrateKbps(tmpSample);
+      try { if (fs.existsSync(tmpSample)) fs.unlinkSync(tmpSample); } catch (e) {}
+      return bit;
+    };
+
+    let chosen = null;
+    let lastBit = 0;
+    for (let k = 0; k < 64; k++) {
+      const cqNow = Math.min(to, from + k * inc);
+      lastBit = await trySample(cqNow);
+      if (o.onProgress) o.onProgress({ phase: 'sample', file, cq: cqNow, bitrate: lastBit, target: ramp.targetKbps });
+      if (lastBit > 0 && lastBit <= ramp.targetKbps) { chosen = cqNow; break; }
+      if (cqNow >= to) break;
     }
-    if (!reached) {
+    try { if (fs.existsSync(tmpSample)) fs.unlinkSync(tmpSample); } catch (e) {}
+
+    if (chosen == null) {
       try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (e) {}
-      pushNote('码率未达标（末次 ' + Math.round(lastBitrate) + ' kbps > 目标 ' + Math.round(ramp.targetKbps)
-        + ' kbps，CQ 已到上限 ' + to + '）');
-      return { ok: true, skip: true, encodes, notes, reason: '目标体积未达成，已保留原文件（未做任何改动）' };
+      pushNote('码率未达标：样本试算到 CQ ' + to + ' 仍为 ' + Math.round(lastBit)
+        + ' kbps > 目标 ' + Math.round(ramp.targetKbps) + ' kbps');
+      return { ok: true, skip: true, encodes: 0, samples, notes,
+        reason: '目标体积未达成，已保留原文件（未做任何改动）' };
+    }
+
+    encodes = 1;
+    const r = await encodeOnce(chosen);
+    if (!r.ok) {
+      try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (e) {}
+      return { ok: false, reason: '编码失败（退出码 ' + r.code + '）', encodes: 0, samples, notes };
+    }
+    // 整片实测复核：样本只是估计，整片仍超目标时按原脚本语义保留原文件
+    const finalBit = await measureBitrateKbps(tmp);
+    if (ramp.targetKbps > 0 && finalBit > ramp.targetKbps * 1.03) {
+      try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (e) {}
+      pushNote('整片实测 ' + Math.round(finalBit) + ' kbps 仍高于目标 '
+        + Math.round(ramp.targetKbps) + ' kbps');
+      return { ok: true, skip: true, encodes, samples, notes,
+        reason: '目标体积未达成，已保留原文件（未做任何改动）' };
     }
   }
 
@@ -205,7 +257,7 @@ async function processFile(file, steps, opts) {
     try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (e2) {}
     return { ok: false, reason: '落盘失败：' + e.message, encodes, notes };
   }
-  return { ok: true, out: finalPath.path, encodes, notes, trimmed };
+  return { ok: true, out: finalPath.path, encodes, samples, notes, trimmed };
 }
 
 /** 测容器码率（kbps）—— 与「码率阈值」比较用，含音轨，口径同原脚本 */
@@ -254,7 +306,7 @@ async function runPipeline(opts) {
     : (String(output.backupDir || '').trim() || outplan.backupDirFor(storageDir, o.toolName || 'misc'));
 
   const steps = resolveSteps(o.stepIds, o.params);
-  const results = { total: files.length, ok: 0, failed: 0, skipped: 0, encodes: 0, items: [] };
+  const results = { total: files.length, ok: 0, failed: 0, skipped: 0, encodes: 0, samples: 0, items: [] };
 
   for (let i = 0; i < files.length; i++) {
     if (o.signal && o.signal.aborted) break;
@@ -275,11 +327,12 @@ async function runPipeline(opts) {
         },
       });
       results.encodes += r.encodes || 0;
+      results.samples += r.samples || 0;
       if (r.ok && r.skip) results.skipped++;
       else if (r.ok) results.ok++;
       else results.failed++;
       results.items.push({ file: f, ok: !!r.ok, skip: !!r.skip, out: r.out || '', reason: r.reason || '',
-        notes: r.notes || [], encodes: r.encodes || 0, trimmed: !!r.trimmed });
+        notes: r.notes || [], encodes: r.encodes || 0, samples: r.samples || 0, trimmed: !!r.trimmed });
     } catch (e) {
       results.failed++;
       results.items.push({ file: f, ok: false, reason: String(e && e.message || e) });

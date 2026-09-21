@@ -133,8 +133,8 @@ async function run(ctx) {
           if (!ev) return;
           if (ev.phase === 'item') logger.toolProgress(ev.index, ev.total);
           else if (ev.phase === 'clip-duration') logger.fileDuration(ev.seconds);
-          else if (ev.phase === 'retry') {
-            logger.info('  码率 ' + Math.round(ev.bitrate) + ' kbps 未达标，CQ 提到 ' + ev.cq + ' 重编');
+          else if (ev.phase === 'sample') {
+            logger.info('   样本试算 CQ ' + ev.cq + ' → ' + Math.round(ev.bitrate) + ' kbps（目标 ' + Math.round(ev.target) + '）');
           } else if (ev.phase === 'frame') logger.raw(ev.line);
         },
       });
@@ -164,7 +164,9 @@ async function run(ctx) {
 
     logger.section();
     logger.info('📊 处理完成：完成 ' + done + ' · 跳过 ' + skipped + ' · 失败 ' + failed
-      + ' · 编码 ' + results.encodes + ' 次 · 共 ' + results.total + ' 个视频');
+      + ' · 共 ' + results.total + ' 个视频');
+    logger.info('   编码 ' + results.encodes + ' 次'
+      + (results.samples ? ('（另含 ' + results.samples + ' 次样本试算，仅用于确定码率）') : ''));
     if (results.runDir) logger.info('输出目录：' + results.runDir);
     if (results.backupDir) logger.info('备份目录：' + results.backupDir);
     code = failed > 0 ? 1 : 0;

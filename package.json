@@ -34,6 +34,7 @@
       "engines/registry.js",
       "engines/base/**/*",
       "engines/modules/**/*",
+      "engines/tools/**/*",
       "frontend/**/*",
       "icon/**/*",
       "README.md",

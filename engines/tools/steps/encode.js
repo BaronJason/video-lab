@@ -5,8 +5,9 @@
 //   · 每编一遍就测一次实际码率，达标则覆盖原文件，**到上限仍不达标则原文件保持不变**
 //   · 另有一个「分辨率归位」开关：横屏归 1920×1080、竖屏归 1080×1920，不符也触发重编码
 //
-// ★ 这是**唯一允许多遍编码**的步骤（计划 §13.1 单列）：它必须"试编码 → 测码率 → 调 CQ"。
-//   界面必须提示"会编码多次"。本步通过 decide 返回 `ramp` 把这一意图交给 pipeline 执行。
+// ★ 这是唯一「先试后编」的步骤：先按 10% 样本试算定 CQ，再整片编码一遍（计划 §14.4）。
+//   NVENC 没有 2-pass，反复整片重编码（原脚本做法）代价太大且画质被反复损失，
+//   故改为「样本试算 → 整片一遍」。本步通过 decide 返回 `ramp` 把这一意图交给 pipeline 执行。
 //
 // 目标体积的口径：目标 MB → 码率，`kbps = 目标MB × 8192 ÷ 时长(s)`。
 'use strict';
@@ -29,7 +30,7 @@ module.exports = {
   schema: [
     { key: 'mode', label: '方式', type: 'select', default: '恒定质量',
       options: ['恒定质量', '码率上限', '目标体积'],
-      hint: '「码率上限 / 目标体积」会**编码多次**（逐次提高 CQ 直到达标）' },
+      hint: '「码率上限 / 目标体积」会先用 10% 样本试算确定 CQ，再整片编码一遍' },
     { key: 'cq', label: 'CQ 值', type: 'number', default: 27, min: 0, max: 51,
       hint: '仅「恒定质量」模式生效；数值越大码率越低、画质越差（管线默认 27）' },
     { key: 'bitrateKbps', label: '码率上限(kbps)', type: 'number', default: 5000, min: 100, step: 100,
@@ -95,8 +96,9 @@ module.exports = {
 
     return Object.assign(base, {
       ramp: { targetKbps, initialCq, increment: cqIncrement, maxCq },
-      note: [what + '（当前 ' + (base.curKbps || '未知') + ' kbps；CQ ' + initialCq + ' 起每次 +' + cqIncrement
-        + '，上限 ' + maxCq + '，**将编码多次**）', resNote].filter(Boolean).join('；'),
+      note: [what + '（当前 ' + (base.curKbps || '未知') + ' kbps；'
+        + '先按 10% 样本试算定 CQ（' + initialCq + ' 起，每次 +' + cqIncrement + '，上限 ' + maxCq
+        + '），再整片编码一遍）', resNote].filter(Boolean).join('；'),
     });
   },
 

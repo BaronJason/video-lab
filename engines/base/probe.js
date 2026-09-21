@@ -34,4 +34,64 @@ function probe(videoPath) {
   });
 }
 
-module.exports = { probe };
+/**
+ * 详细探测（供视频处理工具使用）：一次 ffprobe 拿全 —— 时长 / 分辨率 / 帧率 / 码率 / 音轨。
+ *
+ * 字段名刻意用 probeOk 而非 valid：上面 probe() 的 valid 判定写死「1080×1920 且有时长」，
+ * 那是**成片素材**的口径；工具面对任意分辨率的视频，若沿用 valid 会把合法素材判成无效。
+ *
+ * 另返回 isVfr —— 帧率删帧类操作依赖帧号，VFR 源上帧号不可靠，调用方应据此警告
+ * 或改按时间戳处理（计划 §14.6）。
+ *
+ * @param {string} videoPath
+ * @returns {Promise<{probeOk:boolean, duration:number, width:number, height:number,
+ *   fps:number, avgFps:number, isVfr:boolean, bitrate:number,
+ *   hasAudio:boolean, audioCodec:string, vcodec:string, pixFmt:string}>}
+ */
+function probeDetail(videoPath) {
+  const empty = {
+    probeOk: false, duration: 0, width: 0, height: 0,
+    fps: 0, avgFps: 0, isVfr: false, bitrate: 0,
+    hasAudio: false, audioCodec: '', vcodec: '', pixFmt: '',
+  };
+  return new Promise((resolve) => {
+    if (!exists(videoPath)) return resolve(empty);
+    const args = ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', videoPath];
+    const child = spawn('ffprobe', args, { windowsHide: true });
+    let out = '';
+    child.stdout && child.stdout.on('data', (b) => { out += b.toString('utf8'); });
+    child.on('error', () => resolve(empty));
+    child.on('close', (code) => {
+      if (code !== 0) return resolve(empty);
+      let j = null;
+      try { j = JSON.parse(out); } catch (e) { return resolve(empty); }
+      const streams = Array.isArray(j.streams) ? j.streams : [];
+      const vs = streams.find((s) => s.codec_type === 'video') || null;
+      const as = streams.find((s) => s.codec_type === 'audio') || null;
+      const fmt = j.format || {};
+      const ratio = (s) => {
+        const m = /^(\d+)\/(\d+)$/.exec(String(s || ''));
+        if (!m) return 0;
+        const a = Number(m[1]), b = Number(m[2]);
+        return b ? a / b : 0;
+      };
+      const fps = ratio(vs && vs.r_frame_rate);
+      const avgFps = ratio(vs && vs.avg_frame_rate);
+      const duration = parseFloat(fmt.duration || (vs && vs.duration) || 0) || 0;
+      const width = Number((vs && vs.width) || 0) || 0;
+      const height = Number((vs && vs.height) || 0) || 0;
+      const bitrate = parseInt(fmt.bit_rate || (vs && vs.bit_rate) || 0, 10) || 0;
+      const isVfr = !!(fps && avgFps && Math.abs(fps - avgFps) > fps * 0.01);
+      resolve({
+        probeOk: !!(width && height && duration > 0),
+        duration, width, height, fps, avgFps, isVfr, bitrate,
+        hasAudio: !!as,
+        audioCodec: String((as && as.codec_name) || ''),
+        vcodec: String((vs && vs.codec_name) || ''),
+        pixFmt: String((vs && vs.pix_fmt) || ''),
+      });
+    });
+  });
+}
+
+module.exports = { probe, probeDetail };

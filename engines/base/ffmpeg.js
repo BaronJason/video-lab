@@ -6,7 +6,25 @@ const { spawn } = require('node:child_process');
 // 硬约束：GPU 编码参数固定注入，禁止回退 libx264
 const NVENC_ARGS = ['-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'vbr', '-cq', '27', '-profile:v', 'high', '-level', '4.1'];
 
-function runFfmpeg(args, { onProgress, signal, cwd, env, binary = 'ffmpeg' } = {}) {
+/**
+ * 按 CQ 生成编码参数（其余参数一律用硬约束值，**不开放调整**）。
+ * 工具侧的「码率控制」步骤只改 CQ，其余由本源统一注入 —— 避免各处手写参数写出偏门组合。
+ * @param {number|null|undefined} cq 传 null/undefined 时用默认 27
+ */
+function nvencArgs(cq) {
+  const q = (cq == null || !isFinite(Number(cq))) ? '27' : String(Math.round(Number(cq)));
+  return NVENC_ARGS.map((x) => (x === '27' ? q : x));
+}
+
+/**
+ * @param {string[]} args
+ * @param {{onProgress?:Function, signal?:any, cwd?:string, env?:object, binary?:string,
+ *          captureStdout?:boolean}} opts
+ *   captureStdout —— 是否需要收集 stdout。ffmpeg 的诊断类滤镜（如 metadata=print）
+ *   默认把结果写到 **stdout**（`file=-`）而不是 stderr，需要这类输出的调用方要开启它。
+ * @returns {Promise<{code:number, stderr:string, stdout:string, error:string|null}>}
+ */
+function runFfmpeg(args, { onProgress, signal, cwd, env, binary = 'ffmpeg', captureStdout = false } = {}) {
   return new Promise((resolve) => {
     const child = spawn(binary, args, {
       windowsHide: true,
@@ -15,6 +33,11 @@ function runFfmpeg(args, { onProgress, signal, cwd, env, binary = 'ffmpeg' } = {
       env: Object.assign({}, process.env, env),
     });
     let stderr = '';
+    let stdout = '';
+    child.stdout && child.stdout.on('data', (buf) => {
+      if (!captureStdout) return;
+      stdout += buf.toString('utf8');
+    });
     child.stderr && child.stderr.on('data', (buf) => {
       const text = buf.toString('utf8');
       stderr += text;
@@ -23,9 +46,9 @@ function runFfmpeg(args, { onProgress, signal, cwd, env, binary = 'ffmpeg' } = {
         if (/frame\s*=|time\s*=/.test(line)) onProgress && onProgress(line);
       }
     });
-    child.on('error', (err) => resolve({ code: -1, stderr, error: err.message }));
-    child.on('close', (code) => resolve({ code: code == null ? -1 : code, stderr, error: null }));
+    child.on('error', (err) => resolve({ code: -1, stderr, stdout, error: err.message }));
+    child.on('close', (code) => resolve({ code: code == null ? -1 : code, stderr, stdout, error: null }));
   });
 }
 
-module.exports = { runFfmpeg, NVENC_ARGS };
+module.exports = { runFfmpeg, NVENC_ARGS, nvencArgs };

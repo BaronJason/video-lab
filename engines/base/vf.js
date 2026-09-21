@@ -4,6 +4,11 @@
 // ——逗号/分号混用、中间流标签重名、忘了送 NVENC 前的 format 兜底。
 // 统一在本模块构造，各步骤只负责"产出自己的片段"。
 //
+// 三种片段形态：
+//   vf/af  —— 单输入顺序滤镜（逗号串联），绝大多数步骤用这个
+//   after  —— 需要**消费当前视频尾流**的复杂片段（叠加图片等）：拿到尾流标签，产出新标签
+//   raw    —— 完全自定义的 filter_complex 片段（标签自管）
+//
 // ★ 硬约束（§3.2）：**只允许 CPU 滤镜** —— 本模块不提供任何 *_cuda / hwupload 入口，
 //   从设计上排除「全 GPU 管线」那条曾导致成片闪烁的路。
 'use strict';
@@ -17,7 +22,9 @@ function createChain(opts) {
   const hasAudio = !(opts && opts.hasAudio === false);
   const vParts = [];     // 视频侧的简单滤镜（逗号串联）
   const aParts = [];     // 音频侧的简单滤镜
-  const rawParts = [];   // 需要自定义标签的复杂片段（overlay / concat 等）
+  const after = [];      // 消费视频尾流的复杂片段：[fn(tail, out) => '...']
+  const rawParts = [];   // 需要自定义标签的复杂片段（concat 等）
+  const inputs = [];     // 额外输入（叠加图片等），按顺序追加到 -i 之后
 
   const api = {
     hasAudio,
@@ -28,14 +35,21 @@ function createChain(opts) {
     /** 追加音频滤镜片段，如 'atempo=1.25' */
     af(expr) { if (expr) aParts.push(String(expr)); return api; },
 
+    /** 追加「消费视频尾流」的复杂片段；fn(tail, out) 返回 filter_complex 片段 */
+    afterVideo(fn) { if (typeof fn === 'function') after.push(fn); return api; },
+
     /** 追加原始 filter_complex 片段（多输入场景，标签由调用方自管） */
     raw(expr) { if (expr) rawParts.push(String(expr)); return api; },
 
-    isEmpty() { return !vParts.length && !aParts.length && !rawParts.length; },
+    /** 登记一个额外输入（返回其在 ffmpeg 参数里的序号：0 是主输入，故从 1 起） */
+    addInput(path) { inputs.push(String(path)); return inputs.length; },
+
+    isEmpty() { return !vParts.length && !aParts.length && !after.length && !rawParts.length; },
 
     /** 当前视频侧片段（只读，便于日志） */
     videoParts() { return vParts.slice(); },
     audioParts() { return aParts.slice(); },
+    extraInputs() { return inputs.slice(); },
 
     /**
      * 产出 filter_complex 与 map 参数。
@@ -43,15 +57,30 @@ function createChain(opts) {
      */
     build() {
       const segs = [];
-      segs.push('[0:v]' + vParts.concat([FORCE_FORMAT]).join(',') + '[vout]');
+      const vExpr = vParts.concat([FORCE_FORMAT]).join(',');
+      if (!after.length) {
+        segs.push('[0:v]' + vExpr + '[vout]');
+      } else {
+        // 先把简单滤镜做成中间流，再逐个交给「尾流消费者」
+        segs.push('[0:v]' + vExpr + '[vtail0]');
+        let cur = 'vtail0';
+        after.forEach((fn, i) => {
+          const out = (i === after.length - 1) ? 'vout' : ('vtail' + (i + 1));
+          segs.push(fn(cur, out));
+          cur = out;
+        });
+      }
       if (hasAudio) {
         segs.push('[0:a]' + (aParts.length ? aParts.concat(['asetpts=PTS-STARTPTS']).join(',') : 'anull') + '[aout]');
       }
       for (const r of rawParts) segs.push(r);
 
+      const inputArgs = [];
+      inputs.forEach((p) => { inputArgs.push('-i', p); });
+
       const args = ['-filter_complex', segs.join(';'), '-map', '[vout]'];
       if (hasAudio) args.push('-map', '[aout]');
-      return { fc: segs.join(';'), args };
+      return { fc: segs.join(';'), args, inputArgs };
     },
   };
   return api;

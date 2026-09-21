@@ -3826,28 +3826,7 @@ class Api {
         conflicts: [{ v: 'index', t: '追加序号' }, { v: 'overwrite', t: '覆盖' }, { v: 'skip', t: '跳过' }],
         defaultBackupDir: this.storageDir || '',
       },
-      prefs: this.getToolPrefs(),
     };
-  }
-
-  /** 上次填写的参数（按工作目录分别记忆） */
-  getToolPrefs() {
-    if (!this._useSettings()) return {};
-    try {
-      const all = this._settingsStore.get('tool', 'byRoot', {}) || {};
-      return all[this.root] || {};
-    } catch (e) { return {}; }
-  }
-
-  saveToolPrefs(prefs) {
-    if (!this._useSettings()) return { ok: true };
-    try {
-      const store = this._settingsStore;
-      const all = store.get('tool', 'byRoot', {}) || {};
-      all[this.root] = Object.assign({}, all[this.root] || {}, prefs || {});
-      store.set('tool', 'byRoot', all);
-      return { ok: true };
-    } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
   }
 
   /**
@@ -3915,11 +3894,6 @@ class Api {
     const task = this._createTask('tool', title, env, files.length ? files[0] : root);
     task.progress.total = files.length || 0;
     this._enqueueTask(task);
-    // 记忆本次填写（便于下次打开表单直接带出）
-    this.saveToolPrefs({
-      root, recursive: s.recursive !== false, output: Object.assign({}, output, { mode }),
-      params: s.params || {}, stepIds,
-    });
     this._lg('RUN', 'tool.start', '视频处理任务 · ' + title, { id: task.id, stepIds, files: files.length, output });
     return { ok: true, taskId: task.id };
   }

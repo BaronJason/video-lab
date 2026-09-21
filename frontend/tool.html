@@ -107,6 +107,17 @@
     .tl-num { width: 84px; }
     .tl-sel { min-width: 104px; }
     .tl-path { min-width: 180px; max-width: 320px; }
+    /* 转分辨率的锁链按钮：锁定=主题色竖链，解绑=灰链 */
+    .tl-link {
+      display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+      width: 26px; height: 25px; border-radius: var(--radius-6);
+      border: 1px solid var(--border-neutral-l2); background: transparent; color: var(--text-tertiary);
+      cursor: pointer; transition: color .15s ease, border-color .15s ease;
+    }
+    .tl-link:hover { background: var(--bg-overlay-l1); }
+    .tl-link svg { transition: transform .15s ease; }
+    .tl-link--on { color: var(--brand-500); border-color: var(--brand-500); }
+    .tl-link--on svg { transform: rotate(-45deg); }
     .tl-mini {
       height: 25px; padding: 0 8px; border-radius: var(--radius-6); border: 1px solid var(--border-neutral-l2);
       background: transparent; color: var(--text-secondary); cursor: pointer; font-size: var(--body-xs-font-size);
@@ -174,7 +185,7 @@
   <div class="tl-input">
     <div class="tl-line">
       <span class="tl-label">目标目录</span>
-      <input class="tl-text" id="inRoot" placeholder="选择文件夹，或选择若干视频文件（留空则不处理）" readonly>
+      <input class="tl-text" id="inRoot" placeholder="可直接粘贴/输入目录路径，或点右侧按钮选择（留空则不处理）">
       <button class="tl-btn" id="btnPickDir"><i data-icon="folder-open" data-size="14"></i>选择文件夹</button>
       <button class="tl-btn" id="btnPickFiles"><i data-icon="video" data-size="14"></i>选择视频</button>
       <button class="tl-btn" id="btnClearInput" title="清空已选输入"><i data-icon="x" data-size="14"></i>清空</button>

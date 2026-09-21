@@ -220,8 +220,6 @@
     },
     list_tools: function () { return invoke('list_tools', []); },
     run_tool: function (spec) { return invokeArgs('run_tool', spec); },
-    get_tool_prefs: function () { return invoke('get_tool_prefs', []); },
-    save_tool_prefs: function (prefs) { return invokeArgs('save_tool_prefs', prefs); },
     rerun_tool_task: function (id) { return invokeArgs('rerun_tool_task', id); },
     pick_image: function (prev) { return invokeArgs('pick_image', prev); },
     get_runlog: function (opts) { return invokeArgs('get_runlog', opts); },

@@ -103,8 +103,6 @@ contextBridge.exposeInMainWorld('txapi', {
   open_tool_window: () => invoke('open_tool_window'),
   list_tools: () => invoke('list_tools'),
   run_tool: (spec) => invoke('run_tool', spec),
-  get_tool_prefs: () => invoke('get_tool_prefs'),
-  save_tool_prefs: (prefs) => invoke('save_tool_prefs', prefs),
   rerun_tool_task: (id) => invoke('rerun_tool_task', id),
   pick_image: (prev) => invoke('pick_image', prev),
   // agent 友好接口：运行日志 / 环境上下文 / 接口清单

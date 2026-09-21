@@ -27,9 +27,9 @@ module.exports = {
   danger: 'lossy',
   schema: [
     { key: 'targetSec', label: '目标时长(秒)', type: 'number', default: 180, min: 1,
-      hint: '默认 180 —— 原脚本 TargetDurationSec' },
+      hint: '源视频超过该时长才会加速' },
     { key: 'maxRatio', label: '最大加速倍率', type: 'number', default: 1.25, min: 1, step: 0.05,
-      hint: '默认 1.25 —— 原脚本 MaxSpeedRatio' },
+      hint: '加速倍率上限，防止画质损失过大' },
   ],
 
   decide(info, params) {

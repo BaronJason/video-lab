@@ -72,8 +72,6 @@ const PURE_BACKEND_ROUTES = {
   // 视频处理工具（第 4 个模块）
   list_tools: { m: 'listTools', a: () => [] },
   run_tool: { m: 'runTool', a: (args) => [args[0]] },
-  get_tool_prefs: { m: 'getToolPrefs', a: () => [] },
-  save_tool_prefs: { m: 'saveToolPrefs', a: (args) => [args[0]] },
   rerun_tool_task: { m: 'rerunToolTask', a: (args) => [args[0]] },
   list_mask_projects: { m: 'listMaskProjects', a: () => [] },
   list_mask_videos: { m: 'listMaskVideos', a: (args) => [args[0]] },
@@ -128,63 +126,59 @@ function startHttpServer(opts) {
   }
 
   // dialog/shell 类路由（浏览器侧后端代劳）
+  //
+  // ★ 浏览器侧的对话框**不挂本体窗口**：用户此刻的焦点在浏览器，
+  //   挂到本体窗口会让对话框被压在本体后面（看起来像"点了没反应"）。
+  //   不传 parent 时 Electron 弹出独立对话框，正常显示到前台。
+  //   桌面端不受影响 —— 那边走 IPC，父窗口就是发起操作的那个窗口。
   const dialogRoutes = {
     choose_mask_file: async (args) => {
-      const win = getMainWin();
       const prev = args[0] || (api.getRoot() || '');
-      const r = await dialog.showOpenDialog(win || undefined, { title: '选择水印文件', defaultPath: prev, properties: ['openFile'], filters: [{ name: '视频水印', extensions: ['mov', 'mp4'] }] });
+      const r = await dialog.showOpenDialog({ title: '选择水印文件', defaultPath: prev, properties: ['openFile'], filters: [{ name: '视频水印', extensions: ['mov', 'mp4'] }] });
       if (r.canceled || !r.filePaths || !r.filePaths.length) return { ok: false };
       return { ok: true, path: r.filePaths[0] };
     },
     pick_directory: async (args) => {
       const win = getMainWin() || getSettingsWin();
-      const result = await dialog.showOpenDialog(win || undefined, { title: args[0] || '选择目录', defaultPath: args[1] || api.getRoot() || '', properties: ['openDirectory'] });
+      const result = await dialog.showOpenDialog({ title: args[0] || '选择目录', defaultPath: args[1] || api.getRoot() || '', properties: ['openDirectory'] });
       return result.canceled || !result.filePaths || result.filePaths.length === 0 ? '' : result.filePaths[0];
     },
     choose_workdir: async () => {
-      const win = getMainWin();
-      const result = await dialog.showOpenDialog(win || undefined, { title: '选择工作路径', defaultPath: api.getRoot(), properties: ['openDirectory'] });
+      const result = await dialog.showOpenDialog({ title: '选择工作路径', defaultPath: api.getRoot(), properties: ['openDirectory'] });
       if (result.canceled || !result.filePaths || result.filePaths.length === 0) return { ok: false, canceled: true };
       const dir = result.filePaths[0];
       return { ok: true, root: dir, projects: api.listProjects() };
     },
     pick_watermark: async (args) => {
-      const win = getMainWin();
       const defaultPath = String(args[0] || '').trim();
-      const result = await dialog.showOpenDialog(win || undefined, { title: '选择水印 PNG', defaultPath, properties: ['openFile'], filters: [{ name: 'PNG 图片', extensions: ['png'] }] });
+      const result = await dialog.showOpenDialog({ title: '选择水印 PNG', defaultPath, properties: ['openFile'], filters: [{ name: 'PNG 图片', extensions: ['png'] }] });
       return result.canceled || !result.filePaths || result.filePaths.length === 0 ? '' : result.filePaths[0];
     },
     pick_image: async (args) => {
-      const win = getMainWin();
       const defaultPath = String(args[0] || '').trim() || api.getRoot();
-      const result = await dialog.showOpenDialog(win || undefined, { title: '选择要叠加的图片', defaultPath, properties: ['openFile'], filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] }] });
+      const result = await dialog.showOpenDialog({ title: '选择要叠加的图片', defaultPath, properties: ['openFile'], filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] }] });
       return result.canceled || !result.filePaths || result.filePaths.length === 0 ? '' : result.filePaths[0];
     },
     pick_exclude: async () => {
-      const win = getMainWin();
-      const result = await dialog.showOpenDialog(win || undefined, { title: '选择要排除的路径（文件夹或视频文件）', defaultPath: api.getRoot(), properties: ['openFile', 'openDirectory', 'multiSelections'] });
+      const result = await dialog.showOpenDialog({ title: '选择要排除的路径（文件夹或视频文件）', defaultPath: api.getRoot(), properties: ['openFile', 'openDirectory', 'multiSelections'] });
       return result.canceled || !result.filePaths || result.filePaths.length === 0 ? [] : result.filePaths;
     },
     pick_paths: async () => {
-      const win = getMainWin();
-      const result = await dialog.showOpenDialog(win || undefined, { title: '选择要添加的文件夹', defaultPath: api.getRoot(), properties: ['openDirectory', 'multiSelections'] });
+      const result = await dialog.showOpenDialog({ title: '选择要添加的文件夹', defaultPath: api.getRoot(), properties: ['openDirectory', 'multiSelections'] });
       return result.canceled || !result.filePaths || result.filePaths.length === 0 ? [] : result.filePaths;
     },
     pick_paths_files: async () => {
-      const win = getMainWin();
-      const result = await dialog.showOpenDialog(win || undefined, { title: '选择视频文件（支持 mp4/mov/avi/mkv 等 / .lnk 快捷方式）', defaultPath: api.getRoot(), properties: ['openFile', 'multiSelections'], filters: [{ name: '视频文件', extensions: ['mp4', 'mov', 'avi', 'mkv', 'm4v', 'webm', 'flv', 'lnk'] }] });
+      const result = await dialog.showOpenDialog({ title: '选择视频文件（支持 mp4/mov/avi/mkv 等 / .lnk 快捷方式）', defaultPath: api.getRoot(), properties: ['openFile', 'multiSelections'], filters: [{ name: '视频文件', extensions: ['mp4', 'mov', 'avi', 'mkv', 'm4v', 'webm', 'flv', 'lnk'] }] });
       return result.canceled || !result.filePaths || result.filePaths.length === 0 ? [] : result.filePaths;
     },
     pick_paths_dirs: async () => {
-      const win = getMainWin();
-      const result = await dialog.showOpenDialog(win || undefined, { title: '选择文件夹（将递归扫描其中视频）', defaultPath: api.getRoot(), properties: ['openDirectory', 'multiSelections'] });
+      const result = await dialog.showOpenDialog({ title: '选择文件夹（将递归扫描其中视频）', defaultPath: api.getRoot(), properties: ['openDirectory', 'multiSelections'] });
       return result.canceled || !result.filePaths || result.filePaths.length === 0 ? [] : result.filePaths;
     },
     resolve_shortcut: async (args) => api.resolveShortcut(args[0]),
     mask_add_source: async (args) => api.maskAddSource(args[0], args[1]),
     pick_single_folder: async () => {
-      const win = getMainWin();
-      const result = await dialog.showOpenDialog(win || undefined, { title: '选择要修改为的文件夹', defaultPath: api.getRoot(), properties: ['openDirectory'] });
+      const result = await dialog.showOpenDialog({ title: '选择要修改为的文件夹', defaultPath: api.getRoot(), properties: ['openDirectory'] });
       return result.canceled || !result.filePaths || result.filePaths.length === 0 ? '' : result.filePaths[0];
     },
   };

@@ -99,6 +99,18 @@ contextBridge.exposeInMainWorld('txapi', {
   },
   open_task_window: () => invoke('open_task_window'),
   open_settings_window: () => invoke('open_settings_window'),
+  // 视频处理工具（第 4 个模块）：独立窗口 + 步骤 schema + 建任务
+  open_tool_window: () => invoke('open_tool_window'),
+  list_tools: () => invoke('list_tools'),
+  run_tool: (spec) => invoke('run_tool', spec),
+  get_tool_prefs: () => invoke('get_tool_prefs'),
+  save_tool_prefs: (prefs) => invoke('save_tool_prefs', prefs),
+  rerun_tool_task: (id) => invoke('rerun_tool_task', id),
+  pick_image: (prev) => invoke('pick_image', prev),
+  // agent 友好接口：运行日志 / 环境上下文 / 接口清单
+  get_runlog: (opts) => invoke('get_runlog', opts),
+  get_app_info: () => invoke('get_app_info'),
+  get_api_index: () => invoke('get_api_index'),
   tray_menu_click: (action) => invoke('tray_menu_click', action),
   clean_duplicate_star: (commit) => invoke('clean_duplicate_star', commit),
   open_external: (url) => invoke('open_external', url),

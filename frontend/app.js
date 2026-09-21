@@ -2963,6 +2963,9 @@
       });
     }
     $('btnOpenTasks').addEventListener('click', function () { call('open_task_window').catch(function () { setStatus('打开任务窗口失败'); }); });
+    // 标题栏「视频处理」入口：独立非模态窗口（与设置窗口不同，可与主窗口并排操作）
+    var wtt = $('winToolToggle');
+    if (wtt) wtt.addEventListener('click', function () { call('open_tool_window').catch(function () { setStatus('打开视频处理窗口失败'); }); });
     $('btnPreviewRaw').addEventListener('click', function () { state.rightPreview = false; $('btnPreviewRaw').classList.add('preview-toggle--active'); $('btnPreviewModified').classList.remove('preview-toggle--active'); buildRightPanel(); });
     $('btnPreviewModified').addEventListener('click', function () { state.rightPreview = true; $('btnPreviewModified').classList.add('preview-toggle--active'); $('btnPreviewRaw').classList.remove('preview-toggle--active'); buildRightPanel(); });
     $('btnLogSimple').addEventListener('click', function () { state.logViewMode = 'simple'; syncRightToggle(); renderLogRightPanel(); });

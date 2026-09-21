@@ -29,10 +29,12 @@ const base = {
 
 // ── 业务模块注册 ──
 // 缓存出口：VL_CACHE_DB 指向数据缓存库（引擎直读），由主进程注入（见 backend 的 _spawnEngine）。
+// path：模块目录，缺省为 ./modules/<id>（工具模块不在 modules/ 下，故显式给出）
 const MODULE_META = {
   batch: { title: '批量拼接', envs: ['BATCH_*', 'VL_CACHE_DB'] },
   mask: { title: '遮罩叠加', envs: ['MASK_*', 'VL_CACHE_DB'] },
   replica: { title: '复刻', envs: ['REPLICA_*', 'VL_CACHE_DB'] },
+  tool: { title: '视频处理', envs: ['TOOL_SPEC', 'VL_STORAGE_DIR'], path: './tools/module' },
 };
 
 function loadModules(logger) {
@@ -40,7 +42,7 @@ function loadModules(logger) {
     const meta = MODULE_META[id];
     let mod = null;
     try {
-      mod = require(`./modules/${id}`);          // 已迁移：使用真实实现
+      mod = require(meta.path || `./modules/${id}`);   // 已迁移：使用真实实现
       if (!mod || typeof mod.run !== 'function') mod = null;
     } catch (e) {
       mod = null;                                 // 模块文件缺失/语法错误 → 退回占位骨架
@@ -71,7 +73,7 @@ async function main() {
   loadModules(logger);
 
   const id = typeof args.module === 'string' ? args.module.trim() : '';
-  if (!id) { logger.error('engine-runner', '缺少 --module 参数（batch/mask/replica）'); process.exit(2); }
+  if (!id) { logger.error('engine-runner', '缺少 --module 参数（batch/mask/replica/tool）'); process.exit(2); }
   let mod;
   try { mod = getModule(id); } catch (e) { logger.error('engine-runner', e.message); process.exit(2); }
 

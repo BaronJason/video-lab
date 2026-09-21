@@ -2191,6 +2191,10 @@ class Api {
   // 找不到即返回空串：绝不回退成源目录 —— 源目录放着原始日志与素材，
   // 一旦被当成成片目录用于打开/删除，会直接误伤业务文件。
   _taskOutDir(type, srcPath, env) {
+    // 视频处理工具没有「成片目录」概念 —— 必须显式返回空串。
+    // 否则会落到下面的「找以成片结尾的子目录」分支，把源目录旁的成片目录当成工具任务的产物目录，
+    // 而那正是后续删除类操作的目标（计划 §5.3）。
+    if (type === 'tool') return '';
     if (type === 'mask') {
       const out = String((env && env.MASK_OUTPUT_DIR) || '').trim();
       return out ? path.resolve(out) : '';
@@ -2619,6 +2623,10 @@ class Api {
   rerunTask(id) {
     const t = this.tasks.get(id);
     if (!t) return { ok: false, error: '任务不存在' };
+    // 工具任务必须走 rerunToolTask（重新执行、不删文件）：
+    // 本方法会「删除上次失败残留的产物」，而工具任务的产物正是被覆盖的源视频，
+    // 且它没有任务标记可依（会回退到「日志解析 + 目录推算」，推算出的产物很可能就是源目录里的视频）
+    if (t.type === 'tool') return this.rerunToolTask(id);
     if (t.status !== 'error' && t.status !== 'interrupted' && t.status !== 'stopped') return { ok: false, error: '仅失败/中断/停止的任务可重新开始' };
     // 优先使用任务标记：其中保存了完整 env 与逐个成片的产出清单（精确还原、不依赖日志窗口）
     const marker = this._loadMarker(t);
@@ -3316,7 +3324,7 @@ class Api {
           if (!s || task.status !== 'running') return;
           // 单成片实时进度：目标时长（分母）+ ffmpeg time（分子）。
           // 必须放在进度行拦截前，否则 ffmpeg 进度行被折叠后 clip/clipTarget 不再更新（进度条失效）
-          const durM = s.match(/成片预计时长:\s*([\d.]+)\s*秒/);
+          const durM = s.match(/(?:成片预计时长|当前文件时长):\s*([\d.]+)\s*秒/);
           if (durM) {
             const d = parseFloat(durM[1]);
             if (d > 0) { task._clipDur = d; task.progress.clipTarget = d; task.progress.clip = 0; }
@@ -3340,13 +3348,15 @@ class Api {
             return;
           }
           task.log.push(s);
-          // 进度解析：匹配 "共 N 个" 与 "生成第 X / Y 个成片" / "复刻第 X / Y 个成片"
+          // 进度解析：匹配 "共 N 个" 与 "生成第 X / Y 个成片" / "复刻第 X / Y 个成片" /
+          // 视频处理工具的 "处理第 X / Y 个视频"（同一套进度字段，措辞按模块区分）
           const totalMatch = s.match(/共\s*(\d+)\s*个/);
           if (totalMatch) {
             const n = parseInt(totalMatch[1], 10);
             if (n > 0) task.progress.total = n;
           }
-          const curMatch = s.match(/(?:生成|复刻)第\s*(\d+)\s*\/\s*(\d+)\s*个成片/);
+          const curMatch = s.match(/(?:生成|复刻)第\s*(\d+)\s*\/\s*(\d+)\s*个成片/)
+            || s.match(/处理第\s*(\d+)\s*\/\s*(\d+)\s*个视频/);
           if (curMatch) {
             const c = parseInt(curMatch[1], 10), t = parseInt(curMatch[2], 10);
             if (t > 0) task.progress.total = t;
@@ -3785,6 +3795,156 @@ class Api {
         }
       });
     } catch (e) {}
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // 视频处理工具（第 4 个模块）—— 计划 §五、§5.1、§5.2、§5.3
+  //
+  // 与三个成片模块同构：建任务 → 入同一队列 → 引擎子进程（module=tool）
+  // 参数经 TOOL_SPEC（JSON）传入；步骤清单与参数 schema 由引擎侧注册表提供，
+  // 前端据此**自动渲染表单**（加能力 = 加一个步骤文件，前端不用改）
+  // ══════════════════════════════════════════════════════════════════════
+  _toolSteps() {
+    try { return require(path.join(this.enginesDir, 'tools', 'index.js')); } catch (e) { return null; }
+  }
+
+  /** 步骤清单 + 参数 schema + 输出策略可选项（供前端渲染表单） */
+  listTools() {
+    const mod = this._toolSteps();
+    if (!mod) return { ok: false, error: '内置引擎不可用（resources\\Engines\\tools\\index.js 缺失），请重新安装或校验程序文件' };
+    const steps = mod.stepSchema ? mod.stepSchema() : [];
+    return {
+      ok: true,
+      steps,
+      groups: mod.stepSchemaByGroup ? mod.stepSchemaByGroup() : [],
+      stepCount: steps.length,
+      engine: !!this._engineRunnerPath(),
+      root: this.root || '',
+      output: {
+        modes: [{ v: 'overwrite', t: '覆盖原视频' }, { v: 'directory', t: '输出到指定目录' }],
+        nameModes: [{ v: 'keep', t: '原名' }, { v: 'suffix', t: '原名 + 后缀' }],
+        conflicts: [{ v: 'index', t: '追加序号' }, { v: 'overwrite', t: '覆盖' }, { v: 'skip', t: '跳过' }],
+        defaultBackupDir: this.storageDir || '',
+      },
+      prefs: this.getToolPrefs(),
+    };
+  }
+
+  /** 上次填写的参数（按工作目录分别记忆） */
+  getToolPrefs() {
+    if (!this._useSettings()) return {};
+    try {
+      const all = this._settingsStore.get('tool', 'byRoot', {}) || {};
+      return all[this.root] || {};
+    } catch (e) { return {}; }
+  }
+
+  saveToolPrefs(prefs) {
+    if (!this._useSettings()) return { ok: true };
+    try {
+      const store = this._settingsStore;
+      const all = store.get('tool', 'byRoot', {}) || {};
+      all[this.root] = Object.assign({}, all[this.root] || {}, prefs || {});
+      store.set('tool', 'byRoot', all);
+      return { ok: true };
+    } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  }
+
+  /**
+   * 创建工具任务。
+   * @param {{root?:string, recursive?:boolean, files?:string[], stepIds:string[],
+   *   params?:Object, output?:Object}} spec
+   * @returns {{ok:boolean, taskId?:string, error?:string}}
+   */
+  runTool(spec) {
+    if (!this.shouldUseNodeEngine('tool')) return { ok: false, error: '内置引擎不可用（resources\\Engines\\engine-runner.js 缺失），请重新安装或校验程序文件' };
+    const mod = this._toolSteps();
+    if (!mod) return { ok: false, error: '内置引擎不可用（resources\\Engines\\tools\\index.js 缺失），请重新安装或校验程序文件' };
+    const s = spec || {};
+
+    // ① 步骤：逐个校验存在性（前端可能缓存了旧 schema）
+    const raw = Array.isArray(s.stepIds) ? s.stepIds.map(String).filter(Boolean) : [];
+    const unknown = raw.filter((id) => !mod.getStep(id));
+    if (unknown.length) return { ok: false, error: '未知的处理步骤：' + unknown.join('、') };
+    const stepIds = mod.listSteps().map((x) => x.id).filter((id) => raw.indexOf(id) >= 0);  // 固定位次
+    if (!stepIds.length) return { ok: false, error: '请至少勾选一个处理步骤' };
+
+    // ② 输入：显式文件清单优先，否则扫描目录
+    const files = (Array.isArray(s.files) ? s.files : [])
+      .map(String)
+      .filter((p) => { try { return p && fs.existsSync(p) && fs.statSync(p).isFile(); } catch (e) { return false; } });
+    const root = String(s.root || '').trim();
+    let rootOk = false;
+    try { rootOk = !!root && fs.existsSync(root) && fs.statSync(root).isDirectory(); } catch (e) { rootOk = false; }
+    if (!files.length && !rootOk) return { ok: false, error: '请选择要处理的目录或视频文件' };
+
+    // ③ 输出策略
+    const out = s.output || {};
+    const mode = out.mode === 'directory' ? 'directory' : 'overwrite';
+    const dir = String(out.dir || '').trim();
+    if (mode === 'directory' && !dir) return { ok: false, error: '请选择输出目录' };
+    if (mode === 'directory' && rootOk && path.resolve(dir) === path.resolve(root)) {
+      // 允许（outplan 会自动新建子目录，不会静默覆盖），仅此处不做拦截
+    }
+    const output = {
+      mode,
+      dir: mode === 'directory' ? path.resolve(dir) : '',
+      nameMode: out.nameMode === 'suffix' ? 'suffix' : 'keep',
+      suffix: String(out.suffix == null ? '_处理' : out.suffix),
+      onConflict: ['overwrite', 'skip'].indexOf(out.onConflict) >= 0 ? out.onConflict : 'index',
+      backup: out.backup !== false,
+      backupDir: String(out.backupDir || '').trim() ? path.resolve(String(out.backupDir).trim()) : '',
+    };
+
+    // ④ 建任务（env 传参，与三个成片模块同一机制）
+    const stepTitles = stepIds.map((id) => (mod.getStep(id) || {}).title || id);
+    const scope = files.length ? (files.length + ' 个文件') : path.basename(root);
+    const title = '视频处理 · ' + stepTitles.join(' + ') + ' · ' + scope;
+    const env = {
+      TOOL_SPEC: JSON.stringify({
+        stepIds,
+        params: s.params || {},
+        root,
+        recursive: s.recursive !== false,
+        files,
+        output,
+        toolName: '视频处理',
+      }),
+      VL_STORAGE_DIR: this.storageDir || '',
+    };
+    const task = this._createTask('tool', title, env, files.length ? files[0] : root);
+    task.progress.total = files.length || 0;
+    this._enqueueTask(task);
+    // 记忆本次填写（便于下次打开表单直接带出）
+    this.saveToolPrefs({
+      root, recursive: s.recursive !== false, output: Object.assign({}, output, { mode }),
+      params: s.params || {}, stepIds,
+    });
+    this._lg('RUN', 'tool.start', '视频处理任务 · ' + title, { id: task.id, stepIds, files: files.length, output });
+    return { ok: true, taskId: task.id };
+  }
+
+  /**
+   * 工具任务「重新执行」：按同样参数重跑一遍 —— **不删除任何文件**。
+   * 与 rerunTask 的本质区别：工具任务的产物就是被覆盖的源视频，没有第二份副本，
+   * 任何"先删旧产物"的动作都可能删掉唯一的那份视频（计划 §5.3）。
+   */
+  rerunToolTask(id) {
+    const t = this.tasks.get(id);
+    if (!t) return { ok: false, error: '任务不存在' };
+    if (t.type !== 'tool') return { ok: false, error: '该任务不是视频处理任务' };
+    if (t.status === 'running' || t.status === 'queued' || t.status === 'paused') {
+      return { ok: false, error: '进行中的任务不能重新执行' };
+    }
+    const marker = this._loadMarker(t);
+    const env = Object.assign({}, (marker && marker.env) || t.env || {});
+    if (!env.TOOL_SPEC) return { ok: false, error: '原任务缺少处理参数，无法重新执行' };
+    const nt = this._createTask('tool', String(t.title || '视频处理'), env, '');
+    nt.progress.total = (t.progress && t.progress.total) || 0;
+    this._enqueueTask(nt);
+    this._lg('RUN', 'tool.rerun', '视频处理 · 重新执行（不删除任何文件）· ' + String(t.title || '').slice(0, 50),
+      { from: id, to: nt.id });
+    return { ok: true, taskId: nt.id };
   }
 
   runBatch(filePath, count, group) {

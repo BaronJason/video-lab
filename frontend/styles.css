@@ -1434,7 +1434,9 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  transform: translateX(calc(-50% + 48px));
+  /* 品牌区里除标题外还有两个入口按钮（配置管理 / 视频处理，各 88px + 8px 间距），
+     整体右移一半宽度，使**标题本身**保持视觉居中 */
+  transform: translateX(calc(-50% + 96px));
 }
 .win-titlebar__mode { width: 88px; justify-content: flex-start; }
 [data-main-titlebar] .win-titlebar__title {

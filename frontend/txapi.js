@@ -205,6 +205,27 @@
       return Promise.resolve({ ok: true });
     },
     open_settings_window: function () { openEmbeddedModal('/settings', 680, 640); return Promise.resolve({ ok: true }); },
+    // 视频处理工具窗口：本体是独立非模态窗口，浏览器侧同样弹独立 popup（可并排、非模态）
+    open_tool_window: function () {
+      var w = 720, h = 720;
+      var L = Math.max(0, Math.round((window.screen.availWidth - w) / 2));
+      var T = Math.max(0, Math.round((window.screen.availHeight - h) / 2));
+      var uv = '/tool?token=' + encodeURIComponent(token);
+      var curSkin = document.documentElement ? document.documentElement.getAttribute('data-skin') : '';
+      if (curSkin) uv += '&skin=' + encodeURIComponent(curSkin);
+      var win = window.open(uv, 'vlabtool', 'width=' + w + ',height=' + h + ',left=' + L + ',top=' + T + ',resizable=yes,toolbar=no,menubar=no,location=no,status=no,scrollbars=yes');
+      if (!win) window.open('/tool?token=' + encodeURIComponent(token));
+      return Promise.resolve({ ok: true });
+    },
+    list_tools: function () { return invoke('list_tools', []); },
+    run_tool: function (spec) { return invokeArgs('run_tool', spec); },
+    get_tool_prefs: function () { return invoke('get_tool_prefs', []); },
+    save_tool_prefs: function (prefs) { return invokeArgs('save_tool_prefs', prefs); },
+    rerun_tool_task: function (id) { return invokeArgs('rerun_tool_task', id); },
+    pick_image: function (prev) { return invokeArgs('pick_image', prev); },
+    get_runlog: function (opts) { return invokeArgs('get_runlog', opts); },
+    get_app_info: function () { return invoke('get_app_info', []); },
+    get_api_index: function () { return invoke('get_api_index', []); },
     // 获取浏览器访问地址（含 token）：本体/浏览器侧都可调用，便于开发测试拿到真实 token
     get_browser_url: function () { return invoke('get_browser_url', []); },
     // 关闭设置内嵌模态（未保存确认放弃修改后调用，本体为真正关闭设置窗口）

@@ -426,6 +426,27 @@ async function showTrayMenu() {
   trayMenuWin.show();
   trayMenuWin.focus();
 }
+// 视频处理工具窗口：独立于主窗口的**非模态**窗口（可与主窗口并排、同时操作；
+// 关掉窗口不影响正在跑的任务；任务结果回主窗口任务列表查看 —— 计划 §七）
+let toolWin = null;
+function createToolWindow() {
+  if (toolWin && !toolWin.isDestroyed()) { toolWin.focus(); return toolWin; }
+  toolWin = new BrowserWindow({
+    title: 'Video Lab - 视频处理', width: 720, height: 720, minWidth: 620, minHeight: 520,
+    resizable: true, frame: false,
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false },
+  });
+  if (mainWin && !mainWin.isDestroyed()) {
+    const pb = mainWin.getBounds();
+    const wa = screen.getDisplayNearestPoint({ x: Math.round(pb.x + pb.width / 2), y: Math.round(pb.y + pb.height / 2) }).workArea;
+    const x = Math.max(wa.x, Math.round(pb.x + (pb.width - 720) / 2));
+    const y = Math.max(wa.y, Math.round(pb.y + (pb.height - 720) / 2));
+    toolWin.setPosition(Math.min(x, wa.x + wa.width - 720), Math.min(y, wa.y + wa.height - 720));
+  }
+  toolWin.loadFile(path.join(__dirname, 'frontend', 'tool.html'));
+  toolWin.on('closed', () => { toolWin = null; });
+  return toolWin;
+}
 // 任务窗口：显示所有生成任务的状态与实时日志
 let taskWin = null;
 function createTaskWindow() {
@@ -985,6 +1006,64 @@ async function applyUpdate() {
 // 浏览器侧请求这些路由时，复用与 ipcMain handler 相同的逻辑
 function buildHttpExtraRoutes() {
   return {
+    // ── agent 友好接口（计划 §8.3）：三条均为纯新增，不改动任何现有接口 ──
+    // 读运行日志：任务记录/标记/成片都可能被清除，运行日志是事后唯一证据
+    get_runlog: (args) => {
+      const o = (args && args[0]) || {};
+      if (o.list) return { ok: true, dir: runLog.getDir(), files: runLog.listDays() };
+      return runLog.readDay(o.date, o);
+    },
+    // 一次拿全环境上下文，省去 agent 多次探测
+    get_app_info: () => {
+      const c = loadConfig();
+      const t = (() => { try { return api.listTools(); } catch (e) { return { ok: false, error: String(e && e.message || e) }; } })();
+      const enginesDir = resolveEnginesDir();
+      const ready = (p) => { try { return fs.existsSync(p); } catch (e) { return false; } };
+      return {
+        ok: true,
+        app: 'Video Lab',
+        version: app.getVersion(),
+        form: IS_PORTABLE ? 'portable' : 'installed',
+        autostart: IS_AUTOSTART,
+        storageDir: storageDir(),
+        enginesDir,
+        configPath: configFilePath(),
+        logDir: runLog.getDir(),
+        root: api.getRoot(),
+        skin: c.skin || '',
+        http: { url: httpUrl(), port: parseInt(c.http_port, 10) || 9527 },
+        env: api.checkEnv(),
+        modules: [
+          { id: 'batch', ready: ready(path.join(enginesDir, 'modules', 'batch', 'index.js')) },
+          { id: 'mask', ready: ready(path.join(enginesDir, 'modules', 'mask', 'index.js')) },
+          { id: 'replica', ready: ready(path.join(enginesDir, 'modules', 'replica', 'index.js')) },
+          { id: 'tool', ready: ready(path.join(enginesDir, 'tools', 'module.js')) },
+        ],
+        tools: t && t.ok ? { steps: t.stepCount, engine: t.engine } : { error: (t && t.error) || '不可用' },
+      };
+    },
+    // 接口清单：**由路由表 + preload 自动生成**，新增通道无需登记
+    get_api_index: () => {
+      const info = httpServerInfo || {};
+      const channels = (typeof info.channelIndex === 'function') ? info.channelIndex() : [];
+      let uiChannels = [], events = [];
+      try {
+        const src = fs.readFileSync(path.join(__dirname, 'preload.js'), 'utf8');
+        const si = new Set(), se = new Set();
+        for (const m of src.matchAll(/invoke\('([a-z0-9_]+)'/g)) if (!si.has(m[1])) { si.add(m[1]); uiChannels.push(m[1]); }
+        for (const m of src.matchAll(/ipcRenderer\.on\('([a-z0-9_]+)'/g)) if (!se.has(m[1])) { se.add(m[1]); events.push(m[1]); }
+      } catch (e) {}
+      return {
+        ok: true,
+        http: { url: httpUrl() },
+        count: channels.length,
+        channels,
+        uiChannels: uiChannels.sort(),
+        events: events.sort(),
+        notes: 'POST /api/<channel>，body 为 JSON 数组（参数按序）；需 token（?token= 或 X-Token 头）；返回 {ok, data} 或 {ok:false, error}',
+      };
+    },
+
     get_settings: () => {
       const c = loadConfig();
       return {
@@ -1215,6 +1294,23 @@ function registerIpc() {
     return { ok: true };
   });
   ipcMain.handle('open_task_window', () => { createTaskWindow(); return { ok: true }; });
+  // 视频处理工具（第 4 个模块）：独立窗口 / 步骤 schema / 建任务 / 参数记忆 / 重新执行
+  ipcMain.handle('open_tool_window', () => { createToolWindow(); return { ok: true }; });
+  ipcMain.handle('list_tools', () => api.listTools());
+  ipcMain.handle('run_tool', (e, spec) => api.runTool(spec));
+  ipcMain.handle('get_tool_prefs', () => api.getToolPrefs());
+  ipcMain.handle('save_tool_prefs', (e, prefs) => api.saveToolPrefs(prefs));
+  ipcMain.handle('rerun_tool_task', (e, id) => api.rerunToolTask(id));
+  ipcMain.handle('pick_image', async (e, prev) => {
+    const w = winOf(e) || mainWin;
+    const r = await dialog.showOpenDialog(w || undefined, {
+      title: '选择要叠加的图片',
+      defaultPath: String(prev || '').trim() || api.getRoot(),
+      properties: ['openFile'],
+      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] }],
+    });
+    return (r.canceled || !r.filePaths || !r.filePaths.length) ? '' : r.filePaths[0];
+  });
   // 遮罩叠加（复用主窗口）：任务提交 / 断点续跑 / 项目与素材只读扫描 / 水印文件选择
   ipcMain.handle('run_mask', (e, payload) => api.runMask(payload));
   ipcMain.handle('continue_mask', (e, taskId) => api.continueMask(taskId));
@@ -1250,6 +1346,7 @@ function registerIpc() {
     if (action === 'show_main') showMainWindow();
     else if (action === 'open_tasks') { showMainWindow(); const w = createTaskWindow(); if (w && !w.isDestroyed()) { w.show(); w.focus(); } }
     else if (action === 'open_settings') openSettingsWindow();
+    else if (action === 'open_tools') { const w = createToolWindow(); if (w && !w.isDestroyed()) { w.show(); w.focus(); } }
     else if (action === 'open_browser') {
       const url = httpUrl();
       if (url) { shell.openExternal(url); return { ok: true }; }

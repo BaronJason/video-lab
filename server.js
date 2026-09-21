@@ -69,6 +69,12 @@ const PURE_BACKEND_ROUTES = {
   pause_all_tasks: { m: 'pauseAllTasks', a: () => [] },
   run_mask: { m: 'runMask', a: (args) => [args[0]] },
   continue_mask: { m: 'continueMask', a: (args) => [args[0]] },
+  // 视频处理工具（第 4 个模块）
+  list_tools: { m: 'listTools', a: () => [] },
+  run_tool: { m: 'runTool', a: (args) => [args[0]] },
+  get_tool_prefs: { m: 'getToolPrefs', a: () => [] },
+  save_tool_prefs: { m: 'saveToolPrefs', a: (args) => [args[0]] },
+  rerun_tool_task: { m: 'rerunToolTask', a: (args) => [args[0]] },
   list_mask_projects: { m: 'listMaskProjects', a: () => [] },
   list_mask_videos: { m: 'listMaskVideos', a: (args) => [args[0]] },
   list_mask_masks: { m: 'listMaskMasks', a: (args) => [args[0]] },
@@ -146,6 +152,12 @@ function startHttpServer(opts) {
       const win = getMainWin();
       const defaultPath = String(args[0] || '').trim();
       const result = await dialog.showOpenDialog(win || undefined, { title: '选择水印 PNG', defaultPath, properties: ['openFile'], filters: [{ name: 'PNG 图片', extensions: ['png'] }] });
+      return result.canceled || !result.filePaths || result.filePaths.length === 0 ? '' : result.filePaths[0];
+    },
+    pick_image: async (args) => {
+      const win = getMainWin();
+      const defaultPath = String(args[0] || '').trim() || api.getRoot();
+      const result = await dialog.showOpenDialog(win || undefined, { title: '选择要叠加的图片', defaultPath, properties: ['openFile'], filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] }] });
       return result.canceled || !result.filePaths || result.filePaths.length === 0 ? '' : result.filePaths[0];
     },
     pick_exclude: async () => {
@@ -258,6 +270,7 @@ function startHttpServer(opts) {
     confirm_quit: () => ({ ok: false, error: '浏览器侧不支持' }),
     force_close_settings: () => ({ ok: true }),
     open_task_window: () => { return { ok: false, error: 'browser_redirect', url: '/task' }; },
+    open_tool_window: () => { return { ok: false, error: 'browser_redirect', url: '/tool' }; },
     open_settings_window: () => { return { ok: false, error: 'browser_redirect', url: '/settings' }; },
     start_update: () => ({ ok: false, error: '请在应用本体中完成更新' }),
     apply_update: () => ({ ok: false, error: '请在应用本体中完成更新' }),
@@ -276,6 +289,20 @@ function startHttpServer(opts) {
     if (unsupportedRoutes[channel]) return unsupportedRoutes[channel];
     if (extraRoutes[channel]) return extraRoutes[channel];
     return null;
+  }
+
+  // 可用通道清单：**由各路由表自动生成**（零维护成本）——
+  // 新增通道只需加到某张表里，list_tools/get_api_index 自动可见，不必手工登记。
+  function channelIndex() {
+    const rows = [];
+    const push = (kind, table) => Object.keys(table || {}).forEach((name) => rows.push({ name, kind }));
+    push('backend', PURE_BACKEND_ROUTES);
+    push('dialog', dialogRoutes);
+    push('shell', shellRoutes);
+    push('progress', progressRoutes);
+    push('unsupported', unsupportedRoutes);
+    push('custom', extraRoutes);
+    return rows.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   }
 
   // token 校验
@@ -398,6 +425,10 @@ function startHttpServer(opts) {
       serveStatic(req, res, path.join(FRONTEND_DIR, 'settings.html'));
       return;
     }
+    if (pathname === '/tool' || pathname === '/tool.html') {
+      serveStatic(req, res, path.join(FRONTEND_DIR, 'tool.html'));
+      return;
+    }
     if (pathname === '/guide' || pathname === '/guide.html') {
       serveStatic(req, res, path.join(FRONTEND_DIR, 'guide.html'));
       return;
@@ -501,6 +532,7 @@ function startHttpServer(opts) {
           token: httpToken,
           url: 'http://localhost:' + actualPort + '/?token=' + httpToken,
           broadcastAll,
+          channelIndex,
           close: () => { try { server.close(); } catch (e) {} },
         });
       });

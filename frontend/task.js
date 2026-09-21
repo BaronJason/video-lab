@@ -19,7 +19,7 @@
 
   var STATUS_TEXT = { queued: '排队中', paused: '已暂停', running: '运行中', done: '已完成', error: '失败', stopped: '已停止', interrupted: '已中断' };
   var LOCK_TEXT = { unknown: '', waiting: '等待互斥锁', locked: '已获取锁', released: '' };
-  var TYPE_TEXT = { batch: '批量拼接', replica: '视频复刻', mask: '遮罩叠加' };
+  var TYPE_TEXT = { batch: '批量拼接', replica: '视频复刻', mask: '遮罩叠加', tool: '视频处理' };
 
   // 任务卡片右键菜单（置顶 / 暂停继续 / 打开成片文件夹），样式复用 styles.css 的 .ctx-menu
   // 子菜单策略：hover 展开；离开菜单区延迟 260ms 才关闭，期间移入子菜单即取消关闭（标准 hover 菜单行为）
@@ -454,6 +454,21 @@
     header.querySelector('.task-card__del').addEventListener('click', function (e) {
       e.stopPropagation();
       var cur = card.__task || t;
+      // 视频处理任务：产物即被覆盖的源视频，删除只允许「仅从列表移除」——
+      // 用轻量确认气泡说明清楚，不提供任何会碰文件的选项（计划 §5.3）
+      if (cur.type === 'tool') {
+        confirmPopover({
+          title: '删除任务记录',
+          message: '仅从列表移除，不会删除任何视频文件。\n\n该任务处理过的视频若需要还原，请到备份目录取回。',
+          okLabel: '仅移除记录', danger: true
+        }, e.currentTarget).then(function (ok) {
+          if (!ok) return;
+          call('clear_task', cur.id).then(function (r) {
+            if (!r || !r.ok) toast('删除失败：' + ((r && r.error) || '未知错误'), true);
+          }).catch(function (err) { toast('删除失败：' + err.message, true); });
+        });
+        return;
+      }
       if (cur.status === 'stopped' || cur.status === 'error' || cur.status === 'interrupted') {
         openClearDialog(null, { ids: [cur.id], statuses: ['stopped', 'error', 'interrupted'] });
         return;
@@ -559,7 +574,7 @@
     }
     var tagEl = rec.header.querySelector('.task-card__tag');
     tagEl.textContent = TYPE_TEXT[t.type] || t.type || '';
-    tagEl.className = 'task-card__tag' + ((t.type === 'batch' || t.type === 'replica' || t.type === 'mask') ? ' task-card__tag--' + t.type : '');
+    tagEl.className = 'task-card__tag' + ((t.type === 'batch' || t.type === 'replica' || t.type === 'mask' || t.type === 'tool') ? ' task-card__tag--' + t.type : '');
     var lockText = LOCK_TEXT[t.lockState] || '';
     var lockEl = rec.header.querySelector('.task-card__lock');
     lockEl.textContent = lockText;
@@ -644,6 +659,11 @@
     var rerunBtn = rec.header.querySelector('.task-card__rerun');
     var canRerun = t.status === 'error' || t.status === 'interrupted' || t.status === 'stopped';
     rerunBtn.style.display = (canRerun && state.tab !== 'running') ? '' : 'none';
+    if (t.type === 'tool') {
+      // 工具任务的产物就是被覆盖的源视频，没有第二份副本 —— 只能「重新执行」，绝不删除任何文件
+      rerunBtn.innerHTML = icon('rotate-ccw', 12) + '重新执行';
+      rerunBtn.title = '按相同的参数与步骤重跑一遍，不会删除任何文件';
+    }
     // 继续制作按钮：复刻/批量任务失败、中断、停止且存在失败记录时显示（不删除已成功产物）
     // 批量任务的续跑按「失败成片名的序号」补做，命名前缀/输出目录/拼接日志与首次一致
     var continueBtn = rec.header.querySelector('.task-card__continue');
@@ -666,16 +686,19 @@
     var clipTarget = prog.clipTarget || 0;
     var clip = Math.max(0, prog.clip || 0);
     var groupText = groupCount > 0 ? ' · 分' + groupCount + '组' : '';
+    // 计量单位按任务类型：视频处理任务处理的是"视频文件"，不是"成片"
+    var unit = t.type === 'tool' ? '文件' : '成片';
+    var unitEst = t.type === 'tool' ? '预计文件' : '预计成片';
     if (clipTarget > 0) {
       var pct = Math.max(0, Math.min(clip / clipTarget, 1));
       var curClip = prog.current || 0;
-      rec.progressLabel.textContent = (curClip > 0 ? '成片 ' + curClip + '/' + total : '预计成片 ' + total) + groupText;
+      rec.progressLabel.textContent = (curClip > 0 ? unit + ' ' + curClip + '/' + total : unitEst + ' ' + total) + groupText;
       rec.progressPct.textContent = Math.round(pct * 100) + '%';
       rec.progressFill.style.width = (pct * 100) + '%';
       rec.progressEl.style.display = 'flex';
     } else if (total > 0) {
       var cur = Math.max(0, Math.min(prog.current || 0, total));
-      rec.progressLabel.textContent = (cur > 0 ? '成片 ' + cur + '/' + total : '预计成片 ' + total) + groupText;
+      rec.progressLabel.textContent = (cur > 0 ? unit + ' ' + cur + '/' + total : unitEst + ' ' + total) + groupText;
       rec.progressPct.textContent = Math.round(cur / total * 100) + '%';
       rec.progressFill.style.width = (cur / total * 100) + '%';
       rec.progressEl.style.display = 'flex';
@@ -817,8 +840,10 @@
       if (!t.outDir) { it.disabled = true; it.title = '该任务没有成片文件夹信息'; }
       else { it.disabled = true; it.title = '正在侦测成片文件夹…'; }
       mItems.push(it);
-      // 遮罩任务无配置/日志可定位，不提供「定位」子菜单
-      if (t.type !== 'mask') mItems.push(buildLocateItem(t));
+      // 遮罩任务无配置/日志可定位；视频处理任务没有成片/配置概念 —— 都不提供「定位」子菜单
+      if (t.type !== 'mask' && t.type !== 'tool') mItems.push(buildLocateItem(t));
+      // 视频处理任务：提供「重新执行」（按同样参数重跑，**不删除任何文件**）
+      if (t.type === 'tool') mItems.push({ label: '重新执行', action: function () { confirmRerun(t); } });
       probeOpenable().then(function (ok) {
         if (ok) { it.disabled = false; it.title = ''; }
         else { it.disabled = true; it.title = '成片文件夹不存在'; }
@@ -887,6 +912,19 @@
   }
 
   function confirmRerun(t, anchor) {
+    if (t.type === 'tool') {
+      confirmPopover({
+        title: '重新执行',
+        message: '将按相同的步骤与参数重跑一遍，不会删除任何文件。',
+        okLabel: '重新执行'
+      }, anchor).then(function (ok) {
+        if (!ok) return;
+        call('rerun_tool_task', t.id).then(function (r) {
+          if (!r || !r.ok) toast('重新执行失败：' + ((r && r.error) || '未知错误'), true);
+        }).catch(function (err) { toast('重新执行失败：' + err.message, true); });
+      });
+      return;
+    }
     var msg = '将删除上次的成片与日志、从第 1 个成片重新制作；若只想补做缺失的成片，请改用「继续制作」';
     confirmPopover({ title: '重新开始', message: msg, okLabel: '重新开始', danger: true }, anchor).then(function (ok) {
       if (!ok) return;
@@ -900,6 +938,7 @@
     var list = $('taskList');
     if (!list) return;
     tasks = tasks || [];
+    state.tasks = tasks;   // 留一份快照：清除弹窗要据此判断清单里是否含视频处理任务
     // 顶部三个 tab 计数 + 已停止 tab 报错提醒
     updateTabCounts(tasks);
     // 按当前 tab 过滤出列表内容
@@ -1073,6 +1112,18 @@
       '· 全部清除：连同成片文件夹一并移入回收站';
     var statuses = (opts && opts.statuses) || (isDone ? ['done'] : ['stopped', 'error', 'interrupted']);
     var ids = (opts && opts.ids) || null;
+    // 清单里若含视频处理任务，必须说清楚它的清除语义完全不同：
+    // 工具任务的产物就是被覆盖后的源视频，没有第二份副本 —— 只会移除列表项，一个文件都不会碰
+    var toolN = (state.tasks || []).filter(function (x) {
+      if (x.type !== 'tool') return false;
+      if (ids) return ids.indexOf(x.id) >= 0;
+      if (statuses.indexOf(x.status) < 0) return false;
+      return day ? x.groupDate === day : true;
+    }).length;
+    if (toolN) {
+      msg += '\n\n其中 ' + toolN + ' 个是视频处理任务：这部分**仅移除列表记录，不会删除任何视频文件**'
+        + '（它的产物就是处理后的原视频，需要还原请到备份目录取回）。';
+    }
     if (ids) {
       title = '清除任务';
       msg = '将清除选中的任务记录与成片，请选择清除方式：\n\n' +

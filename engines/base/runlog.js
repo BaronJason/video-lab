@@ -207,5 +207,57 @@ function close() {}
 /** 当前日志目录（供设置页展示与打开） */
 function getDir() { return logDir; }
 
-module.exports = { init, getDir, logEvent, logEventSync, sys, run, del, add, mod, cfg, ipc, err, humanSize, describeFiles,
+/** 列出保留期内的日志文件（新的在前） */
+function listDays() {
+  if (!logDir) return [];
+  const out = [];
+  try {
+    for (const f of fs.readdirSync(logDir)) {
+      const m = /^app-(\d{4}-\d{2}-\d{2})\.log$/.exec(f);
+      if (!m) continue;
+      const full = path.join(logDir, f);
+      let size = 0, mtime = 0;
+      try { const st = fs.statSync(full); size = st.size; mtime = st.mtimeMs; } catch (e) {}
+      out.push({ day: m[1], file: f, size, mtime });
+    }
+  } catch (e) { return []; }
+  return out.sort((a, b) => (a.day < b.day ? 1 : -1));
+}
+
+/**
+ * 读取某日运行日志（排查用；缺省今天）。
+ * 文件可能很大，只保留末尾的窗口：超过 MAX_READ 时从文件尾部读。
+ * @param {string} day `YYYY-MM-DD`，留空取今天
+ * @param {{tail?:number, grep?:string, maxBytes?:number}} opts tail 取末尾若干行；grep 为子串过滤（先过滤再取尾）
+ * @returns {{ok:boolean, day:string, path:string, exists:boolean, size:number, total:number, lines:string[], text:string}}
+ */
+function readDay(day, opts) {
+  const o = opts || {};
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(String(day || '')) ? String(day) : dayOf(new Date());
+  const full = fileOf(d);
+  const base = { ok: true, day: d, path: full, exists: false, size: 0, total: 0, lines: [], text: '' };
+  if (!logDir) return Object.assign(base, { ok: false, error: '日志目录不可用' });
+  let size = 0;
+  try { if (!fs.existsSync(full)) return base; size = fs.statSync(full).size; } catch (e) { return base; }
+  const maxRead = Math.max(64 * 1024, Number(o.maxBytes) || 4 * 1024 * 1024);
+  let text = '';
+  try {
+    const fd = fs.openSync(full, 'r');
+    const start = size > maxRead ? size - maxRead : 0;
+    const buf = Buffer.alloc(size - start);
+    fs.readSync(fd, buf, 0, buf.length, start);
+    fs.closeSync(fd);
+    text = buf.toString('utf8');
+    if (start > 0) text = text.slice(text.indexOf('\n') + 1);   // 丢掉被截断的首行
+  } catch (e) { return Object.assign(base, { ok: false, error: String(e && e.message || e) }); }
+  let lines = text.split(/\r?\n/).filter(Boolean);
+  const total = lines.length;
+  const grep = String(o.grep || '').trim();
+  if (grep) lines = lines.filter((l) => l.indexOf(grep) >= 0);
+  const tail = parseInt(o.tail, 10);
+  if (tail > 0 && lines.length > tail) lines = lines.slice(lines.length - tail);
+  return { ok: true, day: d, path: full, exists: true, size, total, lines, text: lines.join('\n') };
+}
+
+module.exports = { init, getDir, listDays, readDay, logEvent, logEventSync, sys, run, del, add, mod, cfg, ipc, err, humanSize, describeFiles,
   pruneOld, close, scrub, briefArgs, chEvent, isSilentChannel, KEEP_DAYS };

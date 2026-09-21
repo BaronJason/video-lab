@@ -63,6 +63,8 @@ async function processFile(file, steps, opts) {
 
   const info = await probeDetail(file);
   if (!info.probeOk) return { ok: false, reason: '探测失败（非视频或已损坏）', encodes: 0, notes };
+  // 单文件进度分母：任务窗口据此显示「该文件已处理到第几秒」
+  if (o.stats && o.onProgress) o.onProgress({ phase: 'clip-duration', file, seconds: Number(info.duration) || 0 });
 
   // ── ① 分析（需额外分析的步骤）──
   const analyses = {};
@@ -144,13 +146,18 @@ async function processFile(file, steps, opts) {
 
   const tmp = outplan.tempPathFor(finalPath.path);
   const built = chain.build();
-  const head = ['-y', '-hide_banner', '-loglevel', 'error', '-i', file].concat(built.inputArgs || []);
+  // -stats：让 ffmpeg 持续输出帧进度行（frame= / time=），任务窗口据此显示实时进度
+  const head = ['-y', '-hide_banner', '-loglevel', 'error'].concat(o.stats ? ['-stats'] : [])
+    .concat(['-i', file]).concat(built.inputArgs || []);
   const tail = ['-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', tmp];
+  const forward = o.stats && o.onProgress
+    ? (line) => o.onProgress({ phase: 'frame', file, line })
+    : o.onProgress;
 
   /** 一轮编码；返回 {ok, code} */
   const encodeOnce = async (cqNow) => {
     const list = head.concat(built.args).concat(nvencArgs(cqNow)).concat(tail);
-    const r = await runFfmpeg(list, { signal: o.signal, onProgress: o.onProgress });
+    const r = await runFfmpeg(list, { signal: o.signal, onProgress: forward });
     return { ok: r.code === 0, code: r.code };
   };
 
@@ -241,7 +248,10 @@ async function runPipeline(opts) {
     runDir = outplan.resolveRunDir(output.dir, stamp).dir;
   }
 
-  const backupDir = output.backup === false ? '' : outplan.backupDirFor(storageDir, o.toolName || 'misc');
+  // 备份目录：用户指定优先，否则落 storageDir 下（源目录之外，避免备份被当素材再处理）
+  const backupDir = output.backup === false
+    ? ''
+    : (String(output.backupDir || '').trim() || outplan.backupDirFor(storageDir, o.toolName || 'misc'));
 
   const steps = resolveSteps(o.stepIds, o.params);
   const results = { total: files.length, ok: 0, failed: 0, skipped: 0, encodes: 0, items: [] };
@@ -254,6 +264,7 @@ async function runPipeline(opts) {
       const r = await processFile(f, steps, {
         mode: output.mode,
         signal: o.signal,
+        stats: o.stats === true,
         onProgress: o.onProgress,
         backupDir,
         destPath: (src) => {

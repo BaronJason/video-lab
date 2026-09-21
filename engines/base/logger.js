@@ -27,6 +27,16 @@ class Logger {
   total(n) { this.raw('共 ' + n + ' 个'); }
   progress(kind, cur, total) { this.raw(`${kind}第 ${cur} / ${total} 个成片`); }
 
+  // 视频处理工具：与成片任务共用同一套进度解析（backend 两种措辞都认），
+  // 但措辞如实描述工具的场景 —— 工具处理的是"视频文件"，不是"成片"
+  toolProgress(cur, total) { this.raw(`处理第 ${cur} / ${total} 个视频`); }
+
+  // 单文件进度分母（字段语义与成片相同：驱动前端单条进度条）
+  fileDuration(sec) {
+    const v = Math.round(Number(sec) * 100) / 100;
+    this.raw('当前文件时长: ' + String(v) + ' 秒');
+  }
+
   // 创建输出目录：标记 batchOutDir（batch 专属，供 marker 记录）
   outDir(p) { this.raw('✅ 创建输出目录：' + p); }
 

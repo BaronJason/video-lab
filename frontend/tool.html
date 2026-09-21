@@ -68,44 +68,47 @@
     .tl-note { margin-bottom: 8px; padding: 8px 10px; border-radius: var(--radius-6);
                background: var(--status-error-surface-l1); color: var(--status-error-default); font-size: var(--body-sm-font-size); line-height: 1.5; }
 
-    /* ── 步骤分组 ── */
-    .tl-group { margin-bottom: 8px; border: 1px solid var(--border-neutral-l1); border-radius: var(--radius-8); overflow: hidden; }
+    /* ── 步骤分组（框体）：默认全部展开 ── */
+    .tl-group { margin-bottom: 6px; border: 1px solid var(--border-neutral-l1); border-radius: var(--radius-8); overflow: hidden; }
     .tl-group__head {
-      display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer; user-select: none;
+      display: flex; align-items: center; gap: 6px; padding: 6px 10px; cursor: pointer; user-select: none;
       background: var(--bg-base-secondary); font-size: var(--body-sm-font-size); font-weight: var(--font-weight-strong); color: var(--text-default);
     }
     .tl-group__head:hover { background: var(--bg-overlay-l1); }
     .tl-group__arrow { display: inline-flex; transition: transform .15s ease; color: var(--text-tertiary); }
     .tl-group--open .tl-group__arrow { transform: rotate(90deg); }
     .tl-group__count { margin-left: auto; font-size: var(--body-xs-font-size); font-weight: var(--font-weight-default); color: var(--text-tertiary); }
-    .tl-group__body { display: none; padding: 2px 0; }
+    .tl-group__body { display: none; padding: 0; }
     .tl-group--open .tl-group__body { display: block; }
 
-    /* ── 单步 ── */
+    /* ── 单步（折叠项）：默认**不勾选且折叠**，勾选后自动展开 ── */
     .tl-step { border-top: 1px solid var(--border-neutral-l1); }
     .tl-step:first-child { border-top: none; }
-    .tl-step__head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer; user-select: none; }
+    .tl-step__head { display: flex; align-items: center; gap: 6px; padding: 5px 10px; cursor: pointer; user-select: none; }
     .tl-step__head:hover { background: var(--bg-overlay-l1); }
-    .tl-step__title { font-size: var(--body-sm-font-size); color: var(--text-default); }
+    .tl-step__arrow { display: inline-flex; color: var(--text-tertiary); transition: transform .15s ease; -webkit-app-region: no-drag; }
+    .tl-step--open .tl-step__arrow { transform: rotate(90deg); }
+    .tl-step__title { font-size: var(--body-sm-font-size); color: var(--text-default); white-space: nowrap; }
     .tl-step__flag { flex-shrink: 0; padding: 0 6px; height: 15px; line-height: 15px; border-radius: 8px;
                     font-size: 10px; background: color-mix(in srgb, var(--status-warning-default) 18%, transparent); color: var(--status-warning-default); }
-    .tl-step__pending { margin-left: auto; font-size: var(--body-xs-font-size); color: var(--text-tertiary); }
-    .tl-params { display: flex; flex-wrap: wrap; gap: 8px 14px; padding: 0 10px 10px 32px; }
-    .tl-step:not(.tl-step--on) .tl-params { opacity: .45; pointer-events: none; }
-    .tl-field { display: flex; flex-direction: column; gap: 3px; min-width: 120px; }
-    .tl-field__label { font-size: var(--body-xs-font-size); color: var(--text-secondary); }
-    .tl-field__hint { font-size: 10px; color: var(--text-tertiary); line-height: 1.4; max-width: 260px; }
+    /* 参数区：一行一个参数（标签 + 输入 + 说明并排），尽量压缩纵向高度 */
+    .tl-params { display: none; flex-wrap: wrap; align-items: center; gap: 4px 16px; padding: 2px 10px 8px 30px; }
+    .tl-step--open .tl-params { display: flex; }
+    .tl-step:not(.tl-step--on) .tl-params { opacity: .5; pointer-events: none; }
+    .tl-field { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .tl-field__label { font-size: var(--body-xs-font-size); color: var(--text-secondary); white-space: nowrap; }
+    .tl-field__hint { font-size: 10px; color: var(--text-tertiary); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .tl-field__row { display: flex; align-items: center; gap: 6px; }
     .tl-num, .tl-sel, .tl-path {
-      height: 26px; padding: 0 6px; border-radius: var(--radius-6);
+      height: 25px; padding: 0 6px; border-radius: var(--radius-6);
       border: 1px solid var(--border-neutral-l2); background: var(--bg-input-default); color: var(--text-default);
       font-family: var(--font-family-default); font-size: var(--body-sm-font-size);
     }
-    .tl-num { width: 96px; }
-    .tl-sel { min-width: 110px; }
-    .tl-path { flex: 1; min-width: 140px; }
+    .tl-num { width: 84px; }
+    .tl-sel { min-width: 104px; }
+    .tl-path { min-width: 180px; max-width: 320px; }
     .tl-mini {
-      height: 26px; padding: 0 8px; border-radius: var(--radius-6); border: 1px solid var(--border-neutral-l2);
+      height: 25px; padding: 0 8px; border-radius: var(--radius-6); border: 1px solid var(--border-neutral-l2);
       background: transparent; color: var(--text-secondary); cursor: pointer; font-size: var(--body-xs-font-size);
       font-family: var(--font-family-default);
     }

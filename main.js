@@ -431,17 +431,18 @@ async function showTrayMenu() {
 let toolWin = null;
 function createToolWindow() {
   if (toolWin && !toolWin.isDestroyed()) { toolWin.focus(); return toolWin; }
+  // 尺寸=主窗口（1360×860）同比例缩小到 0.75：1020×645 —— 一眼看出是同一套界面的小窗
   toolWin = new BrowserWindow({
-    title: 'Video Lab - 视频处理', width: 720, height: 720, minWidth: 620, minHeight: 520,
+    title: 'Video Lab - 视频处理', width: 1020, height: 645, minWidth: 760, minHeight: 520,
     resizable: true, frame: false,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false },
   });
   if (mainWin && !mainWin.isDestroyed()) {
     const pb = mainWin.getBounds();
     const wa = screen.getDisplayNearestPoint({ x: Math.round(pb.x + pb.width / 2), y: Math.round(pb.y + pb.height / 2) }).workArea;
-    const x = Math.max(wa.x, Math.round(pb.x + (pb.width - 720) / 2));
-    const y = Math.max(wa.y, Math.round(pb.y + (pb.height - 720) / 2));
-    toolWin.setPosition(Math.min(x, wa.x + wa.width - 720), Math.min(y, wa.y + wa.height - 720));
+    const x = Math.max(wa.x, Math.round(pb.x + (pb.width - 1020) / 2));
+    const y = Math.max(wa.y, Math.round(pb.y + (pb.height - 645) / 2));
+    toolWin.setPosition(Math.min(x, wa.x + wa.width - 1020), Math.min(y, wa.y + wa.height - 645));
   }
   toolWin.loadFile(path.join(__dirname, 'frontend', 'tool.html'));
   toolWin.on('closed', () => { toolWin = null; });

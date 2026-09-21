@@ -1434,9 +1434,9 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  /* 品牌区里除标题外还有两个入口按钮（配置管理 / 视频处理，各 88px + 8px 间距），
-     整体右移一半宽度，使**标题本身**保持视觉居中 */
-  transform: translateX(calc(-50% + 96px));
+  /* 品牌区里除标题外还有一个入口按钮（配置管理，88px + 8px 间距），
+     整体右移一半宽度，使**标题本身**保持视觉居中（视频处理入口在最左角，不参与此处计算） */
+  transform: translateX(calc(-50% + 48px));
 }
 .win-titlebar__mode { width: 88px; justify-content: flex-start; }
 [data-main-titlebar] .win-titlebar__title {
@@ -1491,6 +1491,14 @@ body {
   transition: background 0.12s ease, color 0.12s ease;
 }
 .win-titlebar__mode:hover { background: var(--bg-overlay-l2); color: var(--text-default); }
+/* 主窗口最左上角的独立入口（视频处理）：宽度随内容，不占品牌区的 88px 补偿位 */
+.win-titlebar__entry {
+  position: relative;
+  z-index: 1;          /* 品牌区是 absolute，确保入口在其之上可点击 */
+  width: auto;
+  margin-left: 4px;
+  -webkit-app-region: no-drag;
+}
 .win-titlebar__mode i,
 .win-titlebar__mode svg { color: var(--brand-500); }
 .win-titlebar__mode-label { white-space: nowrap; max-width: 76px; overflow: hidden; text-overflow: ellipsis; }

@@ -69,10 +69,11 @@
   }
 
   // ── 表单渲染 ──
+  // 单个字段：标签 + 输入 + 说明**并排一行**（纵向空间优先给内容，不堆成上下两行）
   function paramField(stepId, sc) {
     var v = state.values[stepId][sc.key];
     var label = '<span class="tl-field__label">' + esc(sc.label || sc.key) + '</span>';
-    var hint = sc.hint ? '<span class="tl-field__hint">' + esc(sc.hint) + '</span>' : '';
+    var hint = sc.hint ? '<span class="tl-field__hint" title="' + esc(sc.hint) + '">' + esc(sc.hint) + '</span>' : '';
     var input = '';
     var type = String(sc.type || 'text');
     if (type === 'number') {
@@ -97,18 +98,20 @@
     return '<label class="tl-field">' + label + input + hint + '</label>';
   }
 
+  // 步骤默认**不勾选且折叠**；勾选后自动展开（「勾选了再展开」）
   function stepNode(step) {
     var on = !!state.sel[step.id];
     var div = document.createElement('div');
-    div.className = 'tl-step' + (on ? ' tl-step--on' : '');
+    div.className = 'tl-step' + (on ? ' tl-step--on tl-step--open' : '');
     div.setAttribute('data-step-id', step.id);
     var params = (step.schema || []).map(function (sc) { return paramField(step.id, sc); }).join('');
     div.innerHTML = '<div class="tl-step__head">'
       + '<input type="checkbox" data-check="' + step.id + '"' + (on ? ' checked' : '') + '>'
+      + '<span class="tl-step__arrow" data-fold="' + step.id + '" title="展开/收起参数">' + iconEl('chevron-right', 13) + '</span>'
       + '<span class="tl-step__title">' + esc(step.title || step.id) + '</span>'
       + (step.danger === 'lossy' ? '<span class="tl-step__flag">会丢内容</span>' : '')
       + '</div>'
-      + '<div class="tl-params">' + (params || '<span class="tl-field__hint">无需参数</span>') + '</div>';
+      + '<div class="tl-params">' + (params || '<span class="tl-field__hint">无需参数（勾选即可生效）</span>') + '</div>';
     return div;
   }
 
@@ -136,14 +139,38 @@
   }
 
   // ── 参数收集与回填 ──
+  // 勾选状态的**唯一入口**：点标题行与点复选框都走这里。
+  // ★ 不能靠「派发不指定 bubbles 的 change 事件」—— 那种事件不冒泡，
+  //   委托在容器上的 change 收不到，就会出现「勾上了但参数还是灰的」（实测踩到）。
+  function setStepOn(sid, on) {
+    state.sel[sid] = !!on;
+    var node = $('stepGroups').querySelector('[data-step-id="' + sid + '"]');
+    if (node) {
+      node.classList.toggle('tl-step--on', !!on);
+      // 勾选即展开、取消即收起 —— 参数区只在需要时出现
+      node.classList.toggle('tl-step--open', !!on);
+    }
+    var cb = node && node.querySelector('input[data-check]');
+    if (cb) cb.checked = !!on;
+  }
+
+  /** 手动展开/收起（不改勾选状态） */
+  function toggleStepOpen(sid) {
+    var node = $('stepGroups').querySelector('[data-step-id="' + sid + '"]');
+    if (node) node.classList.toggle('tl-step--open');
+  }
+
   function bindFormEvents() {
     var host = $('stepGroups');
     host.addEventListener('click', function (e) {
+      // 折叠箭头：只展开/收起，不改勾选
+      var arrow = e.target.closest('[data-fold]');
+      if (arrow) { toggleStepOpen(arrow.getAttribute('data-fold')); return; }
       var head = e.target.closest('.tl-step__head');
       if (head) {
-        // 点标题行 = 切换勾选（复选框本身也会触发 change，这里只处理空白区点击）
+        // 点标题行（复选框以外的区域）= 切换勾选；点复选框本身由原生 change 处理
         var cb = head.querySelector('input[data-check]');
-        if (e.target !== cb) { cb.checked = !cb.checked; cb.dispatchEvent(new Event('change')); }
+        if (e.target !== cb) setStepOn(cb.getAttribute('data-check'), !cb.checked);
         return;
       }
       var pick = e.target.closest('button[data-pick]');
@@ -160,12 +187,7 @@
       var t = e.target;
       if (!t || !t.getAttribute) return;
       var sid = t.getAttribute('data-check');
-      if (sid) {
-        state.sel[sid] = !!t.checked;
-        var node = host.querySelector('[data-step-id="' + sid + '"]');
-        if (node) node.classList.toggle('tl-step--on', !!t.checked);
-        return;
-      }
+      if (sid) { setStepOn(sid, !!t.checked); return; }
       var step = t.getAttribute('data-step');
       var key = t.getAttribute('data-key');
       if (!step || !key) return;
@@ -406,8 +428,22 @@
     });
   }
 
+  // ── 皮肤跟随（与任务窗口同一套：读当前皮肤 + 设置页切换时即时生效）──
+  function initSkin() {
+    if (!api || !api.get_skin) return;
+    api.get_skin().then(function (skin) {
+      document.documentElement.setAttribute('data-skin', skin || 'white_blue');
+    }).catch(function () {});
+    if (api.on_settings_saved) {
+      api.on_settings_saved(function (cfg) {
+        if (cfg && cfg.skin) document.documentElement.setAttribute('data-skin', cfg.skin);
+      });
+    }
+  }
+
   // ── 启动 ──
   function boot() {
+    initSkin();
     if (window.VL_hydrateIcons) window.VL_hydrateIcons(document);
     $('inRecursive').checked = state.recursive;
     renderInputHint();

@@ -207,7 +207,8 @@
     open_settings_window: function () { openEmbeddedModal('/settings', 680, 640); return Promise.resolve({ ok: true }); },
     // 视频处理工具窗口：本体是独立非模态窗口，浏览器侧同样弹独立 popup（可并排、非模态）
     open_tool_window: function () {
-      var w = 720, h = 720;
+      // 与本体同尺寸（主窗口 1360×860 的同比例缩小）
+      var w = 1020, h = 645;
       var L = Math.max(0, Math.round((window.screen.availWidth - w) / 2));
       var T = Math.max(0, Math.round((window.screen.availHeight - h) / 2));
       var uv = '/tool?token=' + encodeURIComponent(token);

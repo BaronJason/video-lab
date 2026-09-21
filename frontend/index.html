@@ -27,13 +27,14 @@
 <body>
   <!-- 自制标题栏（frame:false）；data-main-titlebar 标记主窗口，仅此处使用品牌字体 -->
   <div class="win-titlebar" id="winTitlebar" data-main-titlebar>
+    <!-- 视频处理工具入口：固定在**窗口最左上角**（品牌区之外，不参与居中计算） -->
+    <button class="win-titlebar__mode win-titlebar__entry" id="winToolToggle" title="视频处理工具（对已有视频做后处理：去黑屏 / 变速 / 转分辨率 / 叠加图片 …）">
+      <i data-icon="video" data-size="13"></i><span class="win-titlebar__mode-label">视频处理</span>
+    </button>
     <div class="win-titlebar__brand">
       <span class="win-titlebar__title">Video Lab</span>
       <button class="win-titlebar__mode" id="winModeToggle" title="切换 配置管理 / 遮罩叠加 模式">
         <i data-icon="layers" data-size="13"></i><span class="win-titlebar__mode-label" id="winModeLabel">配置管理</span>
-      </button>
-      <button class="win-titlebar__mode" id="winToolToggle" title="视频处理工具（对已有视频做后处理：去黑屏 / 变速 / 转分辨率 / 叠加图片 …）">
-        <i data-icon="video" data-size="13"></i><span class="win-titlebar__mode-label">视频处理</span>
       </button>
     </div>
     <div class="win-titlebar__controls">

@@ -2,7 +2,7 @@
 // 装饰主窗口：角色舞台（宫殿背景 + 左右双女仆立绘）+ 侧栏 chibi/垂饰。
 // 尺寸随侧栏宽度联动（CSSOM 写回 CSS 变量）；选中配置投影到
 // body[data-maid-chat-active]，驱动女仆从大尺寸收缩到左右下角；
-// 搜索框让位时装饰淡出。dispose() 完整还原现场。
+// 搜索时女仆保持显示（不做让位）。dispose() 完整还原现场。
 // 设计要点（沿用母本）：
 //  - 尺寸写入独立 <style> 的 CSSStyleRule（CSSOM），而非 body inline style，
 //    避免逐帧 attr mutation 触发页面其它 MutationObserver（无抖动节流）
@@ -179,28 +179,7 @@
     var initRect = sidebar.getBoundingClientRect();
     if (initRect.width > 0) applyWidth(initRect.width);
 
-    // ── 搜索框：聚焦或有内容时折叠装饰让位，空态未聚焦时展开展示 ──
-    var search = doc.getElementById('searchInput');
-    var focusFrame = null;
-    function fenceFocus() {
-      if (focusFrame !== null) cancelAnimationFrame(focusFrame);
-      focusFrame = requestAnimationFrame(setSearchState);
-    }
-    function setSearchState() {
-      focusFrame = null;
-      if (!search) return;
-      // 仅当搜索框有实际内容时装饰让位；单纯聚焦/点击不清场——避免「点击搜索框女仆就淡出」
-      var collapsed = search.value.trim() !== '';
-      if (collapsed && doc.body.dataset.maidSearchCollapsed === undefined) doc.body.dataset.maidSearchCollapsed = '';
-      else if (!collapsed && doc.body.dataset.maidSearchCollapsed !== undefined) delete doc.body.dataset.maidSearchCollapsed;
-    }
-    if (search) {
-      search.addEventListener('input', setSearchState);
-      search.addEventListener('focus', fenceFocus);
-      search.addEventListener('blur', fenceFocus);
-      search.addEventListener('click', fenceFocus);
-      setSearchState();
-    }
+    // 无「搜索让位」机制：女仆/装饰在点击与输入搜索时均保持显示（用户定案 2026-09-21）
 
     // ── dispose：移除本皮肤所有装饰元素、投影属性与监听，完整还原 ──
     return function dispose() {
@@ -210,15 +189,7 @@
       if (holder && holder.parentNode === doc.head) doc.head.removeChild(holder);
       if (ro && typeof ro.disconnect === 'function') ro.disconnect();
       if (activeObserver && typeof activeObserver.disconnect === 'function') activeObserver.disconnect();
-      if (search) {
-        search.removeEventListener('input', setSearchState);
-        search.removeEventListener('focus', fenceFocus);
-        search.removeEventListener('blur', fenceFocus);
-        search.removeEventListener('click', fenceFocus);
-      }
-      if (focusFrame !== null) cancelAnimationFrame(focusFrame);
       delete doc.body.dataset.maidSidebarSize;
-      delete doc.body.dataset.maidSearchCollapsed;
       delete doc.body.dataset.maidChatActive;
     };
   }
@@ -232,7 +203,6 @@
     var holder = doc.querySelector('[data-skin-chrome="maid-width-rule"]');
     if (holder && holder.parentNode === doc.head) doc.head.removeChild(holder);
     delete doc.body.dataset.maidSidebarSize;
-    delete doc.body.dataset.maidSearchCollapsed;
     delete doc.body.dataset.maidChatActive;
   }
 

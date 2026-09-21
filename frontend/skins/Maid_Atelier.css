@@ -1467,7 +1467,7 @@ html[data-skin="Maid_Atelier"] body[data-maid-chat-active] .config-bar {
 /* ═══════════════════════════════════════════════════════════════
    行为层装饰（由 Maid_Atelier.js 注入，dispose 时完整移除）
    sidebar-mascot / sidebar-corners / footer 已在上方「侧栏分层」块
-   定义（完全照搬母本）；搜索框让位时装饰淡出在此处补充。
+   定义（完全照搬母本）。
    ═══════════════════════════════════════════════════════════════ */
 
 /* 超窄侧栏（rail）：装饰收窄，避免溢出 */
@@ -1564,12 +1564,6 @@ html[data-skin="Maid_Atelier"] body[data-maid-chat-active] [data-maid-character=
   html[data-skin="Maid_Atelier"] body[data-maid-chat-active] [data-maid-character="right"] {
     height: 44%;
   }
-}
-
-/* 搜索框让位时立绘一并淡出，保持界面整洁 */
-html[data-skin="Maid_Atelier"] body[data-maid-search-collapsed] [data-maid-character] {
-  opacity: 0;
-  transition: opacity 300ms ease;
 }
 
 /* ═══════════════════════════════════════════════════════════════

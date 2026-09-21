@@ -486,7 +486,9 @@
         sortedTxts(proj.txts).forEach(function (txt) {
           var isActive = (proj.name === state.activeProject && txt.name === state.activeTxt);
           var matched = !state.searchQuery || txt.name.toLowerCase().indexOf(state.searchQuery.toLowerCase()) >= 0;
-          if (!matched) return;
+          // 当前选中（正在编辑）的配置在任何搜索词下都保留渲染并保持高亮：
+          // 若被搜索过滤移除，皮肤 chat-active 状态投影会误删 → 底部配置栏滑出消失
+          if (!matched && !isActive) return;
           // 名称排序按首字母分组、时间排序按月份分组：每个组的首个配置前插入分组标签行（含首组）；
           // 复刻虚拟项目的固定子项不参与分组
           if (!isReplica) {

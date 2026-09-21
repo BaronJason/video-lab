@@ -189,7 +189,8 @@
     function setSearchState() {
       focusFrame = null;
       if (!search) return;
-      var collapsed = search.value.trim() !== '' || doc.activeElement === search;
+      // 仅当搜索框有实际内容时装饰让位；单纯聚焦/点击不清场——避免「点击搜索框女仆就淡出」
+      var collapsed = search.value.trim() !== '';
       if (collapsed && doc.body.dataset.maidSearchCollapsed === undefined) doc.body.dataset.maidSearchCollapsed = '';
       else if (!collapsed && doc.body.dataset.maidSearchCollapsed !== undefined) delete doc.body.dataset.maidSearchCollapsed;
     }

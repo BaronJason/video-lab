@@ -443,6 +443,20 @@ function openSettingsWindow() {
   // 浏览器端自身打开内嵌模态时会自行添加遮罩，不需要这里广播（否则浏览器网页也会被遮罩）
   if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('settings_window_opened');
   settingsWin = new BrowserWindow({ title: 'Video Lab - 设置', width: 680, height: 640, resizable: false, maximizable: false, minimizable: false, parent: mainWin, frame: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
+  // 打开即相对主窗口几何居中：子窗口默认落点常偏右/偏下，手动定位并钳制到所在显示器工作区，
+  // 主窗口贴显示器边缘时设置窗口也不会跑出屏幕
+  if (mainWin && !mainWin.isDestroyed()) {
+    const pb = mainWin.getBounds();
+    const cx = Math.round(pb.x + pb.width / 2);
+    const cy = Math.round(pb.y + pb.height / 2);
+    const wa = screen.getDisplayNearestPoint({ x: cx, y: cy }).workArea;
+    const x = Math.max(wa.x, Math.round(pb.x + (pb.width - 680) / 2));
+    const y = Math.max(wa.y, Math.round(pb.y + (pb.height - 640) / 2));
+    settingsWin.setPosition(
+      Math.min(x, wa.x + wa.width - 680),
+      Math.min(y, wa.y + wa.height - 640)
+    );
+  }
   settingsWin.loadFile(path.join(__dirname, 'frontend', 'settings.html'));
   settingsWin.on('blur', handleSettingsBlur);
   // 关闭按钮/X：有未保存修改时拦截，通知设置页在关闭按钮上方弹「取消/确认退出」二级菜单（应用退出路径不受此限制）

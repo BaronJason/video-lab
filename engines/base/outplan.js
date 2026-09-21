@@ -1,0 +1,127 @@
+// 输出落点规则（工具共用）
+//
+// 依据：开发相关文档\视频处理工具入口-实施计划.md §六、§13.3、§14.3
+//
+// 三条硬规则：
+//   1. 覆盖原文件 → 临时文件写完后替换（见 caller；本模块只给路径）
+//   2. 输出到指定目录 → **空目录直接输出**；**已有文件则新建子文件夹**
+//   3. 落点必须在**开始处理前判定一次并记住** —— 处理中反复判定会导致
+//      第一个文件落盘后目录变非空，后续文件被判进另一个子目录（同一批输出被拆散）
+//
+// 另：备份目录默认落在 storageDir 下（**源目录之外**）—— 若落在扫描根内，
+// 下次运行会把备份当素材再处理，逐次增生。
+'use strict';
+
+const path = require('node:path');
+const fs = require('node:fs');
+
+const MODE_OVERWRITE = 'overwrite';   // 覆盖原视频
+const MODE_DIRECTORY = 'directory';   // 输出到指定目录
+
+const OUT_SUBDIR_PREFIX = '输出-';    // 新建子目录名前缀（后接时间戳）
+
+/** 目录是否为空（不存在 / 不可读 一律视为空） */
+function isEmptyDir(dir) {
+  try {
+    if (!dir || !fs.existsSync(dir)) return true;
+    return fs.readdirSync(dir).length === 0;
+  } catch (e) {
+    return true;
+  }
+}
+
+/** 唯一子目录名：重名则追加 -2 / -3 …（最多尝试 999 次） */
+function uniqueSubdir(parent, base) {
+  let cand = path.join(parent, base);
+  if (!fs.existsSync(cand)) return cand;
+  for (let i = 2; i <= 999; i++) {
+    cand = path.join(parent, base + '-' + i);
+    if (!fs.existsSync(cand)) return cand;
+  }
+  return path.join(parent, base + '-' + Date.now());
+}
+
+/**
+ * 判定本次运行的输出根目录 —— **必须在开始处理前调用一次**，之后全程复用其返回值。
+ * @param {string} targetDir 用户指定的目标目录
+ * @param {string} stamp     时间戳串，如 `0921-1130`（用于新建子目录命名）
+ * @returns {{dir:string, created:boolean, reason:string}}
+ */
+function resolveRunDir(targetDir, stamp) {
+  const dir = String(targetDir || '').trim();
+  if (!dir) return { dir: '', created: false, reason: '未指定目标目录' };
+  if (isEmptyDir(dir)) return { dir, created: false, reason: '目标目录为空，直接输出到该目录' };
+  const sub = uniqueSubdir(dir, OUT_SUBDIR_PREFIX + String(stamp || ''));
+  try {
+    fs.mkdirSync(sub, { recursive: true });
+  } catch (e) {
+    return { dir, created: false, reason: '创建子目录失败，回退为直接输出：' + e.message };
+  }
+  return { dir: sub, created: true, reason: '目标目录已有文件，已新建子目录' };
+}
+
+/** 备份目录：storageDir 下（**源目录之外**），按 工具/日期 分层 */
+function backupDirFor(storageDir, toolName, dateStr) {
+  const parts = [String(storageDir || ''), 'backup', 'tool', String(toolName || 'misc')];
+  if (dateStr) parts.push(String(dateStr));
+  return path.join.apply(path, parts);
+}
+
+/**
+ * 计算单个文件的输出路径。
+ * @param {string} outDir   已判定的输出根目录
+ * @param {string} srcPath  源文件全路径
+ * @param {{nameMode?:string, suffix?:string, onConflict?:string}} opts
+ *        nameMode: 'keep' | 'suffix'      onConflict: 'index' | 'overwrite' | 'skip'
+ */
+function targetPath(outDir, srcPath, opts) {
+  const o = opts || {};
+  const base = path.basename(srcPath);
+  const ext = path.extname(base);
+  const stem = base.slice(0, base.length - ext.length);
+  const nameMode = o.nameMode === 'suffix' ? 'suffix' : 'keep';
+  const suffix = nameMode === 'suffix' ? String(o.suffix == null ? '_proc' : o.suffix) : '';
+  const onConflict = ['overwrite', 'skip'].indexOf(o.onConflict) >= 0 ? o.onConflict : 'index';
+
+  let candidate = path.join(outDir, stem + suffix + ext);
+  if (onConflict === 'overwrite' || !fs.existsSync(candidate)) {
+    return { path: candidate, skip: false, conflict: false };
+  }
+  if (onConflict === 'skip') {
+    return { path: candidate, skip: true, conflict: true };
+  }
+  for (let i = 2; i <= 999; i++) {
+    candidate = path.join(outDir, stem + suffix + '-' + i + ext);
+    if (!fs.existsSync(candidate)) return { path: candidate, skip: false, conflict: true };
+  }
+  candidate = path.join(outDir, stem + suffix + '-' + Date.now() + ext);
+  return { path: candidate, skip: false, conflict: true };
+}
+
+/** 临时文件路径（同目录，成功后替换；ffmpeg 不允许输入输出同一文件） */
+function tempPathFor(finalPath) {
+  return finalPath + '.vl-tmp' + path.extname(finalPath);
+}
+
+/**
+ * 扫描阶段应排除的目录名 —— 备份/预览等应用自管产物**绝不能**被当素材再处理。
+ * @param {string} storageDir 数据根
+ * @param {string} scanRoot   被扫描的根
+ */
+function excludedFromScan(storageDir, scanRoot) {
+  const names = new Set(['backup', 'tool-spec', 'preview']);
+  const out = [];
+  const sd = String(storageDir || '');
+  const sr = String(scanRoot || '');
+  // 只有当 storageDir 落在 scanRoot 之内时，才需要显式排除（否则本就不在扫描范围）
+  if (sd && sr && path.resolve(sd).toLowerCase().indexOf(path.resolve(sr).toLowerCase()) === 0) {
+    names.forEach((n) => out.push(path.join(sd, n)));
+  }
+  return out;
+}
+
+module.exports = {
+  MODE_OVERWRITE, MODE_DIRECTORY,
+  isEmptyDir, resolveRunDir, uniqueSubdir,
+  backupDirFor, targetPath, tempPathFor, excludedFromScan,
+};

@@ -301,7 +301,7 @@ async function runPipeline(opts) {
   }
 
   // 备份目录：用户指定优先，否则落 storageDir 下（源目录之外，避免备份被当素材再处理）
-  const backupDir = output.backup === false
+  const backupDir = output.backup === true  // 处理前备份默认**不启用**（显式勾选才开启）
     ? ''
     : (String(output.backupDir || '').trim() || outplan.backupDirFor(storageDir, o.toolName || 'misc'));
 

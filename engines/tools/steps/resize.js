@@ -24,11 +24,11 @@ module.exports = {
   schema: [
     { key: 'ratio', label: '画面比例', type: 'select', default: '9:16',
       options: ['9:16', '16:9', '4:3', '3:4', '1:1', '自定义'],
-      hint: '选常用比例后，改宽/高会按比例自动联动；点锁链解绑可自由设定' },
+      hint: '选比例后宽高自动匹配；「自定义」自由填' },
     { key: 'width', label: '宽', type: 'number', default: 1080, min: 16, step: 2,
-      hint: '输出画面宽度（像素）' },
+      hint: '画面宽度（像素）' },
     { key: 'height', label: '高', type: 'number', default: 1920, min: 16, step: 2,
-      hint: '输出画面高度（像素）' },
+      hint: '画面高度（像素）' },
   ],
 
   decide(info, params) {

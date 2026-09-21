@@ -19,7 +19,7 @@ module.exports = {
   danger: '',
   schema: [
     { key: 'both', label: '同时倒放音频', type: 'bool', default: true,
-      hint: '关闭则只倒放画面，音频仍按原顺序播放（多数场景应保持开启）' },
+      hint: '关闭后只倒画面，声音照常（一般开着）' },
   ],
 
   decide(info, params) {

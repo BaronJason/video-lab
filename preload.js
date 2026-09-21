@@ -104,6 +104,7 @@ contextBridge.exposeInMainWorld('txapi', {
   list_tools: () => invoke('list_tools'),
   run_tool: (spec) => invoke('run_tool', spec),
   rerun_tool_task: (id) => invoke('rerun_tool_task', id),
+  list_dir: (dir) => invoke('list_dir', dir),
   pick_image: (prev) => invoke('pick_image', prev),
   // agent 友好接口：运行日志 / 环境上下文 / 接口清单
   get_runlog: (opts) => invoke('get_runlog', opts),

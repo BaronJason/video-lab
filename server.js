@@ -73,6 +73,7 @@ const PURE_BACKEND_ROUTES = {
   list_tools: { m: 'listTools', a: () => [] },
   run_tool: { m: 'runTool', a: (args) => [args[0]] },
   rerun_tool_task: { m: 'rerunToolTask', a: (args) => [args[0]] },
+  list_dir: { m: 'listDir', a: (args) => [args[0]] },
   list_mask_projects: { m: 'listMaskProjects', a: () => [] },
   list_mask_videos: { m: 'listMaskVideos', a: (args) => [args[0]] },
   list_mask_masks: { m: 'listMaskMasks', a: (args) => [args[0]] },

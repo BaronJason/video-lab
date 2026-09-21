@@ -229,7 +229,7 @@ async function run(ctx, env = process.env) {
     for (let i = 0; i < total; i++) {
       const j = jobs[i];
       const idx = i + 1;
-      logger.raw('='.repeat(46));
+      logger.raw('-'.repeat(48));   // 与 batch 同款片头分隔线（统一任务日志格式）
       logger.info('');
       logger.info(`生成第 ${idx} / ${total} 个成片：${j.outName}`);
 

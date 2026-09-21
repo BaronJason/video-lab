@@ -87,6 +87,56 @@
     const a = RESIZE_RATIOS[state.values.resize.ratio] || [9, 16];
     return even((h * a[0]) / a[1]);
   }
+  /**
+   * 字段当前是否显示：schema 可声明 showWhen: { key, in } ——
+   * 依赖的其它参数不满足条件时**直接不渲染**（而不是置灰）。
+   * 例：码率控制的 CQ 只在「恒定质量」模式下出现（用户定案 2026-09-21）。
+   */
+  function fieldVisible(stepId, sc) {
+    var w = sc.showWhen;
+    if (!w) return true;
+    var v = state.values[stepId] ? state.values[stepId][w.key] : undefined;
+    return w.in.indexOf(v) >= 0;
+  }
+
+  /** 重新渲染某步骤的参数区（模式切换导致显隐变化时调用；值以 state 为准不丢失） */
+  function rerenderStepParams(stepId) {
+    var node = $('stepGroups').querySelector('[data-step-id="' + stepId + '"]');
+    if (!node) return;
+    var body = node.querySelector('.tl-params');
+    var step = null;
+    (state.info.steps || []).forEach(function (x) { if (x.id === stepId) step = x; });
+    if (!body || !step) return;
+    var html = (stepId === 'resize') ? resizeFieldsHtml()
+      : (step.schema || []).filter(function (sc) { return fieldVisible(stepId, sc); })
+        .map(function (sc) { return paramField(stepId, sc); }).join('');
+    body.innerHTML = html || '<span class="tl-field__hint">无需参数（勾选即可生效）</span>';
+    if (window.VL_hydrateIcons) window.VL_hydrateIcons(body);
+    refreshResizeLink();
+  }
+
+  /**
+   * 解绑状态下，按当前宽高**反推**比例下拉的显示。
+   * 匹配判定**严格相等**（交叉相乘的整数比较，无任何容差）：
+   * 1080×1920 = 9:16，但 1081×1920 就是「自定义」（用户定案 2026-09-21）。
+   */
+  function syncResizeRatioDisplay() {
+    if (resizeLinked()) return;                     // 锁定时下拉由用户选择，不反推
+    var w = parseInt(state.values.resize.width, 10);
+    var h = parseInt(state.values.resize.height, 10);
+    if (!(w > 0) || !(h > 0)) return;
+    var match = '自定义';
+    for (var k in RESIZE_RATIOS) {
+      var a = RESIZE_RATIOS[k][0], b = RESIZE_RATIOS[k][1];
+      if (w * b === h * a) { match = k; break; }    // 交叉相乘相等才算该比例
+    }
+    if (state.values.resize.ratio !== match) {
+      state.values.resize.ratio = match;
+      var sel = $('stepGroups').querySelector('select[data-step="resize"][data-key="ratio"]');
+      if (sel) sel.value = match;
+    }
+  }
+
   /** 刷新锁链按钮的视觉状态（锁定 = 主题色竖链；解绑 = 灰链） */
   function refreshResizeLink() {
     var btn = $('stepGroups').querySelector('[data-link="resize"]');
@@ -108,9 +158,10 @@
       + '<select class="tl-sel" data-step="resize" data-key="ratio">' + opts + '</select>'
       + '<span class="tl-field__hint" title="选常用比例后，改宽/高会按比例自动联动；点锁链解绑可自由设定">'
       + '改宽/高按比例联动</span></label>'
-      + '<button type="button" class="tl-link" data-link="resize">' + icon('link', 13) + '</button>'
       + '<label class="tl-field"><span class="tl-field__label">宽</span>'
       + '<input class="tl-num" type="number" data-step="resize" data-key="width" value="' + esc(v.width) + '" min="16" step="2"></label>'
+      + '<button type="button" class="tl-link" data-link="resize" title="比例锁">'
+      + icon('link', 13) + '</button>'
       + '<label class="tl-field"><span class="tl-field__label">高</span>'
       + '<input class="tl-num" type="number" data-step="resize" data-key="height" value="' + esc(v.height) + '" min="16" step="2"></label>';
   }
@@ -151,7 +202,8 @@
     div.className = 'tl-step' + (on ? ' tl-step--on tl-step--open' : '');
     div.setAttribute('data-step-id', step.id);
     var params = (step.id === 'resize') ? resizeFieldsHtml()
-      : (step.schema || []).map(function (sc) { return paramField(step.id, sc); }).join('');
+      : (step.schema || []).filter(function (sc) { return fieldVisible(step.id, sc); })
+        .map(function (sc) { return paramField(step.id, sc); }).join('');
     div.innerHTML = '<div class="tl-step__head">'
       + '<input type="checkbox" data-check="' + step.id + '"' + (on ? ' checked' : '') + '>'
       + '<span class="tl-step__arrow" data-fold="' + step.id + '" title="展开/收起参数">' + iconEl('chevron-right', 13) + '</span>'
@@ -222,6 +274,8 @@
           // 重新锁定：以当前宽为基准按比例校正高
           var w = parseInt(state.values.resize.width, 10);
           if (w > 0) { state.values.resize.height = resizePairByWidth(w); syncResizeInputs(); }
+        } else {
+          syncResizeRatioDisplay();
         }
         refreshResizeLink();
         return;
@@ -252,6 +306,13 @@
       var key = t.getAttribute('data-key');
       if (!step || !key) return;
       state.values[step][key] = t.getAttribute('data-bool') ? !!t.checked : t.value;
+      // 该字段是显隐条件的依赖键 → 重渲染参数区（模式切换后只显示生效中的参数）
+      var changed = null;
+      (state.info.steps || []).forEach(function (x) { if (x.id === step) changed = x; });
+      var dep = changed && (changed.schema || []).some(function (sc) {
+        return sc.showWhen && sc.showWhen.key === key;
+      });
+      if (dep) rerenderStepParams(step);
       // 比例下拉变化：选「自定义」即解绑；选常用比例即锁定并按当前宽校正高
       if (step === 'resize' && key === 'ratio') {
         state.link.resize = state.values.resize.ratio !== '自定义';
@@ -279,16 +340,103 @@
       if (!step || !key || t.getAttribute('data-bool')) return;
       state.values[step][key] = t.value;
       // 锁链开启：改宽联动高 / 改高联动宽
-      if (step === 'resize' && resizeLinked() && (key === 'width' || key === 'height')) {
+      if (step === 'resize' && (key === 'width' || key === 'height')) {
         var v = parseInt(t.value, 10);
         if (v > 0) {
-          var otherKey = key === 'width' ? 'height' : 'width';
-          state.values.resize[otherKey] = key === 'width' ? resizePairByWidth(v) : resizePairByHeight(v);
-          var other = $('stepGroups').querySelector('input[data-step="resize"][data-key="' + otherKey + '"]');
-          if (other) other.value = state.values.resize[otherKey];
+          if (resizeLinked()) {
+            // 锁链开启：改宽联动高 / 改高联动宽
+            var otherKey = key === 'width' ? 'height' : 'width';
+            state.values.resize[otherKey] = key === 'width' ? resizePairByWidth(v) : resizePairByHeight(v);
+            var other = $('stepGroups').querySelector('input[data-step="resize"][data-key="' + otherKey + '"]');
+            if (other) other.value = state.values.resize[otherKey];
+          } else {
+            // 锁链解绑：宽高独立，但比例显示要跟上实际宽高
+            syncResizeRatioDisplay();
+          }
         }
       }
     });
+  }
+
+  // ── Web 目录选择器 ──
+  // 浏览器端没有本机文件对话框；系统对话框依赖本体窗口的前台状态（焦点在浏览器时
+  // 会被压在后面，看起来像「点了没反应」）。改为页面内自绘选择器：
+  // list_dir 只读目录名/文件名，桌面端与浏览器端体验一致。
+  function pickDirDialog(opts) {
+    var BS = '\\';                                 // 路径分隔符
+    var cur = String(opts.initial || '').trim();
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    var card = document.createElement('div');
+    card.className = 'modal-card modal-card--wide tl-browser';
+    card.innerHTML = '<button type="button" class="modal-close" title="关闭">✕</button>'
+      + '<div class="modal__title">' + esc(opts.title || '选择文件夹') + '</div>'
+      + '<div class="tl-browser__bar">'
+      + '<input class="tl-text tl-browser__path" value="' + esc(cur) + '">'
+      + '<button type="button" class="tl-btn" data-b="go">转到</button>'
+      + '<button type="button" class="tl-btn" data-b="up">上一级</button>'
+      + '</div>'
+      + '<div class="tl-browser__list"><div class="tl-browser__empty">读取中…</div></div>'
+      + '<div class="modal__actions">'
+      + '<button type="button" class="modal-btn" data-b="cancel">取消</button>'
+      + '<button type="button" class="modal-btn modal-btn--primary" data-b="ok">选择此目录</button>'
+      + '</div>';
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+
+    var pathInput = card.querySelector('.tl-browser__path');
+    var listEl = card.querySelector('.tl-browser__list');
+    var closed = false;
+    function close() { closed = true; overlay.remove(); }
+
+    function load(p) {
+      if (closed) return;
+      listEl.innerHTML = '<div class="tl-browser__empty">读取中…</div>';
+      api.list_dir(p).then(function (r) {
+        if (closed) return;
+        if (!r || !r.ok) {
+          listEl.innerHTML = '<div class="tl-browser__empty">' + esc((r && r.error) || '读取失败') + '</div>';
+          return;
+        }
+        cur = r.path;
+        pathInput.value = cur;
+        var html = '';
+        if (r.parent) html += '<button type="button" class="tl-browser__item" data-dir="' + esc(r.parent) + '">'
+          + '上一级：' + esc(r.parent) + '</button>';
+        if (!r.dirs.length && !r.files.length) html += '<div class="tl-browser__empty">（空文件夹）</div>';
+        r.dirs.forEach(function (d) {
+          html += '<button type="button" class="tl-browser__item" data-dir="' + esc(r.path + '\\' + d) + '">'
+            + esc(d) + '</button>';
+        });
+        (r.files || []).forEach(function (f) {
+          html += '<span class="tl-browser__item tl-browser__item--file">' + esc(f) + '</span>';
+        });
+        listEl.innerHTML = html;
+      }).catch(function (e) {
+        if (!closed) listEl.innerHTML = '<div class="tl-browser__empty">' + esc((e && e.message) || e) + '</div>';
+      });
+    }
+
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay) { close(); return; }
+      var el = e.target.closest('[data-b]');
+      if (el) {
+        var b = el.getAttribute('data-b');
+        if (b === 'cancel') close();
+        else if (b === 'ok') { var v = cur; close(); if (opts.onPick) opts.onPick(v); }
+        else if (b === 'go') load(pathInput.value);
+        else if (b === 'up') {
+          // 上一级：去掉末段；已在盘根（如 C:\）则保持不变
+          var idx = cur.lastIndexOf(BS);
+          var upPath = (idx > 0) ? (idx <= 3 ? cur.slice(0, idx + 1) : cur.slice(0, idx)) : cur;
+          load(upPath);
+        }
+        return;
+      }
+      var dirBtn = e.target.closest('[data-dir]');
+      if (dirBtn) load(dirBtn.getAttribute('data-dir'));
+    });
+    load(cur);
   }
 
   // ── 输入 / 输出区 ──
@@ -323,10 +471,12 @@
     $('outMode').addEventListener('change', syncOutputRows);
     $('outBackup').addEventListener('change', syncOutputRows);
     $('btnPickDir').addEventListener('click', function () {
-      if (!api || !api.pick_paths_dirs) return;
-      api.pick_paths_dirs().then(function (list) {
-        if (list && list.length) { state.root = list[0]; state.files = []; $('inRoot').value = list[0]; renderInputHint(); }
-      }).catch(function () {});
+      if (!api || !api.list_dir) { setStatus('后端不支持目录浏览，请直接粘贴路径', 'err'); return; }
+      pickDirDialog({
+        title: '选择要处理的文件夹',
+        initial: state.root || '',
+        onPick: function (p) { state.root = p; state.files = []; $('inRoot').value = p; renderInputHint(); },
+      });
     });
     $('btnPickFiles').addEventListener('click', function () {
       if (!api || !api.pick_paths_files) return;
@@ -338,25 +488,40 @@
       state.root = ''; state.files = []; $('inRoot').value = ''; renderInputHint();
     });
     // 手填目录路径：**浏览器端**没有本机文件对话框可用（只能由本体代弹），
-    // 因此路径栏必须可直接输入 —— 粘贴/手输后立即生效
+    // 因此路径栏必须可直接输入 —— 粘贴/手输后立即生效，并给出存在性反馈
+    var _rootTimer = null;
     $('inRoot').addEventListener('input', function () {
       var v = String($('inRoot').value || '').trim().replace(/^"|"$/g, '');
       state.files = [];
       state.root = v;
       renderInputHint();
+      clearTimeout(_rootTimer);
+      if (!v) { setStatus('请选择目录，或直接粘贴路径'); return; }
+      _rootTimer = setTimeout(function () {
+        if (!api || !api.check_exists) return;
+        api.check_exists([v]).then(function (m) {
+          if (String($('inRoot').value || '').trim() !== v) return;   // 已改成别的路径
+          if (m && m[v]) setStatus('目录有效：' + v);
+          else setStatus('目录不存在：' + v, 'err');
+        }).catch(function () {});
+      }, 400);
     });
     $('inRecursive').addEventListener('change', function () { state.recursive = !!$('inRecursive').checked; renderInputHint(); });
     $('btnPickOutDir').addEventListener('click', function () {
-      if (!api || !api.pick_directory) return;
-      api.pick_directory('选择输出目录', $('outDir').value || state.root || '').then(function (p) {
-        if (p) $('outDir').value = p;
-      }).catch(function () {});
+      if (!api || !api.list_dir) { setStatus('后端不支持目录浏览，请直接粘贴路径', 'err'); return; }
+      pickDirDialog({
+        title: '选择输出目录',
+        initial: $('outDir').value || state.root || '',
+        onPick: function (p) { $('outDir').value = p; },
+      });
     });
     $('btnPickBackupDir').addEventListener('click', function () {
-      if (!api || !api.pick_directory) return;
-      api.pick_directory('选择备份目录', $('outBackupDir').value || '').then(function (p) {
-        if (p) $('outBackupDir').value = p;
-      }).catch(function () {});
+      if (!api || !api.list_dir) { setStatus('后端不支持目录浏览，请直接粘贴路径', 'err'); return; }
+      pickDirDialog({
+        title: '选择备份目录',
+        initial: $('outBackupDir').value || '',
+        onPick: function (p) { $('outBackupDir').value = p; },
+      });
     });
     $('logHead').addEventListener('click', function () { $('logBox').classList.toggle('tl-log--open'); });
     $('btnRun').addEventListener('click', onSubmit);
@@ -377,8 +542,12 @@
     var params = {};
     stepIds.forEach(function (id) {
       var src = state.values[id] || {};
+      var schemaOf = null;
+      (state.info.steps || []).forEach(function (x) { if (x.id === id) schemaOf = x.schema || []; });
+      var visible = {};
+      schemaOf.forEach(function (sc) { if (fieldVisible(id, sc)) visible[sc.key] = 1; });
       var dst = {};
-      Object.keys(src).forEach(function (k) { dst[k] = coerce(src[k]); });
+      Object.keys(src).forEach(function (k) { if (visible[k]) dst[k] = coerce(src[k]); });
       params[id] = dst;
     });
     return {
@@ -548,7 +717,7 @@
         // ★ 就绪即启用主操作按钮 —— 参数不完整时交给点击后的校验去提示，
         //   否则按钮一直灰着，用户不知道为什么不能点
         setRunEnabled(true, '');
-        setStatus('就绪 · 共 ' + n + ' 项可组合能力');
+        setStatus('就绪 —— 选好目录、勾选要做的处理后点「开始处理」');
       }
     }).catch(function (e) {
       setRunEnabled(false, '读取处理能力失败');

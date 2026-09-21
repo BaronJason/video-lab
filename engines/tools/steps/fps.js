@@ -15,7 +15,7 @@ module.exports = {
   danger: '',
   schema: [
     { key: 'fps', label: '目标帧率', type: 'number', default: 30, min: 1, max: 240, step: 1,
-      hint: '常见 24 / 25 / 30 / 60' },
+      hint: '每秒帧数：越小文件越小、画面越不流畅（常见 30 / 60）' },
   ],
 
   decide(info, params) {

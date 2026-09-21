@@ -2374,6 +2374,7 @@ class Api {
         progress: t.progress || { current: 0, total: 0 }, failReason: t.failReason || '',
         createdAt: t.createdAt, endedAt: t.endedAt, outDir: t.outDir || '',
         groupDate: typeof t.groupDate === 'string' ? t.groupDate : '', // 业务归属日（前端排序用，不展示）
+        softPaused: t._softPaused === true,   // 软暂停待续任务（继续时按类型补缺片/接续）
         // 任务总用时（秒）：首次开始至今的墙钟时间；已结束任务取结束时间
         elapsedSec: taskElapsed(t),
         // 计划序号：排队任务=队列第几位；暂停任务=冻结的显示顺位；显示与恢复插队都以此为准
@@ -3270,6 +3271,16 @@ class Api {
     const t = this.tasks.get(id);
     if (!t) return { ok: false, error: '任务不存在' };
     if (t.status !== 'paused') return { ok: false, error: '任务未处于暂停状态' };
+    // ★ 软暂停恢复按类型分流（用户定案 2026-09-21：参数/分组/去重/计数必须原样保留）：
+    //   batch / replica → 走 continueReplica 的「补缺片」构造（已完成片从任务标记反推，
+    //     以 ONLY_NAMES 只补剩余，env 全量复用 —— 分组/提交时刻/命名与首次一致）；
+    //   mask → 直接重新入队（引擎对已存在成片有 skip 幂等检测，天然续跑）；
+    //   恢复后必须清软暂停标志，否则下一个成片完成时会被再次终止（暂停死循环）。
+    if (t._softPaused && (t.type === 'batch' || t.type === 'replica')) {
+      return this.continueReplica(id);
+    }
+    delete t._softPause;
+    delete t._softPaused;
     // 按暂停时的显示顺位插队（0-based）：前方任务数 + 1 位置；
     // 队列已不足（前方任务陆续完成后缩短）时排在队尾，即成为下一个执行任务
     const idx = typeof t.resumeIdx === 'number' ? t.resumeIdx : Math.max(0, (t.planPos || 1) - 1);
@@ -3413,7 +3424,15 @@ class Api {
           task.endedAt = Date.now();
           // 结算对账（复刻）：脚本内单条失败会 continue 并置 HasError → 退出码 1；
           // 若 exit 0 但存在失败记录（异常场景），也归为 error 并提示续跑，避免误判为全部成功
-          let status = task._stopRequested ? 'stopped' : (code === 0 ? 'done' : 'error');
+          // 软暂停：当前成片已完成、引擎被主动终止 —— 状态归为 paused（非停止/失败），
+          // 恢复顺位提到 1 号（resumeIdx=1），用户点「继续任务」即从剩余部分接续
+          let status = task._softPaused ? 'paused' : (task._stopRequested ? 'stopped' : (code === 0 ? 'done' : 'error'));
+          if (task._softPaused) {
+            task.endedAt = null;
+            task.failReason = '';
+            task.resumeIdx = 1;
+            task.log.push('[软暂停生效] 当前成片已完成并保留，任务转入暂停队列第 1 位；点击「继续任务」接续]');
+          }
           if (code === 0 && Array.isArray(task.failedVideos) && task.failedVideos.length && (task.type === 'replica' || task.type === 'mask' || task.type === 'batch')) {
             status = 'error';
             task.failReason = '存在失败成片，可点击「继续制作」续跑';
@@ -3830,6 +3849,39 @@ class Api {
   }
 
   /**
+   * 浏览器端的目录浏览：列出某目录下的子目录与文件名。
+   * 供工具窗口的 Web 路径选择器使用 —— 浏览器侧没有本机文件对话框，
+   * 系统对话框又依赖本体窗口的前台状态（焦点在浏览器时会被压在后面）。
+   * 只读目录名与文件名，不读文件内容。
+   */
+  listDir(dir) {
+    const target = String(dir || '').trim() ? path.resolve(String(dir).trim()) : path.resolve(this.root || '');
+    if (!target) return { ok: false, error: '缺少路径' };
+    let st = null;
+    try { st = fs.statSync(target); } catch (e) { return { ok: false, error: '路径不存在：' + target }; }
+    if (!st.isDirectory()) return { ok: false, error: '不是目录：' + target };
+    const dirs = [], files = [];
+    try {
+      for (const e of fs.readdirSync(target, { withFileTypes: true })) {
+        if (e.name.startsWith('.')) continue;
+        if (e.isDirectory()) dirs.push(e.name);
+        else if (e.isFile()) files.push(e.name);
+      }
+    } catch (e) {
+      return { ok: false, error: '无法读取目录：' + ((e && e.message) || e) };
+    }
+    const zh = (a, b) => a.localeCompare(b, 'zh-Hans-CN');
+    const up = path.dirname(target);
+    return {
+      ok: true,
+      path: target,
+      parent: up === target ? '' : up,      // 盘符根没有上级
+      dirs: dirs.sort(zh),
+      files: files.sort(zh).slice(0, 200),  // 只读名字辅助定位，大目录截断
+    };
+  }
+
+  /**
    * 创建工具任务。
    * @param {{root?:string, recursive?:boolean, files?:string[], stepIds:string[],
    *   params?:Object, output?:Object}} spec
@@ -3871,7 +3923,7 @@ class Api {
       nameMode: out.nameMode === 'suffix' ? 'suffix' : 'keep',
       suffix: String(out.suffix == null ? '_处理' : out.suffix),
       onConflict: ['overwrite', 'skip'].indexOf(out.onConflict) >= 0 ? out.onConflict : 'index',
-      backup: out.backup !== false,
+      backup: out.backup === true,
       backupDir: String(out.backupDir || '').trim() ? path.resolve(String(out.backupDir).trim()) : '',
     };
 
@@ -3978,7 +4030,10 @@ class Api {
   continueReplica(id) {
     const t = this.tasks.get(id);
     if (!t) return { ok: false, error: '任务不存在' };
-    if (t.status !== 'error' && t.status !== 'interrupted' && t.status !== 'stopped') return { ok: false, error: '仅失败/中断/停止的任务可继续制作' };
+    const softPaused = t._softPaused === true && t.status === 'paused';
+    if (!softPaused && t.status !== 'error' && t.status !== 'interrupted' && t.status !== 'stopped') {
+      return { ok: false, error: '仅失败/中断/停止的任务可继续制作' };
+    }
     // 续跑入口（replica / batch 共用；mask 走 continueMask）：
     // batch 的成片名含日期前缀、输出目录含提交时刻，故续跑必须复用原环境变量（尤其 BATCH_SUBMIT_TS），
     // 否则续跑产物会落到新日期目录、名字前缀也变，无法与首次归为同一批

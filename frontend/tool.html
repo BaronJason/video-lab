@@ -29,7 +29,7 @@
            background: var(--bg-base-default); color: var(--text-default); font-family: var(--font-family-default); }
 
     /* ── 输入区（两 Tab 之外：目录与递归）── */
-    .tl-input { flex-shrink: 0; padding: 10px 14px; border-bottom: 1px solid var(--border-neutral-l1); background: var(--bg-base-secondary); }
+    .tl-input { flex-shrink: 0; padding: 10px 14px; border-bottom: 1px solid var(--border-neutral-l1); background: var(--bg-base-default); }
     .tl-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .tl-label { flex-shrink: 0; font-size: var(--body-sm-font-size); color: var(--text-secondary); }
     .tl-text {
@@ -52,7 +52,7 @@
     .tl-hint--warn { color: var(--status-warning-default); }
 
     /* ── Tab ── */
-    .tl-tabs { flex-shrink: 0; display: flex; gap: 8px; padding: 8px 14px 0; border-bottom: 1px solid var(--border-neutral-l1); }
+    .tl-tabs { flex-shrink: 0; display: flex; gap: 8px; padding: 8px 14px 0; border-bottom: 1px solid var(--border-neutral-l1); background: var(--bg-base-default); }
     .tl-tab {
       display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px;
       border: 1px solid transparent; border-bottom: none; border-radius: var(--radius-6) var(--radius-6) 0 0;
@@ -72,9 +72,9 @@
     .tl-group { margin-bottom: 6px; border: 1px solid var(--border-neutral-l1); border-radius: var(--radius-8); overflow: hidden; }
     .tl-group__head {
       display: flex; align-items: center; gap: 6px; padding: 6px 10px; cursor: pointer; user-select: none;
-      background: var(--bg-base-secondary); font-size: var(--body-sm-font-size); font-weight: var(--font-weight-strong); color: var(--text-default);
+      background: var(--bg-overlay-l1); font-size: var(--body-sm-font-size); font-weight: var(--font-weight-strong); color: var(--text-default);
     }
-    .tl-group__head:hover { background: var(--bg-overlay-l1); }
+    .tl-group__head:hover { background: var(--bg-overlay-l2); }
     .tl-group__arrow { display: inline-flex; transition: transform .15s ease; color: var(--text-tertiary); }
     .tl-group--open .tl-group__arrow { transform: rotate(90deg); }
     .tl-group__count { margin-left: auto; font-size: var(--body-xs-font-size); font-weight: var(--font-weight-default); color: var(--text-tertiary); }
@@ -128,7 +128,7 @@
 
     /* ── 输出设置 ── */
     .tl-out { margin-top: 12px; border: 1px solid var(--border-neutral-l1); border-radius: var(--radius-8); }
-    .tl-out__head { padding: 8px 10px; background: var(--bg-base-secondary); border-bottom: 1px solid var(--border-neutral-l1);
+    .tl-out__head { padding: 8px 10px; background: var(--bg-overlay-l1); border-bottom: 1px solid var(--border-neutral-l1);
                     font-size: var(--body-sm-font-size); font-weight: var(--font-weight-strong); }
     .tl-out__body { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
     .tl-out__row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -137,7 +137,7 @@
 
     /* ── 底部 ── */
     .tl-footer { flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: 8px 14px;
-                 border-top: 1px solid var(--border-neutral-l1); background: var(--bg-base-secondary); }
+                 border-top: 1px solid var(--border-neutral-l1); background: var(--bg-base-default); }
     .tl-status { flex: 1; min-width: 0; font-size: var(--body-sm-font-size); color: var(--text-secondary);
                  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .tl-status--err { color: var(--status-error-default); }
@@ -155,7 +155,7 @@
     .tl-log { margin-top: 10px; border: 1px solid var(--border-neutral-l1); border-radius: var(--radius-8); overflow: hidden; }
     .tl-log[hidden] { display: none; }
     .tl-log__head { display: flex; align-items: center; gap: 8px; padding: 7px 10px; cursor: pointer; user-select: none;
-                    background: var(--bg-base-secondary); font-size: var(--body-sm-font-size); }
+                    background: var(--bg-overlay-l1); font-size: var(--body-sm-font-size); }
     .tl-log__body { display: none; max-height: 190px; overflow-y: auto; padding: 8px 10px;
                     font-family: var(--font-family-mono); font-size: 11px; line-height: 1.6; color: var(--text-secondary); white-space: pre-wrap; word-break: break-all; }
     .tl-log--open .tl-log__body { display: block; }
@@ -245,7 +245,7 @@
         </div>
         <div class="tl-sep"></div>
         <div class="tl-out__row">
-          <label class="tl-check"><input type="checkbox" id="outBackup" checked>处理前备份原文件</label>
+          <label class="tl-check"><input type="checkbox" id="outBackup">处理前备份原文件</label>
           <input class="tl-text" id="outBackupDir" placeholder="备份目录（留空 = 应用数据目录下）" style="max-width:320px">
           <button class="tl-btn" id="btnPickBackupDir"><i data-icon="folder-open" data-size="14"></i>选择</button>
         </div>

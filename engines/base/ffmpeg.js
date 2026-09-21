@@ -34,6 +34,7 @@ function runFfmpeg(args, { onProgress, signal, cwd, env, binary = 'ffmpeg', capt
     });
     let stderr = '';
     let stdout = '';
+    let _errLine = '';   // stderr 跨 chunk 行缓冲：进程管道按缓冲区分块，stats 行可能被从中间切开
     child.stdout && child.stdout.on('data', (buf) => {
       if (!captureStdout) return;
       stdout += buf.toString('utf8');
@@ -41,9 +42,22 @@ function runFfmpeg(args, { onProgress, signal, cwd, env, binary = 'ffmpeg', capt
     child.stderr && child.stderr.on('data', (buf) => {
       const text = buf.toString('utf8');
       stderr += text;
-      for (const line of text.split(/\r?\n/)) {
+      // ★ 必须跨 chunk 缓冲：`-stats` 的进度行是 `frame=...\rframe=...\r...` 的回车刷新流，
+      //   网络管道按缓冲区切块会把 `frame=` 从中间切断（实测切成 `e= 468 fps=...`），
+      //   残段漏进任务日志就是用户看到的"格式不统一"。攒齐完整行再处理。
+      _errLine += text;
+      const lines = _errLine.split(/\r?\n/);
+      _errLine = lines.pop() || '';            // 尾段不完整，留待下个 chunk 拼合
+      for (const line of lines) {
         if (!line) continue;
-        if (/frame\s*=|time\s*=/.test(line)) onProgress && onProgress(line);
+        // 一条日志行内可能含多个 \r 覆盖段，逐段转发
+        for (const seg of line.split('\r')) {
+          if (!seg) continue;
+          // 行首锚定的 stats 段（与 backend 的折叠正则同一口径，残段不再外漏）
+          if (/^\s*(frame|fps|q|size|time|bitrate|dup|drop|speed|elapsed)\s*=/.test(seg)) {
+            onProgress && onProgress(seg);
+          }
+        }
       }
     });
     child.on('error', (err) => resolve({ code: -1, stderr, stdout, error: err.message }));

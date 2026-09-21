@@ -21,7 +21,7 @@ module.exports = {
   schema: [
     { key: 'mode', label: '方式', type: 'select', default: '顺时针90°',
       options: Object.keys(MODES),
-      hint: '旋转 90° / 270° 会交换宽高' },
+      hint: '转 90° 时画面宽高会对调' },
   ],
 
   decide(info, params, analysis) {

@@ -20,9 +20,10 @@ module.exports = {
   schema: [
     { key: 'mode', label: '方式', type: 'select', default: '音量调整',
       options: ['音量调整', '静音'],
-      hint: '静音会保留音轨但音量置零（不是删除音轨）' },
+      hint: '静音 = 声音变 0，音轨保留' },
     { key: 'volume', label: '音量倍数', type: 'number', default: 1, min: 0, max: 8, step: 0.05,
-      hint: '1 = 原音量；1.5 = 放大 50%；0.5 = 减半' },
+      hint: '大于 1 放大、小于 1 变小（默认 1）',
+      showWhen: { key: 'mode', in: ['音量调整'] } },
   ],
 
   decide(info, params) {

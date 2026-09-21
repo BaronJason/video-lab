@@ -221,6 +221,7 @@
     list_tools: function () { return invoke('list_tools', []); },
     run_tool: function (spec) { return invokeArgs('run_tool', spec); },
     rerun_tool_task: function (id) { return invokeArgs('rerun_tool_task', id); },
+    list_dir: function (dir) { return invokeArgs('list_dir', dir); },
     pick_image: function (prev) { return invokeArgs('pick_image', prev); },
     get_runlog: function (opts) { return invokeArgs('get_runlog', opts); },
     get_app_info: function () { return invoke('get_app_info', []); },

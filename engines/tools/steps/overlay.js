@@ -5,8 +5,15 @@
 //   （原脚本用 txt 选片只是从批量拼接脚本继承下来的历史形态 —— 用户定案：
 //     它本质上只是"额外叠加一张图片"，见计划 §1.4）
 //
-// 透明度用 `colorchannelmixer=aa=<alpha>`（与遮罩模块同一手法，计划 §附录 B）——
-// 不另找办法，避免"叠加 + 透明度"两处实现不一致。
+// ★ **分辨率双向对齐**（用户定案 2026-09-21，默认开启）：
+//   叠加前先把图片 `scale=<视频宽>:<视频高>` 缩放到与视频同宽高，宽高双向对齐 ——
+//   图片尺寸与视频不一致时不再只盖住一角或被裁掉。
+//
+// ★ **透明通道保留**：
+//   · 缩放链显式 `format=rgba`，防止格式协商丢掉 PNG 的 alpha
+//   · 不透明度用 `colorchannelmixer=aa=<alpha>`（与遮罩模块同一手法，计划 §附录 B）
+//   · 主视频链末尾的 `format=yuv420p` 兜底只作用于视频流；图片流在 overlay 内混合，
+//     半透明效果不受影响
 //
 // ★ 单张图片作为输入即可：overlay 默认 repeatlast=1，会把最后（唯一）一帧持续贴上，
 //   不需要 `-loop 1`（后者会引入无界帧流，反而要配 -shortest）。
@@ -28,13 +35,15 @@ module.exports = {
   danger: '',
   schema: [
     { key: 'image', label: '图片路径', type: 'file', default: '', fileTypes: ['png', 'jpg', 'jpeg', 'webp', 'bmp'],
-      hint: '要叠加到画面上的图片（多为 PNG，建议尺寸与视频一致）' },
+      hint: '要盖在画面上的图片（开启对齐时任意尺寸都行）' },
     { key: 'x', label: '横向位置', type: 'number', default: 0,
-      hint: '左上角为 0；支持负数（图片宽度内偏移）' },
+      hint: '横向位置，0 = 最左' },
     { key: 'y', label: '纵向位置', type: 'number', default: 0,
-      hint: '左上角为 0' },
+      hint: '纵向位置，0 = 最顶' },
     { key: 'alpha', label: '不透明度', type: 'number', default: 1, min: 0, max: 1, step: 0.05,
-      hint: '1 = 完全不透明；叠加半透明图片时用' },
+      hint: '越小越透明（0~1，默认 1）' },
+    { key: 'align', label: '双向对齐', type: 'bool', default: true,
+      hint: '先把图片缩放到与视频同宽高再叠（关 = 按图片原尺寸贴）' },
   ],
 
   decide(info, params) {
@@ -44,13 +53,20 @@ module.exports = {
     const ext = path.extname(p).toLowerCase();
     if (!IMG_EXTS.has(ext)) return { skip: true, reason: '不支持的图片格式：' + ext };
     const alpha = Math.max(0, Math.min(1, num(params.alpha, 1)));
+    const align = params.align !== false;      // 默认开启双向对齐
+    const W = Number(info.width) || 0;
+    const H = Number(info.height) || 0;
+    if (align && !(W > 0 && H > 0)) return { skip: true, reason: '无法读取视频分辨率，无法对齐，跳过' };
     return {
       image: p,
       x: Math.round(num(params.x, 0)),
       y: Math.round(num(params.y, 0)),
       alpha,
+      align,
+      alignTo: align ? [W, H] : null,
       note: '叠加 ' + path.basename(p) + ' 于 ' + Math.round(num(params.x, 0)) + ':' + Math.round(num(params.y, 0))
-        + (alpha < 1 ? ('（不透明度 ' + alpha + '）') : ''),
+        + (align ? ('（已对齐到 ' + W + '×' + H + '）') : '（按图片原尺寸）')
+        + (alpha < 1 ? ('，不透明度 ' + alpha) : ''),
     };
   },
 
@@ -61,11 +77,19 @@ module.exports = {
     const pos = d.x + ':' + d.y;
     const alpha = Number(d.alpha);
     chain.afterVideo((tail, out) => {
-      if (!(alpha >= 0) || alpha >= 0.999) {
-        return '[' + tail + '][' + idx + ':v]overlay=' + pos + '[' + out + ']';
+      var wm = 'wm' + idx;
+      var pre = '';
+      if (d.align && Array.isArray(d.alignTo)) {
+        // 双向对齐：宽高都缩放到视频尺寸；format=rgba 保住透明通道
+        pre = 'scale=' + d.alignTo[0] + ':' + d.alignTo[1] + ',format=rgba';
+        if (alpha >= 0 && alpha < 0.999) pre += ',colorchannelmixer=aa=' + alpha;
+        return '[' + idx + ':v]' + pre + '[' + wm + '];[' + tail + '][' + wm + ']overlay=' + pos + '[' + out + ']';
       }
-      return '[' + idx + ':v]format=rgba,colorchannelmixer=aa=' + alpha + '[wm];'
-        + '[' + tail + '][wm]overlay=' + pos + '[' + out + ']';
+      if (alpha >= 0 && alpha < 0.999) {
+        return '[' + idx + ':v]format=rgba,colorchannelmixer=aa=' + alpha + '[wm];'
+          + '[' + tail + '][wm]overlay=' + pos + '[' + out + ']';
+      }
+      return '[' + tail + '][' + idx + ':v]overlay=' + pos + '[' + out + ']';
     });
     return { video: [], audio: [] };
   },

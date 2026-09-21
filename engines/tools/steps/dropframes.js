@@ -24,9 +24,9 @@ module.exports = {
   danger: 'lossy',
   schema: [
     { key: 'startFrame', label: '起始帧号', type: 'number', default: 1, min: 1,
-      hint: '从 1 开始计数，含该帧' },
+      hint: '从第几帧开始删（开头是第 1 帧）' },
     { key: 'endFrame', label: '结束帧号', type: 'number', default: 1, min: 1,
-      hint: '从 1 开始计数，含该帧' },
+      hint: '删到第几帧（含）' },
   ],
 
   decide(info, params) {

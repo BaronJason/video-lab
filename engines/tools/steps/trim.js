@@ -19,13 +19,13 @@ module.exports = {
   schema: [
     { key: 'mode', label: '方式', type: 'select', default: '保留区间',
       options: ['保留区间', '去掉片头', '去掉片尾'],
-      hint: '「保留区间」按起止秒数保留；另两种按秒数丢掉头/尾' },
+      hint: '只留中间一段，还是掐头 / 去尾' },
     { key: 'start', label: '保留起点(秒)', type: 'number', default: 0, min: 0, step: 0.01,
-      hint: '仅「保留区间」模式生效' },
+      hint: '从第几秒开始保留', showWhen: { key: 'mode', in: ['保留区间'] } },
     { key: 'end', label: '保留终点(秒)', type: 'number', default: 0, min: 0, step: 0.01,
-      hint: '仅「保留区间」模式生效；0 = 到结尾' },
+      hint: '保留到第几秒，填 0 表示到结尾', showWhen: { key: 'mode', in: ['保留区间'] } },
     { key: 'sec', label: '时长(秒)', type: 'number', default: 0, min: 0, step: 0.01,
-      hint: '仅「去掉片头 / 去掉片尾」模式生效' },
+      hint: '要掐掉多少秒', showWhen: { key: 'mode', in: ['去掉片头', '去掉片尾'] } },
   ],
 
   decide(info, params) {

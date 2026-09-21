@@ -69,9 +69,9 @@ module.exports = {
   danger: 'lossy',
   schema: [
     { key: 'pixTh', label: '黑屏亮度阈值', type: 'number', default: 40, min: 0, max: 255,
-      hint: 'YAVG 低于此值视为黑帧（默认 40；纯黑 YAVG≈0~5，"仅遮罩残留"的暗屏可能到 20~40）' },
+      hint: '越小越难判成黑屏（0~255，默认 40）' },
     { key: 'minBlackSec', label: '最短黑屏时长(秒)', type: 'number', default: 0.03, min: 0, step: 0.01,
-      hint: '短于此长度的黑段忽略（默认 0.03 —— 30fps 下单帧黑屏 0.033s 也能检出）' },
+      hint: '黑屏短于这个秒数就不管（默认 0.03）' },
   ],
 
   /**

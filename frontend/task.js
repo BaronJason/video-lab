@@ -454,6 +454,21 @@
     header.querySelector('.task-card__del').addEventListener('click', function (e) {
       e.stopPropagation();
       var cur = card.__task || t;
+      // 从未开始过的任务（排队中直接取消/启动即失败）：除列表记录外没有任何文件变化，
+      // 删除一律用轻量气泡 —— 不弹「清除方式」重弹窗（用户定案 2026-09-21）
+      if (cur.type !== 'tool' && !cur.startedAt) {
+        confirmPopover({
+          title: '删除任务记录',
+          message: '该任务尚未开始执行，删除仅移除列表记录，不会影响任何文件。',
+          okLabel: '删除记录', danger: true
+        }, e.currentTarget).then(function (ok) {
+          if (!ok) return;
+          call('clear_task', cur.id).then(function (r) {
+            if (!r || !r.ok) toast('删除失败：' + ((r && r.error) || '未知错误'), true);
+          }).catch(function (err) { toast('删除失败：' + err.message, true); });
+        });
+        return;
+      }
       // 视频处理任务：产物即被覆盖的源视频，删除只允许「仅从列表移除」——
       // 用轻量确认气泡说明清楚，不提供任何会碰文件的选项（计划 §5.3）
       if (cur.type === 'tool') {

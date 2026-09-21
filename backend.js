@@ -3083,6 +3083,7 @@ class Api {
         // 复刻等非批量任务：只精确删除该任务自己的成片与日志块——
         // outDir 可能指向源日志目录（复刻历史日志时产物在提交日目录），按目录整删会误伤原始日志旁的产物
         if (!exactVideos.length) continue;
+        const rootRes = path.resolve(this.root || process.cwd());
         const uniq = [...new Set(exactVideos)];
         // 删除前留痕（同上）
         {
@@ -3095,6 +3096,18 @@ class Api {
         for (const p of uniq) {
           try { if (p && fs.existsSync(p)) await trash(p); }
           catch (e) { errors.push('清除成片失败：' + p); }
+          // 成片删除后，所在输出目录若已空则逐级向上清理（到工作根为界）——不留「复刻成片文件夹空壳」；
+          // 任一目录非空即停止（重建/并行任务产物、日志文件等都会让它保留）
+          if (p) {
+            let cur = path.dirname(path.resolve(p));
+            while (cur.length > rootRes.length && cur !== rootRes) {
+              let entries = [];
+              try { entries = fs.readdirSync(cur); } catch (e) { break; }
+              if (entries.length) break;
+              try { fs.rmdirSync(cur); } catch (e) { break; }
+              cur = path.dirname(cur);
+            }
+          }
         }
         if (scope === 'all' || scope === 'video') {
           this._removeLogEntries(uniq);

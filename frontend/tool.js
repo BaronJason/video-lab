@@ -479,6 +479,11 @@
       });
     });
     $('btnPickFiles').addEventListener('click', function () {
+      // 备份目录占位符显示实际默认地址（取设置里的生效值）
+      if (api.get_settings) api.get_settings().then(function (st) {
+        var eff = st && st.backup_dir_effective;
+        if (eff) $('outBackupDir').placeholder = eff;
+      }).catch(function () {});
       var obb = $('btnOpenBackupDir');
       if (obb) obb.addEventListener('click', function () {
         if (!api || !api.open_backup_dir) { setStatus('后端不支持打开目录', 'err'); return; }
@@ -526,7 +531,7 @@
       if (!api || !api.list_dir) { setStatus('后端不支持目录浏览，请直接粘贴路径', 'err'); return; }
       pickDirDialog({
         title: '选择备份目录',
-        initial: $('outBackupDir').value || '',
+        initial: $('outBackupDir').value || $('outBackupDir').placeholder || '',
         onPick: function (p) { $('outBackupDir').value = p; },
       });
     });

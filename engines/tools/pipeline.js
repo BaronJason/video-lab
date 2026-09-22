@@ -307,10 +307,14 @@ async function runPipeline(opts) {
     if (rr.reason) runNote = '输出落点：' + rr.reason;
   }
 
-  // 备份目录：用户指定优先，否则落 storageDir 下（源目录之外，避免备份被当素材再处理）
+  // 备份根：默认用数据目录下的 backup（本身就在应用专属目录内）；
+  // 用户自选目录（如 E:\Cache）时，在其下再建一层应用专属文件夹 ——
+  // ① 备份不散落在用户目录根下；② 避免与别的应用的同名子文件夹（如 tool）混淆
+  const customRoot = String(output.backupDir || '').trim() || String(o.defaultBackupDir || '').trim();
+  const backupRoot = customRoot ? path.join(customRoot, 'Video Lab 备份') : path.join(storageDir, 'backup');
   const backupDir = output.backup === true  // 处理前备份默认**不启用**（显式勾选才开启）
     ? ''
-    : (String(output.backupDir || '').trim() || outplan.backupDirFor(storageDir, o.toolName || 'misc'));
+    : outplan.backupDirFor(backupRoot, o.toolName || 'misc');
 
   const steps = resolveSteps(o.stepIds, o.params);
   const results = { total: files.length, ok: 0, failed: 0, skipped: 0, encodes: 0, samples: 0, items: [] };

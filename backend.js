@@ -253,6 +253,7 @@ class Api {
     this._precheckToken = 0;      // 预检测取消令牌：token 变化即中断旧探测（重置/换路径/手动取消）
     this._inlineProbing = 0;      // 行内预检测进行中计数：后台大探测遇其让路，保证用户操作优先
     this._cleanupStaleLocks();    // 启动时清掉历史残留的过期锁（异常退出留下的，否则一直累积）
+    this._loadAppSettings();      // 应用级设置：settings.db 为主（config 只作兼容回退）
     // ffprobe 探测并发上限：保持低值，避免占用过多 CPU/IO 拖慢整机
     this.probeConcurrency = 4;
     this._videoCache = null;
@@ -3984,6 +3985,8 @@ class Api {
       onConflict: ['overwrite', 'skip'].indexOf(out.onConflict) >= 0 ? out.onConflict : 'index',
       backup: out.backup === true,
       backupDir: String(out.backupDir || '').trim() ? path.resolve(String(out.backupDir).trim()) : '',
+      // 设置里的「默认备份目录」：任务未单独指定备份目录时，引擎用它作为备份根
+      defaultBackupDir: String(this.config.backup_dir || '').trim() ? path.resolve(String(this.config.backup_dir).trim()) : '',
     };
 
     // ④ 建任务（env 传参，与三个成片模块同一机制）
@@ -5051,8 +5054,10 @@ let themes = [];
     try {
       if (this.config.backup_auto_clean !== true) return;
       const days = parseInt(this.config.backup_keep_days, 10) || 7;
-      const root = String(this.config.backup_dir || '').trim()
-        || path.join(this.storageDir || process.cwd(), 'backup');
+      // 与实际备份根一致：用户自选目录时同样落在其下的「Video Lab 备份」层（清理才清得到）
+      const customRoot = String(this.config.backup_dir || '').trim();
+      const root = customRoot ? path.join(customRoot, 'Video Lab 备份')
+        : path.join(this.storageDir || process.cwd(), 'backup');
       if (!fs.existsSync(root)) return;
       const expire = Date.now() - days * 24 * 60 * 60 * 1000;
       let n = 0;
@@ -5101,15 +5106,43 @@ let themes = [];
   // 打开备份目录：传空则用「默认备份目录」的设置（再空则回退数据目录下 backup）；
   // 目录尚不存在时明确提示，而不是静默失败
   openBackupDir(dir) {
-    const p = String(dir || '').trim()
-      || String(this.config.backup_dir || '').trim()
-      || path.join(this.storageDir || process.cwd(), 'backup');
-    if (!fs.existsSync(p)) return { ok: false, error: '备份目录尚不存在（还没有备份过文件）', path: p };
+    const custom = String(dir || '').trim() || String(this.config.backup_dir || '').trim();
+    // 目录创建规则：应用数据目录下的目录（默认备份目录）属应用自己管理 —— 不存在可直接创建；
+    // 用户自定义路径不存在则说明设置失效，不能擅自创建用户的数据位置
+    const isDefault = !custom;
+    const p = custom || path.join(this.storageDir || process.cwd(), 'backup');
+    if (!fs.existsSync(p)) {
+      if (!isDefault) return { ok: false, error: '备份目录不存在（请检查设置的备份目录）', path: p };
+      try { fs.mkdirSync(p, { recursive: true }); } catch (e) { return { ok: false, error: '无法创建默认备份目录', path: p }; }
+    }
     const err = shell.openPath(p);
     return err ? { ok: false, error: err, path: p } : { ok: true, path: p };
   }
 
-  // Windows 系统通知（任务失败 / 全部任务完成）：
+  // ── 应用级设置双写（settings.db scope='app'）──
+  // 用户定案：设置项能进 settings 就进 settings，config 会越来越长、未来某个版本要做破坏性简化。
+  // 因此本版本起新增的设置项「双写」：读取以 settings 为准（config 仅作旧版兼容回退），保存两边都写。
+  // 未来简化 config 时，去掉 config 侧的写入与合并即可，settings 里的值不会丢。
+  static APP_SETTING_KEYS = ['notify_task_end', 'show_maintenance',
+    'backup_dir', 'backup_auto_clean', 'backup_keep_days'];
+
+  _loadAppSettings() {
+    if (!this._useSettings()) return;
+    for (const k of Api.APP_SETTING_KEYS) {
+      const v = this._settingsStore.get('app', k);
+      if (v === undefined || v === null) continue;
+      this.config[k] = v;   // settings 值优先（config 里的同名值只作旧版迁移兜底）
+    }
+  }
+
+  _saveAppSettings() {
+    if (!this._useSettings()) return;
+    for (const k of Api.APP_SETTING_KEYS) {
+      try { this._settingsStore.set('app', k, this.config[k]); } catch (e) {}
+    }
+  }
+
+  // Windows 系统通知（任务失败 / 本轮跑完）：
   // 走主进程 Notification（app.setAppUserModelId 已在 main 设置，通知才能正常显示）。
   // 通知不可用时静默 —— 提示失败绝不能影响任务流本身
   _notify(title, body) {

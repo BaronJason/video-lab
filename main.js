@@ -1108,6 +1108,8 @@ function buildHttpExtraRoutes() {
         backup_dir: String(c.backup_dir || ''),
         backup_auto_clean: c.backup_auto_clean === true,
         backup_keep_days: parseInt(c.backup_keep_days, 10) || 7,
+        backup_dir_effective: String(c.backup_dir || '').trim()
+          || require('path').join(storageDir(), 'backup'),   // 占位符直接显示实际默认地址
       };
     },
     // 运行日志目录（设置页「维护」区）
@@ -1149,6 +1151,7 @@ function buildHttpExtraRoutes() {
         if (mv.ok && mv.moved) { configMoved = true; }
       }
       saveConfig(cfg);
+      try { api._saveAppSettings(); } catch (e) {}   // 应用级设置双写：同步落 settings.db（scope='app'）
       try { if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: cfg.autostart === true, args: ['--autostart'] }); } catch (e) {}
       Object.assign(config, cfg);
       // 端口/令牌实际变更才重启 HTTP 服务器（重启会断开浏览器既有 SSE 连接）；
@@ -1410,6 +1413,8 @@ function registerIpc() {
       backup_dir: String(c.backup_dir || ''),
       backup_auto_clean: c.backup_auto_clean === true,
       backup_keep_days: parseInt(c.backup_keep_days, 10) || 7,
+      backup_dir_effective: String(c.backup_dir || '').trim()
+        || path.join(storageDir(), 'backup'),   // 占位符直接显示实际默认地址
       autostart: c.autostart === true,
       close_behavior: c.close_behavior === 'exit' ? 'exit' : 'tray',
       http_port: parseInt(c.http_port, 10) || 9527,

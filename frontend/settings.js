@@ -343,7 +343,11 @@
       var nte = $('notifyTaskEnd');
       if (nte) nte.checked = s.notify_task_end !== false;   // 默认开启
       var bd = $('backupDir');
-      if (bd) bd.value = s.backup_dir || '';
+      if (bd) {
+        bd.value = s.backup_dir || '';
+        // 占位符直接显示实际默认地址（比文字解释更直观）
+        if (s.backup_dir_effective) bd.placeholder = s.backup_dir_effective;
+      }
       var bac = $('backupAutoClean');
       if (bac) bac.checked = s.backup_auto_clean === true;
       var bkd = $('backupKeepDays');
@@ -536,7 +540,9 @@
       btn.addEventListener('click', function () {
         var inputId = btn.dataset.dir;
         var cur = $(inputId).value.trim();
-        api.pick_directory('选择目录', cur || undefined).then(function (p) { if (p) { $(inputId).value = p; recomputeDirty(); } });
+        // 输入框留空时，以 placeholder 显示的实际默认地址作为对话框初始位置（而非无关的工作路径）
+        var startAt = cur || $(inputId).placeholder || undefined;
+        api.pick_directory('选择目录', startAt).then(function (p) { if (p) { $(inputId).value = p; recomputeDirty(); } });
       });
     });
     // 遮罩固定水印：选择 mov 文件

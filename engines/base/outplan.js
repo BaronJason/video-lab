@@ -70,9 +70,9 @@ function resolveRunDir(targetDir, stamp) {
   return { dir: sub, created: true, reason: '目标目录已有文件，已新建子目录' };
 }
 
-/** 备份目录：storageDir 下（**源目录之外**），按 工具/日期 分层 */
-function backupDirFor(storageDir, toolName, dateStr) {
-  const parts = [String(storageDir || ''), 'backup', 'tool', String(toolName || 'misc')];
+/** 备份目录：备份根下按 工具/日期 分层 —— 用户自选的目录只作为根，备份不散落在其根下 */
+function backupDirFor(backupRoot, toolName, dateStr) {
+  const parts = [String(backupRoot || ''), 'tool', String(toolName || 'misc')];
   if (dateStr) parts.push(String(dateStr));
   return path.join.apply(path, parts);
 }

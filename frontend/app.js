@@ -1675,7 +1675,7 @@
           title: '提交前检查',
           message: '发现以下问题，仍要提交吗？\n\n· ' + issues.join('\n· ')
             + '\n\n提交后任务排入队列；执行时缺失或无效的条目会被跳过并记入失败清单。',
-          buttons: [{ label: '仍要提交', value: 'go', primary: true }, { label: '取消', value: null }],
+          buttons: [{ label: '取消', value: null }, { label: '仍要提交', value: 'go', primary: true }],
         }).then(function (v) { return v === 'go'; })
       : Promise.resolve(true);
     goAhead.then(function (okGo) {
@@ -1861,7 +1861,7 @@
         var logPath = entry.getAttribute('data-log-path');
         if (!logPath) { setStatus('无法定位该成片对应的日志文件'); return; }
         var entryVideo = entry.getAttribute('data-video') || '';
-        showDialog({ title: '复刻', message: '请选择复刻方式', buttons: [ { label: '完全复刻', value: '1', primary: true }, { label: '去重复刻', value: '2', primary: true }, { label: '取消', value: null } ] }).then(function (mode) {
+        showDialog({ title: '复刻', message: '请选择复刻方式', buttons: [ { label: '取消', value: null }, { label: '完全复刻', value: '1', primary: true }, { label: '去重复刻', value: '2', primary: true } ] }).then(function (mode) {
           if (!mode) { setStatus('已取消复刻'); return; }
           // 仅复刻该单个成片（传入成片名，脚本精确处理该成片）
           call('run_replica', logPath, mode, entryVideo).then(function (r) { setStatus(r && r.ok ? '已启动该成片复刻脚本' : '启动失败：' + ((r && r.error) || '')); });
@@ -2602,9 +2602,9 @@
       title: '配置已修改未保存',
       message: '当前配置已发生修改，丢失修改将无法恢复。',
       buttons: [
+        { label: '不保存', value: 'discard', cls: 'modal-btn--cfg-discard' },
         { label: '覆盖当前配置', value: 'overwrite', cls: 'modal-btn--cfg-save' },
-        { label: '保存为当日配置', value: 'today', cls: 'modal-btn--cfg-save-today' },
-        { label: '不保存', value: 'discard', cls: 'modal-btn--cfg-discard' }
+        { label: '保存为当日配置', value: 'today', cls: 'modal-btn--cfg-save-today' }
       ],
       // 宽弹窗保证按钮文字不换行
       cssClass: 'modal-card--wide'

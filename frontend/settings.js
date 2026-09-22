@@ -303,7 +303,11 @@
     if (prefixCount) items.push('前缀');
     items.push('项目文件夹');
     items.push('TXT配置名');
-    var name = items.join('-').replace(/-{2,}/g, '-') + '-' + suffixMark + '1.mp4';
+    // 成片名：<日期>-<创作者>-<前缀>-项目文件夹-TXT配置名[-后缀]-1.mp4
+    // 后缀先去掉首尾多余横线再插入，保证「-后缀-序号」；无后缀时不产生连续分隔符（--）
+    var sm = String(state.batch.suffix_mark || '').replace(/^-+|-+$/g, '');
+    var base = items.join('-').replace(/-{2,}/g, '-');
+    var name = base + (sm ? '-' + sm : '') + '-1.mp4';
     $('batchNamePreview').textContent = name;
   }
 

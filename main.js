@@ -1128,12 +1128,7 @@ function buildHttpExtraRoutes() {
         if (typeof s.check_update_daily === 'boolean') cfg.check_update_daily = s.check_update_daily;
         if (s.check_update_hour !== undefined && s.check_update_hour !== null) { const h = parseInt(s.check_update_hour, 10); if (h >= 0 && h <= 23) cfg.check_update_hour = h; }
         if (typeof s.autostart === 'boolean') cfg.autostart = s.autostart;
-      if (typeof s.notify_task_end === 'boolean') cfg.notify_task_end = s.notify_task_end;
-      // backup_* 只落 settings.db（v2.2.1 新增字段，旧版本回退也没有对应代码，写 config 无意义）：
-      // 合入 cfg 供运行时读取，写盘前再从 cfg 摘除（见下方 saveConfig 处）
-      if (typeof s.backup_dir === 'string') cfg.backup_dir = s.backup_dir;
-      if (typeof s.backup_auto_clean === 'boolean') cfg.backup_auto_clean = s.backup_auto_clean;
-      if (s.backup_keep_days !== undefined) cfg.backup_keep_days = parseInt(s.backup_keep_days, 10) || 7;
+      mergeAppSettings(cfg, s);   // 与软件端 IPC 路径共用同一份合入逻辑
         if (s.close_behavior === 'exit' || s.close_behavior === 'tray') cfg.close_behavior = s.close_behavior;
         if (s.update_source === 'github' || s.update_source === 'gitee') cfg.update_source = s.update_source;
         if (s.update_mode === 'auto' || s.update_mode === 'notify') cfg.update_mode = s.update_mode;
@@ -1148,17 +1143,10 @@ function buildHttpExtraRoutes() {
         const mv = moveConfigFile(target);
         if (mv.ok && mv.moved) { configMoved = true; }
       }
-      // backup_* 从写盘对象摘除（config.json 不含它们），内存 config 保留运行时值
-      var bkpDir = cfg.backup_dir, bkpAuto = cfg.backup_auto_clean, bkpDays = cfg.backup_keep_days;
-      delete cfg.backup_dir; delete cfg.backup_auto_clean; delete cfg.backup_keep_days;
+      const httpStripped = stripNewSettings(cfg);   // 新版本设置项不进 config.json
       saveConfig(cfg);
       Object.assign(config, cfg);
-      // backup_* 补回内存 config（读取路径不变），再由 _saveAppSettings 落 settings.db
-      if (bkpDir !== undefined) config.backup_dir = bkpDir;
-      if (bkpAuto !== undefined) config.backup_auto_clean = bkpAuto;
-      if (bkpDays !== undefined) config.backup_keep_days = bkpDays;
-      // 显式传值：main 的 config 与 backend 的 config 是两个对象，_saveAppSettings 不能默认读 backend.config
-      try { api._saveAppSettings({ backup_dir: bkpDir, backup_auto_clean: bkpAuto, backup_keep_days: bkpDays }); } catch (e) {}
+      persistNewSettings(httpStripped, config);     // 补回内存 + 落 settings.db
       // 端口/令牌实际变更才重启 HTTP 服务器（重启会断开浏览器既有 SSE 连接）；
       // 皮肤等其它设置变更保留连接，settings_saved 广播可即时送达浏览器，无需手动刷新
       const httpPortWanted = parseInt(cfg.http_port, 10) || 9527;
@@ -1395,6 +1383,37 @@ function registerIpc() {
     return { ok: true };
   });
   // 设置页：读取完整配置（合并默认值，保证字段齐全）
+  // ───────── 应用级设置的读写（软件端 IPC 与浏览器端 HTTP 两条保存路径共用）─────────
+  // 用户定案：新版本加入的设置项只落 settings.db（config.json 仅作旧版回退写入，新字段不进）；
+  // 读取默认走 backend.getAppSetting（settings.db 优先、config 回退）。
+  // ⚠ 两条保存路径必须都调用这几个函数 —— 曾因只改 HTTP 路径、漏改 IPC 路径导致软件端保存失效。
+  const APP_SETTING_KEYS = ['notify_task_end', 'show_maintenance', 'backup_dir', 'backup_auto_clean', 'backup_keep_days'];
+  // 新版本设置项（不进 config.json，只落 settings.db）
+  const NEW_SETTING_KEYS = ['backup_dir', 'backup_auto_clean', 'backup_keep_days'];
+
+  function mergeAppSettings(cfg, s) {
+    if (!s || typeof s !== 'object') return cfg;
+    if (typeof s.notify_task_end === 'boolean') cfg.notify_task_end = s.notify_task_end;
+    if (typeof s.show_maintenance === 'boolean') cfg.show_maintenance = s.show_maintenance;
+    if (typeof s.backup_dir === 'string') cfg.backup_dir = s.backup_dir;
+    if (typeof s.backup_auto_clean === 'boolean') cfg.backup_auto_clean = s.backup_auto_clean;
+    if (s.backup_keep_days !== undefined) cfg.backup_keep_days = parseInt(s.backup_keep_days, 10) || 7;
+    return cfg;
+  }
+  // 写盘前摘除新设置项（config.json 不收），返回摘出的值
+  function stripNewSettings(cfg) {
+    const out = {};
+    for (const k of NEW_SETTING_KEYS) {
+      if (cfg[k] !== undefined) { out[k] = cfg[k]; delete cfg[k]; }
+    }
+    return out;
+  }
+  // 落 settings.db 并补回内存 config（显式传值：main.config 与 backend.config 是两个对象）
+  function persistNewSettings(vals, memoryConfig) {
+    for (const k of Object.keys(vals || {})) memoryConfig[k] = vals[k];
+    try { api._saveAppSettings(vals); } catch (e) {}
+  }
+
   ipcMain.handle('get_settings', () => {
     const c = loadConfig();
     return {
@@ -1413,8 +1432,8 @@ function registerIpc() {
       config_path_program: path.dirname(programConfigPath()),   // 显示目录（含引导文件与三库）
       config_path_appdata: path.dirname(appdataConfigPath()),
       log_dir: runLog.getDir(),   // 运行日志目录（设置页「打开文件夹」用；与 HTTP 版 get_settings 对齐）
-      show_maintenance: c.show_maintenance === true,   // 「维护」板块可见性（用户侧默认关闭）
-      notify_task_end: c.notify_task_end !== false,    // 任务通知（默认开启）
+      show_maintenance: api.getAppSetting('show_maintenance', false) === true,   // 「维护」板块可见性（用户侧默认关闭）
+      notify_task_end: api.getAppSetting('notify_task_end', true) !== false,   // 任务通知（默认开启，settings 优先）
       // backup_* 只落 settings.db，读回必须走 getAppSetting（loadConfig 的磁盘 config 不含它们）
       backup_dir: api.getAppSetting('backup_dir', ''),
       backup_auto_clean: api.getAppSetting('backup_auto_clean', false) === true,
@@ -1451,16 +1470,19 @@ function registerIpc() {
       if (s.replica && typeof s.replica === 'object') cfg.replica = Object.assign({}, DEFAULT_CONFIG.replica, s.replica);
       if (s.mask && typeof s.mask === 'object') cfg.mask = Object.assign({}, DEFAULT_CONFIG.mask, s.mask);
     }
+    mergeAppSettings(cfg, s);   // 应用级设置（含 v2.2.1 新增项）
     // 配置保存位置切换：迁移并删除旧位置文件（迁移式，防止两处配置不一致）
     const target = cfg.config_storage === 'appdata' ? appdataConfigPath() : programConfigPath();
     if (path.resolve(target) !== path.resolve(configFilePath())) {
       const mv = moveConfigFile(target);
       if (mv.ok && mv.moved) { configMoved = true; } // 库随配置一并迁移（moveConfigFile 内部完成）
     }
+    const strippedNew = stripNewSettings(cfg);   // 新版本设置项不进 config.json（只落 settings.db）
     saveConfig(cfg);
     // 应用开机自启动（openAtLogin + --autostart 静默托盘启动）；开发版不注册，避免污染开发环境
     try { if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: cfg.autostart === true, args: ['--autostart'] }); } catch (e) {}
     Object.assign(config, cfg);
+    persistNewSettings(strippedNew, config);     // 补回内存 config + 落 settings.db
     // 端口/令牌实际变更才重启 HTTP 服务器（重启会断开浏览器既有 SSE 连接）；
     // 皮肤等其它设置变更保留连接，settings_saved 广播可即时送达浏览器，无需手动刷新
     const httpPortWanted = parseInt(cfg.http_port, 10) || 9527;

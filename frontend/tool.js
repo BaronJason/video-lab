@@ -39,6 +39,31 @@
     el.className = 'tl-status' + (kind ? ' tl-status--' + kind : '');
   }
 
+  // 轻提示（与主窗口/任务窗口同一套样式与行为）：错误与失败类提示不再走状态栏小字
+  function toast(message, type) {
+    var host = document.getElementById('toastHost');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'toastHost';
+      host.className = 'toast-host';
+      document.body.appendChild(host);
+    }
+    var el = document.createElement('div');
+    var t = type === true ? 'error' : (String(type || 'info'));
+    var ic = t === 'ok' ? '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>'
+      : t === 'error' ? '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg>'
+      : '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="16" y2="12"/><line x1="12" x2="12.01" y1="8" y2="8"/></svg>';
+    el.className = 'toast toast--' + t;
+    el.innerHTML = '<span class="toast__icon">' + ic + '</span><span class="toast__text"></span>';
+    el.querySelector('.toast__text').textContent = message || '';
+    host.appendChild(el);
+    requestAnimationFrame(function () { el.classList.add('toast--show'); });
+    setTimeout(function () {
+      el.classList.remove('toast--show');
+      setTimeout(function () { el.remove(); }, 200);
+    }, t === 'error' ? 4200 : 2600);
+  }
+
   // ── 大窗确认（与主窗口 showDialog 同一套样式类；高风险动作才用它，不用气泡）──
   function showDialog(opts) {
     return new Promise(function (resolve) {
@@ -393,7 +418,7 @@
     $('outMode').addEventListener('change', syncOutputRows);
     $('outBackup').addEventListener('change', syncOutputRows);
     $('btnPickDir').addEventListener('click', function () {
-      if (!api || !api.pick_directory) { setStatus('后端不支持目录选择', 'err'); return; }
+      if (!api || !api.pick_directory) { toast('后端不支持目录选择', 'error'); return; }
       api.pick_directory('选择要处理的文件夹', state.root || undefined).then(function (p) {
         if (p) { state.root = p; state.files = []; $('inRoot').value = p; renderInputHint(); }
       });
@@ -422,29 +447,31 @@
         api.check_exists([v]).then(function (m) {
           if (String($('inRoot').value || '').trim() !== v) return;   // 已改成别的路径
           if (m && m[v]) setStatus('目录有效：' + v);
-          else setStatus('目录不存在：' + v, 'err');
+          else toast('目录不存在：' + v, 'error');
         }).catch(function () {});
       }, 400);
     });
     $('inRecursive').addEventListener('change', function () { state.recursive = !!$('inRecursive').checked; renderInputHint(); });
     $('btnPickOutDir').addEventListener('click', function () {
-      if (!api || !api.pick_directory) { setStatus('后端不支持目录选择', 'err'); return; }
+      if (!api || !api.pick_directory) { toast('后端不支持目录选择', 'error'); return; }
       api.pick_directory('选择输出目录', $('outDir').value || state.root || undefined).then(function (p) {
         if (p) $('outDir').value = p;
       });
     });
     $('btnPickBackupDir').addEventListener('click', function () {
-      if (!api || !api.pick_directory) { setStatus('后端不支持目录选择', 'err'); return; }
+      if (!api || !api.pick_directory) { toast('后端不支持目录选择', 'error'); return; }
       api.pick_directory('选择备份目录', $('outBackupDir').value || state.defaultBackupDir || undefined).then(function (p) {
         if (p) $('outBackupDir').value = p;
       });
     });
     var obb = $('btnOpenBackupDir');
     if (obb) obb.addEventListener('click', function () {
-      if (!api || !api.open_backup_dir) { setStatus('后端不支持打开目录', 'err'); return; }
-      api.open_backup_dir($('outBackupDir').value.trim() || state.defaultBackupDir).then(function (r) {
-        if (!r || !r.ok) setStatus('打开备份目录失败：' + ((r && r.error) || '未知错误'), 'err');
-      }).catch(function (e) { setStatus('打开备份目录失败：' + e.message, 'err'); });
+      if (!api || !api.open_folder_select) { toast('后端不支持打开目录', 'error'); return; }
+      api.open_folder_select($('outBackupDir').value.trim() || state.defaultBackupDir).then(function (r) {
+        if (r && r.ok === false) { toast('打开备份目录失败：' + (r.error || '未知错误'), 'error'); return; }
+        // 浏览器端由本体代开：explorer 可能被 Windows 前台锁压到后台，只在任务栏出现 —— 明确告知去哪看
+        if (location.protocol.indexOf('http') === 0) toast('资源管理器已在后台打开，可从任务栏查看', 'info');
+      }).catch(function (e) { toast('打开备份目录失败：' + e.message, 'error'); });
     });
     $('logHead').addEventListener('click', function () { $('logBox').classList.toggle('tl-log--open'); });
     $('btnRun').addEventListener('click', onSubmit);
@@ -501,7 +528,7 @@
 
   function onSubmit() {
     var c = collectSpec();
-    if (c.error) { setStatus(c.error, 'err'); return; }
+    if (c.error) { toast(c.error, 'error'); return; }
     var spec = c.spec;
     var overwrite = spec.output.mode === 'overwrite';
     var titles = stepTitles(spec.stepIds);
@@ -528,14 +555,14 @@
     setStatus('正在创建任务…');
     api.run_tool(spec).then(function (r) {
       setRunEnabled(true);
-      if (!r || !r.ok) { setStatus((r && r.error) || '创建任务失败', 'err'); return; }
+      if (!r || !r.ok) { toast((r && r.error) || '创建任务失败', 'error'); return; }
       state.taskId = r.taskId;
       showLogBox('任务已加入队列 · ' + r.taskId);
       setStatus('已加入执行队列（在任务列表中查看进度与结果）', 'ok');
       watchTask(r.taskId);
     }).catch(function (e) {
       setRunEnabled(true);
-      setStatus('创建任务失败：' + ((e && e.message) || e), 'err');
+      toast('创建任务失败：' + ((e && e.message) || e), 'error');
     });
   }
 
@@ -610,11 +637,11 @@
     bindTabs();
     bindFormEvents();
     bindOutputEvents();
-    if (!api || !api.list_tools) { setRunEnabled(false, '后端接口不可用'); setStatus('后端接口不可用', 'err'); return; }
+    if (!api || !api.list_tools) { setRunEnabled(false, '后端接口不可用'); toast('后端接口不可用', 'error'); return; }
     api.list_tools().then(function (info) {
       if (!info || !info.ok) {
         setRunEnabled(false, '读取处理能力失败');
-        setStatus((info && info.error) || '读取处理能力失败', 'err');
+        toast((info && info.error) || '读取处理能力失败', 'error');
         return;
       }
       state.info = info;
@@ -637,7 +664,7 @@
         w.hidden = false;
         w.textContent = '程序文件不完整（缺少运行组件），无法执行处理，请重新安装或校验。';
         setRunEnabled(false, '程序文件不完整，无法执行处理');
-        setStatus('程序文件不完整，请重新安装或校验', 'err');
+        toast('程序文件不完整，请重新安装或校验', 'error');
       } else {
         // ★ 就绪即启用主操作按钮 —— 参数不完整时交给点击后的校验去提示，
         //   否则按钮一直灰着，用户不知道为什么不能点
@@ -646,7 +673,7 @@
       }
     }).catch(function (e) {
       setRunEnabled(false, '读取处理能力失败');
-      setStatus('读取处理能力失败：' + ((e && e.message) || e), 'err');
+      toast('读取处理能力失败：' + ((e && e.message) || e), 'error');
     });
   }
 

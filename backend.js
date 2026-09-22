@@ -3903,9 +3903,15 @@ class Api {
         modes: [{ v: 'overwrite', t: '覆盖原视频' }, { v: 'directory', t: '输出到指定目录' }],
         nameModes: [{ v: 'keep', t: '原名' }, { v: 'suffix', t: '原名 + 后缀' }],
         conflicts: [{ v: 'index', t: '追加序号' }, { v: 'overwrite', t: '覆盖' }, { v: 'skip', t: '跳过' }],
-        // 实际默认备份地址：设置里的默认备份目录 > 数据目录下 backup（供工具页同步使用）
-        defaultBackupDir: String(this.config.backup_dir || '').trim()
-          || path.join(this.storageDir || '', 'backup'),
+        // 实际默认备份地址：设置里的默认备份目录 > 数据目录下 backup。
+        // 返回前确保存在（应用自己管理的目录，可直接创建）—— 浏览器端「打开/选择」才能直接定位
+        defaultBackupDir: (() => {
+          const customRoot = String(this.config.backup_dir || '').trim();
+          const root = customRoot ? path.join(customRoot, 'Video Lab 备份')
+            : path.join(this.storageDir || '', 'backup');
+          try { fs.mkdirSync(root, { recursive: true }); } catch (e) {}
+          return root;
+        })(),
       },
     };
   }
@@ -5103,22 +5109,6 @@ let themes = [];
         if (stale) { try { fs.unlinkSync(lockFile); } catch (e) {} }
       }
     } catch (e) {}
-  }
-
-  // 打开备份目录：传空则用「默认备份目录」的设置（再空则回退数据目录下 backup）；
-  // 目录尚不存在时明确提示，而不是静默失败
-  openBackupDir(dir) {
-    const custom = String(dir || '').trim() || String(this.config.backup_dir || '').trim();
-    // 目录创建规则：应用数据目录下的目录（默认备份目录）属应用自己管理 —— 不存在可直接创建；
-    // 用户自定义路径不存在则说明设置失效，不能擅自创建用户的数据位置
-    const isDefault = !custom;
-    const p = custom || path.join(this.storageDir || process.cwd(), 'backup');
-    if (!fs.existsSync(p)) {
-      if (!isDefault) return { ok: false, error: '备份目录不存在（请检查设置的备份目录）', path: p };
-      try { fs.mkdirSync(p, { recursive: true }); } catch (e) { return { ok: false, error: '无法创建默认备份目录', path: p }; }
-    }
-    const err = shell.openPath(p);
-    return err ? { ok: false, error: err, path: p } : { ok: true, path: p };
   }
 
   // ── 应用级设置双写（settings.db scope='app'）──

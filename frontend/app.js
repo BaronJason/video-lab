@@ -267,12 +267,12 @@
         });
         var bOpen = root.querySelector('[data-wm="open"]');
         if (bOpen) bOpen.addEventListener('click', function () {
-          if (curWm) call('open_path', curWm);
+          if (curWm) call('open_path', curWm).then(function (r) { if (r && !r.ok) toast(r.error || '路径不存在', true); }).catch(function (e) { toast('打开失败：' + e.message, true); });
           else toast('未设置主流水印，无法打开文件', true);
         });
         var bFold = root.querySelector('[data-wm="folder"]');
         if (bFold) bFold.addEventListener('click', function () {
-          if (curWm) call('open_folder_select', curWm);
+          if (curWm) call('open_folder_select', curWm).then(function (r) { if (r && !r.ok) toast(r.error || '路径不存在', true); }).catch(function (e) { toast('打开失败：' + e.message, true); });
           else toast('未设置主流水印，无法打开文件夹', true);
         });
       }
@@ -1300,7 +1300,7 @@
           runPrecheck(); refreshPreviewIfModified(); refreshConfigModified();
         }).catch(function (e) { setStatus('修改路径失败：' + e.message); });
       }
-      else if (t.classList.contains('config-path-row__open')) { var input = t.closest('.config-path-row').querySelector('.config-path-row__input'); call('open_path', input.value.trim()); }
+      else if (t.classList.contains('config-path-row__open')) { var input = t.closest('.config-path-row').querySelector('.config-path-row__input'); call('open_path', input.value.trim()).then(function (r) { if (r && !r.ok) toast(r.error || '路径不存在', true); }).catch(function (e) { toast('打开失败：' + e.message, true); }); }
       else if (t.classList.contains('config-exclude-row__remove')) {
         var exRow = t.closest('.config-exclude-row');
         if (exRow.dataset.deleted === '1') {
@@ -1322,7 +1322,7 @@
       else if (t.classList.contains('config-watermark__path')) { changeWatermark(); } // 点击水印文件名 = 更换水印
       else if (t.classList.contains('config-watermark__btn')) {
         var wmV = state.configData && state.configData.watermark ? String(state.configData.watermark) : '';
-        if (t.dataset.wm === 'open' && wmV) call('open_path', wmV);
+        if (t.dataset.wm === 'open' && wmV) call('open_path', wmV).then(function (r) { if (r && !r.ok) toast(r.error || '路径不存在', true); }).catch(function (e) { toast('打开失败：' + e.message, true); });
         else if (t.dataset.wm === 'folder' && wmV) call('open_parent', wmV);
       }
     }
@@ -4865,7 +4865,7 @@
           var logDir = String(lp).replace(/[\\/]+/g, '\\').replace(/\\[^\\]*$/, '');
           var openPath = out || ((fname && logDir) ? logDir + '\\' + fname : '');
           var outDir = out ? String(out).replace(/[\\/]+/g, '\\').replace(/\\[^\\]*$/, '') : '';
-          var itemOpen = { label: '打开成片', disabled: false, title: '', action: function () { if (openPath) call('open_path', openPath); } };
+          var itemOpen = { label: '打开成片', disabled: false, title: '', action: function () { if (openPath) call('open_path', openPath).then(function (r) { if (r && !r.ok) toast(r.error || '路径不存在', true); }).catch(function (e) { toast('打开失败：' + e.message, true); }); } };
           var itemFolder = { label: '打开成片文件夹', disabled: false, title: '', action: function () {
               if (openPath) call('open_folder_select', openPath).catch(function () { call('open_path', outDir || logDir); });
               else if (outDir || logDir) call('open_path', outDir || logDir);

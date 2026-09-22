@@ -207,7 +207,6 @@ function startHttpServer(opts) {
       return openDirForeground(r.dir);
     },
     task_replica_outdir: (args) => api.taskReplicaOutputDir(args[0]),
-    open_backup_dir: async (args) => api.openBackupDir(args[0]),
     open_path: async (args) => {
       const p = args[0];
       const target = path.resolve(p);

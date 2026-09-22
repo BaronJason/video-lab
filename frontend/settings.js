@@ -733,8 +733,8 @@
       var dir = isAppdata ? (pa ? pa.textContent : '') : (pp ? pp.textContent : '');
       if (!dir) { setStatus('尚未确定保存目录', false); return; }
       api.open_path(dir).then(function (r) {
-        if (!(r && r.ok)) setStatus('打开失败：' + ((r && r.error) || '路径不存在'), false);
-      }).catch(function () { setStatus('打开失败', false); });
+        if (!(r && r.ok)) toast('打开失败：' + ((r && r.error) || '路径不存在'), true);
+      }).catch(function (e) { toast('打开失败：' + e.message, true); });
     });
     // 「运行日志」行：打开日志目录（排查时先找到文件）
     var openLog = document.getElementById('btnOpenLogDir');
@@ -743,7 +743,7 @@
       var dir = el ? el.textContent : '';
       if (!dir) { setStatus('日志目录尚未就绪', false); return; }
       api.open_path(dir).then(function (r) {
-        if (!(r && r.ok)) setStatus('打开失败：' + ((r && r.error) || '路径不存在'), false);
+        if (!(r && r.ok)) toast('打开失败：' + ((r && r.error) || '路径不存在'), true);
       }).catch(function () { setStatus('打开失败', false); });
     });
     // 复制浏览器访问地址（带安全令牌，供用户手动填入其他设备/分享）

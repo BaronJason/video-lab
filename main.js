@@ -1565,7 +1565,6 @@ function registerIpc() {
       sendToSettings('env_fix_available', { missing: env.missing || [], hasFfmpeg: env.ffmpeg });
     } catch (e) {}
   }, 3500);
-  ipcMain.handle('open_backup_dir', async (e, p) => api.openBackupDir(p));
   ipcMain.handle('list_dir', async (e, dir) => api.listDir(dir));   // 工具页目录浏览对话框（preload 已定义，此前漏注册）
   ipcMain.handle('open_path', async (e, p) => { const target = path.resolve(p); if (fs.existsSync(target)) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '路径不存在' }; });
   ipcMain.handle('open_parent', async (e, p) => { const target = path.dirname(path.resolve(p)); if (fs.existsSync(target)) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '路径不存在' }; });

@@ -967,10 +967,16 @@
     }
     state.configModified = modified;
     var b1 = $('btnSaveConfig'), b2 = $('btnSaveToday');
-    if (b1) { b1.disabled = state.precheckInvalid || !modified || _envBad(); setBtnHint(b1, _envBad() ? '运行环境缺失' : (state.precheckInvalid ? '存在不合格路径' : (modified ? null : '配置未发生改变'))); }
-    if (b2) { b2.disabled = state.precheckInvalid || _envBad(); setBtnHint(b2, _envBad() ? '运行环境缺失' : (state.precheckInvalid ? '存在不合格路径' : null)); }
+    // ★ 保存类按钮放宽（用户定案 2026-09-22）：保存配置只是写盘（原子写），
+    //   与预检测、FFmpeg 环境都无关 —— 允许用户在任务运行/排队期间先"暂存配置"备用
+    if (b1) { b1.disabled = !modified; setBtnHint(b1, modified ? null : '配置未发生改变'); }
+    if (b2) { b2.disabled = false; setBtnHint(b2, null); }
     var hint = $('configModifiedHint');
-    if (hint) hint.style.display = modified ? '' : 'none';
+    if (hint) {
+      hint.style.display = modified ? '' : 'none';
+      // 明确生效范围：任务在提交入队时已快照配置，之后的修改只影响新提交的任务
+      hint.textContent = '配置发生改变（保存后仅对之后启动的任务生效）';
+    }
     // ── 元素级红框提示 ──
     var orig = state._configOrig || {};
     // 路径行：文字变化 → 输入框边框红；仅被拖动的行且不在原位 → 该行整行红
@@ -1025,8 +1031,10 @@
     var invalid = state.precheckInvalid || state.watermarkMissing;
     var run = $('btnRunScript');
     if (run) {
-      run.disabled = invalid || _envBad();
-      setBtnHint(run, _envBad() ? '运行环境缺失' : (state.watermarkMissing ? '水印文件不存在，无法启动脚本' : (invalid ? '存在不合格路径，无法启动脚本' : null)));
+      // ★ 提交类按钮放宽（用户定案 2026-09-22）：环境缺失仍硬拦（必然失败），
+      //   预检测不合格 / 水印缺失改为**提交时列清问题并二次确认** —— 允许先排队占位
+      run.disabled = _envBad();
+      setBtnHint(run, _envBad() ? '运行环境缺失' : ((invalid || state.watermarkMissing) ? '存在问题项，提交时会再次确认' : null));
     }
     var warn = $('configWarnMark');
     if (warn) warn.style.display = state.precheckInvalid ? '' : 'none';
@@ -1624,9 +1632,32 @@
       jumpToVersionPath(r.path, pr);
     }).catch(function (e) { setStatus('新增配置失败：' + e.message); });
   }
+  // 提交前检查：列出会导致失败/质量风险的问题项（不阻断，确认后可入队）
+  function preflightIssues() {
+    var out = [];
+    if (state.precheckInvalid) {
+      var bad = [];
+      document.querySelectorAll('.config-path-row').forEach(function (row) {
+        if (row.dataset.deleted === '1') return;
+        if (!row.classList.contains('config-path-row--invalid')) return;
+        var inp = row.querySelector('.config-path-row__input');
+        var v = inp ? String(inp.value || '').trim() : '';
+        if (v) bad.push(v);
+      });
+      out.push('存在不合格路径' + (bad.length ? '：' + bad.slice(0, 3).join('、') + (bad.length > 3 ? ' 等 ' + bad.length + ' 条' : '') : '（预检测未通过或未完成）'));
+    }
+    if (state.watermarkMissing) out.push('水印文件不存在（遮罩叠加会失败）');
+    return out;
+  }
+  // 提交后队列提示：前面还有几个任务（任务入队即快照配置，改配置不影响已排队任务）
+  function notifyQueuePos() {
+    call('list_tasks').then(function (list) {
+      var n = (list || []).filter(function (x) { return x.status === 'queued' || x.status === 'running'; }).length;
+      if (n > 1) toast('已加入队列（前方还有 ' + (n - 1) + ' 个任务）', 'ok');
+    }).catch(function () {});
+  }
   function runScript() {
     if (_envBad()) { setStatus('运行环境缺失'); return; }
-    if (state.watermarkMissing) { setStatus('水印文件不存在，无法启动脚本'); return; }
     if (!state.activeVersion) return;
     // 成片数：显式填写优先；留空则沿用占位符所示的默认值（预检测视频总数）
     var fcInp = $('inputFilmCount');
@@ -1636,6 +1667,19 @@
     if (!state.activeProject || !state.activeTxt) return;
     var ed = getEditorState();
     var configName = $('inputConfigName').value.trim() || state.activeTxt;
+    // ★ 提交前软校验：问题列清 → 确认后仍可入队；执行时缺失素材会被跳过并记入失败清单，
+    //   不会产出错误成片（引擎逐条校验 + 原子写 + 失败清理）
+    var issues = preflightIssues();
+    var goAhead = issues.length
+      ? showDialog({
+          title: '提交前检查',
+          message: '发现以下问题，仍要提交吗？\n\n· ' + issues.join('\n· ')
+            + '\n\n提交后任务排入队列；执行时缺失或无效的条目会被跳过并记入失败清单。',
+          buttons: [{ label: '仍要提交', value: 'go', primary: true }, { label: '取消', value: null }],
+        }).then(function (v) { return v === 'go'; })
+      : Promise.resolve(true);
+    goAhead.then(function (okGo) {
+    if (!okGo) { setStatus('已取消提交'); return; }
     getEffectiveGroup().then(function (group) {
       resolveDestProject().then(function (dest) {
         if (dest === null) { setStatus('已取消启动'); return; }
@@ -1643,11 +1687,15 @@
           if (!saved || !saved.ok) { setStatus('保存失败：' + ((saved && saved.error) || '未知错误')); return; }
           toast('已保存并启动脚本', 'ok');
           // 水印归属在选中配置预检测时已判定并提示，此处不再阻断启动
-          call('run_batch', saved.path, count, group).then(function (r) { if (!(r && r.ok)) setStatus('启动失败：' + ((r && r.error) || '未知错误')); });
+          call('run_batch', saved.path, count, group).then(function (r) {
+            if (!(r && r.ok)) { setStatus('启动失败：' + ((r && r.error) || '未知错误')); return; }
+            notifyQueuePos();
+          });
           jumpToVersionPath(saved.path, dest);
         }).catch(function (e) { setStatus('启动失败：' + e.message); });
       });
     });
+    });   // goAhead.then 闭合（提交前确认流程）
   }
   // 实际使用的分组数：输入框显式填写优先；留空则使用项目「默认分组数」
   function getEffectiveGroup() {

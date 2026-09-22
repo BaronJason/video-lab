@@ -3122,6 +3122,7 @@
   var _bannerShown = false;
   var _bannerDismissed = false; // 本次提示条被忽略/取消；新事件到达时重置
   var _bannerState = 'available'; // available | downloaded
+  var _bannerSource = 'update';   // update | envfix（envfix 时按钮行为走 FFmpeg 修复流程）
   function showUpdateBanner(info, mode) {
     _bannerDismissed = false; // 「忽略/取消」仅关闭本次提示条，下次检查到更新时仍会重新弹出
     var banner = $('updateBanner');
@@ -3132,10 +3133,17 @@
     _bannerShown = true;
     _bannerState = nextMode;
     var title = $('updateBannerTitle');
+    var custom = (info && info.__custom) || null;
+    if (custom) _bannerSource = custom.source || 'envfix';
     var desc = $('updateBannerDesc');
     var later = $('updateLaterBtn');
     var now = $('updateNowBtn');
-    if (_bannerState === 'downloaded') {
+    if (custom) {
+      if (title) title.textContent = custom.title || '';
+      if (desc) desc.textContent = custom.desc || '';
+      if (later) later.textContent = custom.later || '取消';
+      if (now) now.textContent = custom.now || '确定';
+    } else if (_bannerState === 'downloaded') {
       var setupMode = state.isPortable === false; // setup 安装版：重启并安装；便携版：打开更新文件
       if (title) title.textContent = '更新包下载完成';
       if (desc) desc.textContent = setupMode ? '是否立即重启并安装？' : '更新包已下载完成，请右键托盘图标退出应用后解压覆盖';
@@ -3179,6 +3187,7 @@
     banner.style.display = 'none'; // 默认隐藏，由后端事件驱动显示
     var later = $('updateLaterBtn');
     if (later) later.addEventListener('click', function () {
+      if (_bannerSource === 'envfix') { hideUpdateBanner(); return; } // 仅关闭浮窗，不影响更新提醒
       _bannerDismissed = true; // 忽略/取消：本次会话不再提醒，下次启动仍会检查
       hideUpdateBanner();
     });
@@ -3186,6 +3195,17 @@
     if (now) now.addEventListener('click', function () {
       var gp = getApi();
       if (!gp) { setStatus('更新功能不可用'); return; }
+      if (_bannerSource === 'envfix') {
+        if (_bannerState === 'downloaded') { hideUpdateBanner(); return; }   // 完成态：知道了
+        now.disabled = true;
+        setStatus('正在下载 FFmpeg 组件…');
+        if (!gp.env_fix_start) { now.disabled = false; return; }
+        gp.env_fix_start().then(function (r) {
+          now.disabled = false;
+          if (r && r.ok === false) { hideUpdateBanner(); setStatus('FFmpeg 下载失败：' + ((r && r.error) || '未知错误'), true); }
+        }).catch(function (e) { now.disabled = false; hideUpdateBanner(); setStatus('FFmpeg 下载失败：' + e.message, true); });
+        return;
+      }
       now.disabled = true;
       if (_bannerState === 'downloaded') {
         if (state.isPortable === false) {
@@ -3242,6 +3262,38 @@
       hideUpdateMini();
       hideUpdateBanner();
       setStatus('更新包已就绪，正在重启应用…');
+    });
+    // FFmpeg 环境自愈：复用更新提示条与状态栏进度条（文案与来源不同）
+    if (upd.on_env_fix_available) upd.on_env_fix_available(function (info) {
+      _bannerDismissed = false;
+      showUpdateBanner({ __custom: {
+        source: 'envfix',
+        title: (info && info.hasFfmpeg) ? 'FFmpeg 组件不完整' : '缺少 FFmpeg 运行组件',
+        desc: '自动下载到本机（约 60 MB，无需手动配置）',
+        later: '暂不', now: '自动下载',
+      } }, 'available');
+    });
+    if (upd.on_env_fix_progress) upd.on_env_fix_progress(function (info) {
+      if (info && info.phase === 'download') {
+        hideUpdateBanner();
+        showUpdateMini({ percent: info.percent });
+        setStatus('正在下载 FFmpeg ' + ((info && info.percent) || 0) + '%');
+      }
+    });
+    if (upd.on_env_fix_done) upd.on_env_fix_done(function (info) {
+      hideUpdateMini();
+      if (info && info.ok) {
+        showUpdateBanner({ __custom: {
+          source: 'envfix',
+          title: 'FFmpeg 组件已就绪',
+          desc: '下载完成，全部功能可用',
+          later: '关闭', now: '知道了',
+        } }, 'downloaded');
+        setStatus('FFmpeg 组件已就绪');
+      } else {
+        hideUpdateBanner();
+        setStatus('FFmpeg 下载失败：' + ((info && (info.error || info.message)) || '未知原因'), true);
+      }
     });
   }
 

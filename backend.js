@@ -23,8 +23,17 @@ const REPLICA_PROJECT = '复刻'; // 侧栏中的虚拟项目名（仅含日志�
 const REPLICA_MARK = 'REPLICA:'; // 复刻项目虚拟版本的 path 前缀，用于路由 list_logs / logContent
 
 // 默认配置
+// 项目实际依赖的 FFmpeg 滤镜清单（三模块 + 视频处理工具的滤镜调用全量收集）：
+// 缺任何一个都视为环境不合格（精简版/第三方便携构建常缺 colorchannelmixer、signalstats 等）
+const FFMPEG_REQUIRED_FILTERS = [
+  'scale', 'overlay', 'colorchannelmixer', 'rotate', 'transpose', 'atempo',
+  'trim', 'setpts', 'select', 'aselect', 'concat', 'fps', 'volume',
+  'format', 'signalstats', 'metadata',
+];
+
 const DEFAULT_CONFIG = {
   skin: 'white_blue',
+  ffmpeg_dir: '',             // FFmpeg 自愈下载目录（数据目录 ffmpeg\）；空 = 用系统 PATH 里的
   auto_check_update: true,    // 启动时自动检查更新
   check_update_daily: false,  // 每日定时检查更新（整点触发，需 app 保持运行）
   check_update_hour: 9,       // 每日定时检查更新时间（24 小时制整点 0-23，默认 9）
@@ -3314,7 +3323,7 @@ class Api {
   _spawnNodeEngineChild(task, env) {
     const { spawn } = require('child_process');
     return spawn(process.execPath, [this._engineRunnerPath(), '--module', task.type], {
-      env: Object.assign({}, process.env, env, { ELECTRON_RUN_AS_NODE: '1' }),
+      env: Object.assign({}, process.env, this._ffmpegBinEnv(), env, { ELECTRON_RUN_AS_NODE: '1' }),
       cwd: this.enginesDir,
       windowsHide: true,
       detached: false,
@@ -4954,18 +4963,164 @@ let themes = [];
   resolvePath(filePath) { return path.resolve(filePath); }
 
   // 检测应用运行所需的外部环境是否可用（ffmpeg / ffprobe / 内置引擎）
+  // 项目实际依赖的滤镜清单（三模块 + 视频处理工具的 -filter_complex 全量收集）
+  // 精简版/第三方便携构建常缺 colorchannelmixer、signalstats 等 —— 只查存在性拦不住
   checkEnv() {
     const { spawnSync } = require('child_process');
-    const have = (name) => {
-      try { const r = spawnSync('where', [name], { windowsHide: true, encoding: 'utf8' }); return r.status === 0; }
-      catch (e) { return false; }
+    const cfgDir = String((this.config && this.config.ffmpeg_dir) || '').trim();
+    // 解析实际生效的可执行文件：配置目录（自愈下载）优先，回退系统 PATH
+    const resolveBin = (name, configured) => {
+      if (configured) { try { if (fs.existsSync(configured)) return configured; } catch (e0) {} }
+      try {
+        const r = spawnSync('where', [name], { windowsHide: true, encoding: 'utf8' });
+        if (r.status === 0) {
+          const first = String(r.stdout || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean)[0];
+          if (first) return first;
+        }
+      } catch (e) {}
+      return '';
     };
+    const ffmpegPath = resolveBin('ffmpeg', cfgDir ? path.join(cfgDir, 'ffmpeg.exe') : '');
+    const ffprobePath = resolveBin('ffprobe', cfgDir ? path.join(cfgDir, 'ffprobe.exe') : '');
+    // 滤镜链完整性：-filters 实跑比对
+    const missing = [];
+    if (ffmpegPath) {
+      try {
+        const r = spawnSync(ffmpegPath, ['-hide_banner', '-filters'],
+          { windowsHide: true, encoding: 'utf8', timeout: 20000, maxBuffer: 16 * 1024 * 1024 });
+        if (r.status === 0) {
+          const out = String(r.stdout || '');
+          for (const f of FFMPEG_REQUIRED_FILTERS) if (!out.includes(' ' + f + ' ')) missing.push(f);
+        } else missing.push(...FFMPEG_REQUIRED_FILTERS);
+      } catch (e2) { missing.push(...FFMPEG_REQUIRED_FILTERS); }
+    }
+    const filtersOk = !!ffmpegPath && missing.length === 0;
     return {
-      ffmpeg: have('ffmpeg'),
-      ffprobe: have('ffprobe'),
+      ffmpeg: !!ffmpegPath,
+      ffprobe: !!ffprobePath,
       // 引擎入口是否就绪；false 即任务无法执行（前端据此提示重装）
       engine: !!this._engineRunnerPath(),
+      ffmpegPath, ffprobePath, filtersOk, missing,
+      downloadNeeded: !ffmpegPath || !ffprobePath || !filtersOk,
+      ffmpegDir: cfgDir,
     };
+  }
+
+  _ffmpegTargetDir() {
+    return path.join(this.storageDir || process.cwd(), 'ffmpeg');
+  }
+
+  // 引擎子进程的 FFmpeg 路径注入：自愈下载后的数据目录优先
+  _ffmpegBinEnv() {
+    const dir = String((this.config && this.config.ffmpeg_dir) || '').trim();
+    if (!dir) return {};
+    const out = {};
+    try {
+      const fe = path.join(dir, 'ffmpeg.exe'), pe = path.join(dir, 'ffprobe.exe');
+      if (fs.existsSync(fe)) out.VL_FFMPEG_BIN = fe;
+      if (fs.existsSync(pe)) out.VL_FFPROBE_BIN = pe;
+    } catch (e) {}
+    return out;
+  }
+
+  // 环境自愈：下载 FFmpeg / FFprobe（npmmirror 国内镜像，gzip 单文件用内置 zlib 解压）
+  // 到数据目录 ffmpeg\ 并写回 ffmpeg_dir 配置；失败回滚配置，不留半成品路径
+  async ensureFfmpeg(opts) {
+    const force = !!(opts && opts.force);
+    if (this._ffmpegBusy) return { ok: false, error: '已有 FFmpeg 修复在进行中' };
+    const env0 = this.checkEnv();
+    // force：用户显式点「自动下载」——跳过合格检查强制走完整下载（演示/重装数据目录组件）
+    if (!force && !env0.downloadNeeded) return { ok: true, skipped: true, env: env0 };
+    this._ffmpegBusy = true;
+    const emit = (p) => { try { if (typeof this.onFfmpegProgress === 'function') this.onFfmpegProgress(p); } catch (e) {} };
+    const dir = this._ffmpegTargetDir();
+    const prevDir = String(this.config.ffmpeg_dir || '');
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      this.config.ffmpeg_dir = dir;   // 校验与后续引擎运行都按新路径；失败回滚
+      emit({ phase: 'check' });
+      let ver = 'b6.1.1';
+      try {
+        const list = await this._httpGetJson('https://registry.npmmirror.com/-/binary/ffmpeg-static/');
+        const vers = (list || []).map((x) => String(x.name || ''))
+          .filter((n) => /^b[\d.]+\/$/.test(n)).map((n) => n.replace(/\/$/, ''))
+          .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+        if (vers.length) ver = vers[vers.length - 1];
+      } catch (e) {}
+      const base = 'https://registry.npmmirror.com/-/binary/ffmpeg-static/' + ver + '/';
+      let pctBase = 0;
+      for (const pair of [['ffmpeg-win32-x64.gz', 'ffmpeg.exe'], ['ffprobe-win32-x64.gz', 'ffprobe.exe']]) {
+        await this._downloadGunzip(base + pair[0], path.join(dir, pair[1]), (pct) => {
+          emit({ phase: 'download', file: pair[1], percent: Math.min(99, Math.round(pctBase + pct / 2)) });
+        });
+        pctBase += 50;
+      }
+      const env1 = this.checkEnv();
+      if (env1.downloadNeeded) throw new Error('下载完成但校验未通过：' + (env1.missing || []).join('、'));
+      emit({ phase: 'done', ok: true, dir: dir, version: ver });
+      this._lg('ENV', 'ffmpeg.ensure', 'FFmpeg 环境就绪 · ' + ver + ' · ' + dir, { dir: dir, version: ver });
+      return { ok: true, dir: dir, version: ver, env: env1 };
+    } catch (e) {
+      this.config.ffmpeg_dir = prevDir;
+      emit({ phase: 'error', error: String((e && e.message) || e) });
+      this._lg('ERR', 'ffmpeg.ensure', 'FFmpeg 自动下载失败 · ' + String((e && e.message) || e), { dir: dir });
+      return { ok: false, error: String((e && e.message) || e) };
+    } finally { this._ffmpegBusy = false; }
+  }
+
+  _httpGetJson(url) {
+    return new Promise((resolve, reject) => {
+      this._httpGet(url, (buf) => {
+        try { resolve(JSON.parse(buf.toString('utf8'))); } catch (e) { reject(e); }
+      }, reject);
+    });
+  }
+
+  _httpGet(url, onOk, onErr) {
+    const mod = url.indexOf('https:') === 0 ? require('node:https') : require('node:http');
+    const req = mod.get(url, { headers: { 'User-Agent': 'VideoLab' }, timeout: 20000 }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume(); this._httpGet(res.headers.location, onOk, onErr); return;
+      }
+      if (res.statusCode !== 200) { res.resume(); onErr(new Error('HTTP ' + res.statusCode)); return; }
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => onOk(Buffer.concat(chunks)));
+      res.on('error', onErr);
+    });
+    req.on('timeout', () => req.destroy(new Error('连接超时')));
+    req.on('error', onErr);
+  }
+
+  // 下载 gz → 流式解压写盘；进度按 5% 步进回调
+  _downloadGunzip(url, dest, onPct) {
+    return new Promise((resolve, reject) => {
+      const get = (u, n) => {
+        const mod = u.indexOf('https:') === 0 ? require('node:https') : require('node:http');
+        const req = mod.get(u, { headers: { 'User-Agent': 'VideoLab' }, timeout: 30000 }, (res) => {
+          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && n < 5) {
+            res.resume(); get(res.headers.location, n + 1); return;
+          }
+          if (res.statusCode !== 200) { res.resume(); reject(new Error('HTTP ' + res.statusCode)); return; }
+          const zlib = require('node:zlib');
+          const total = parseInt(res.headers['content-length'], 10) || 0;
+          const chunks = []; let got = 0, last = 0;
+          res.on('data', (c) => {
+            got += c.length; chunks.push(c);
+            const pct = total ? Math.floor((got / total) * 100) : 0;
+            if (pct - last >= 5) { last = pct; if (onPct) onPct(pct); }
+          });
+          res.on('end', () => {
+            try { fs.writeFileSync(dest, zlib.gunzipSync(Buffer.concat(chunks))); resolve(); }
+            catch (e) { reject(e); }
+          });
+          res.on('error', reject);
+        });
+        req.on('timeout', () => req.destroy(new Error('下载超时')));
+        req.on('error', reject);
+      };
+      get(url, 0);
+    });
   }
 }
 

@@ -24,7 +24,9 @@ function nvencArgs(cq) {
  *   默认把结果写到 **stdout**（`file=-`）而不是 stderr，需要这类输出的调用方要开启它。
  * @returns {Promise<{code:number, stderr:string, stdout:string, error:string|null}>}
  */
-function runFfmpeg(args, { onProgress, signal, cwd, env, binary = 'ffmpeg', captureStdout = false } = {}) {
+function runFfmpeg(args, { onProgress, signal, cwd, env, binary, captureStdout = false } = {}) {
+  // FFmpeg 路径解析：backend 注入的 VL_FFMPEG_BIN（自愈下载后的数据目录）优先，回退 PATH
+  binary = binary || process.env.VL_FFMPEG_BIN || 'ffmpeg';
   return new Promise((resolve) => {
     const child = spawn(binary, args, {
       windowsHide: true,

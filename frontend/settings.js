@@ -394,6 +394,8 @@
       if (pa) pa.textContent = s.config_path_appdata || '';
       var ld = $('logDirPath');
       if (ld) ld.textContent = s.log_dir || '';
+      var cdp = $('cfgDirPath');
+      if (cdp) cdp.textContent = s.config_path || '';
       var b = s.batch || {};
       $('batchSuffixMark').value = b.suffix_mark != null ? b.suffix_mark : '';
       $('batchMaxDuration').value = b.max_duration != null ? b.max_duration : '';

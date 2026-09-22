@@ -340,6 +340,11 @@ api.onScanProgress = (p) => {
   } catch (e) {}
   if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('scan_progress', p);
 };
+// FFmpeg 环境自愈进度：主窗（更新浮窗复用）+ 设置窗（维护区行内进度）双通道
+api.onFfmpegProgress = (p) => {
+  sendToMain('env_fix_progress', p);
+  sendToSettings('env_fix_progress', p);
+};
 
 // 主窗口与任务窗口：主窗口仅在原生模态对话框/载入遮罩时被禁用；任务列表窗口不随父窗口禁用
 let mainWin = null;
@@ -500,6 +505,17 @@ function openSettingsWindow() {
       }
       if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('settings_window_closed', null);
     } catch (e) {}
+    // ★ 关闭设置窗后把主窗口提回前台：用户若在设置窗里开过资源管理器（打开日志/选择目录），
+    //   explorer 与其他窗口会压在 Z 序上方，Windows 顺着销毁顺序激活的常常不是主窗 ——
+    //   主窗被留在下层，任务栏看软件就像"没选中"（实测稳定触发）
+    try {
+      if (mainWin && !mainWin.isDestroyed()) {
+        if (mainWin.isMinimized()) mainWin.restore();
+        else mainWin.show();          // 已可见的窗口 show() = 提到前台并激活
+        mainWin.focus();
+        if (!mainWin.isFocused()) app.focus({ steal: true });   // 极端场景兜底
+      }
+    } catch (e2) {}
   });
   return settingsWin;
 }
@@ -1509,6 +1525,23 @@ function registerIpc() {
   ipcMain.handle('set_skin', (e, skin) => { const v = String(skin || '').trim(); config.skin = v || 'white_blue'; saveConfig(config); return config.skin; });
   // 运行日志目录（设置页「维护」区展示与打开）
   ipcMain.handle('get_log_dir', () => ({ ok: true, dir: runLog.getDir() }));
+  // FFmpeg 环境自愈：前端点「修复」触发；完成/失败广播双窗，成功才落盘 ffmpeg_dir
+  ipcMain.handle('env_fix_start', async () => {
+    const r = await api.ensureFfmpeg();
+    sendToMain('env_fix_done', r);
+    sendToSettings('env_fix_done', r);
+    if (r.ok) saveConfig(config);   // backend 写入的 this.config.ffmpeg_dir 与这里是同一引用
+    return r;
+  });
+  // 启动检测 FFmpeg 环境：不完整才弹下载提示（滤镜链实跑比对，见 backend.checkEnv）
+  setTimeout(() => {
+    try {
+      const env = api.checkEnv();
+      if (!env.downloadNeeded) return;
+      sendToMain('env_fix_available', { missing: env.missing || [], hasFfmpeg: env.ffmpeg });
+      sendToSettings('env_fix_available', { missing: env.missing || [], hasFfmpeg: env.ffmpeg });
+    } catch (e) {}
+  }, 3500);
   ipcMain.handle('open_path', async (e, p) => { const target = path.resolve(p); if (fs.existsSync(target)) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '路径不存在' }; });
   ipcMain.handle('open_parent', async (e, p) => { const target = path.dirname(path.resolve(p)); if (fs.existsSync(target)) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '路径不存在' }; });
   // 打开单个文件所在的文件夹并在资源管理器中选中该文件（项目所有「打开文件夹」类操作统一走此逻辑）

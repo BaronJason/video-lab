@@ -102,9 +102,10 @@
       </div>
 
       <div class="form-group">
-        <div class="form-group__head">
-          <label class="form-group__label">配置和数据保存位置<small>保存后立即生效，配置与缓存库将一并迁移</small></label>
-          <button type="button" class="cfg-open-btn" id="btnOpenCfgDir">打开文件夹</button>
+        <label class="form-group__label">配置和数据保存位置<small>保存后立即生效，配置与缓存库将一并迁移</small></label>
+        <div class="opt-row">
+          <button type="button" class="btn btn-ghost" id="btnOpenCfgDir">打开文件夹</button>
+          <span class="opt-path" id="cfgDirPath"></span>
         </div>
         <div class="opt-row">
           <label class="opt-radio">
@@ -295,8 +296,8 @@
       <div class="form-group">
         <label class="form-group__label">运行日志<small>逐条记录启动退出、任务执行、删除与配置变更，保留最近 7 天。任务记录和成片都可能被清除，这份日志不会 —— 排查「某次成片去哪了」时从这里查证。</small></label>
         <div class="opt-row">
-          <span class="opt-path" id="logDirPath"></span>
           <button type="button" class="btn btn-ghost" id="btnOpenLogDir">打开文件夹</button>
+          <span class="opt-path" id="logDirPath"></span>
         </div>
       </div>
     </section>

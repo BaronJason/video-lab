@@ -16,7 +16,7 @@ function probe(videoPath) {
       '-show_entries', 'format=duration',
       '-of', 'default=noprint_wrappers=1:nokey=1',
       videoPath];
-    const child = spawn('ffprobe', args, { windowsHide: true });
+    const child = spawn(process.env.VL_FFPROBE_BIN || 'ffprobe', args, { windowsHide: true });
     let out = '';
     child.stdout && child.stdout.on('data', (b) => { out += b.toString('utf8'); });
     child.on('close', (code) => {
@@ -57,7 +57,7 @@ function probeDetail(videoPath) {
   return new Promise((resolve) => {
     if (!exists(videoPath)) return resolve(empty);
     const args = ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', videoPath];
-    const child = spawn('ffprobe', args, { windowsHide: true });
+    const child = spawn(process.env.VL_FFPROBE_BIN || 'ffprobe', args, { windowsHide: true });
     let out = '';
     child.stdout && child.stdout.on('data', (b) => { out += b.toString('utf8'); });
     child.on('error', () => resolve(empty));

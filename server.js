@@ -74,6 +74,7 @@ const PURE_BACKEND_ROUTES = {
   run_tool: { m: 'runTool', a: (args) => [args[0]] },
   rerun_tool_task: { m: 'rerunToolTask', a: (args) => [args[0]] },
   list_dir: { m: 'listDir', a: (args) => [args[0]] },
+  ensure_ffmpeg: { m: 'ensureFfmpeg', a: () => [{ force: true }] },
   list_mask_projects: { m: 'listMaskProjects', a: () => [] },
   list_mask_videos: { m: 'listMaskVideos', a: (args) => [args[0]] },
   list_mask_masks: { m: 'listMaskMasks', a: (args) => [args[0]] },

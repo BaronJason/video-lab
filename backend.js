@@ -40,6 +40,9 @@ const DEFAULT_CONFIG = {
   ffmpeg_dir: '',             // FFmpeg 自愈下载目录（数据目录 ffmpeg\）；空 = 用系统 PATH 里的
   notify_task_end: true,      // 任务失败 / 本轮跑完的 Windows 系统通知（默认开启，可在 设置-通用设置 关闭）
   show_maintenance: false,    // 设置页「维护」板块是否可见（用户侧默认关闭：重建缓存/日志等属维护用途）
+  backup_dir: '',             // 视频处理「处理前备份」的默认目录；留空 = 数据目录下 backup（与缓存库同目录）
+  backup_auto_clean: false,   // 视频处理任务完成后自动清理过期备份（默认关闭；删除走回收站可还原）
+  backup_keep_days: 7,        // 备份保留天数（3 / 7 / 15 / 30）
   auto_check_update: true,    // 启动时自动检查更新
   check_update_daily: false,  // 每日定时检查更新（整点触发，需 app 保持运行）
   check_update_hour: 9,       // 每日定时检查更新时间（24 小时制整点 0-23，默认 9）
@@ -249,6 +252,7 @@ class Api {
     this.onScanProgress = null;   // 各扫描/重建环节进度回调（main 注入，推送主窗口渲染实时状态）
     this._precheckToken = 0;      // 预检测取消令牌：token 变化即中断旧探测（重置/换路径/手动取消）
     this._inlineProbing = 0;      // 行内预检测进行中计数：后台大探测遇其让路，保证用户操作优先
+    this._cleanupStaleLocks();    // 启动时清掉历史残留的过期锁（异常退出留下的，否则一直累积）
     // ffprobe 探测并发上限：保持低值，避免占用过多 CPU/IO 拖慢整机
     this.probeConcurrency = 4;
     this._videoCache = null;
@@ -3490,6 +3494,8 @@ class Api {
           this._startNextQueued();
           // ★ 系统通知（用户定案 2026-09-22）：任务失败必报；队列彻底空闲（无运行中、无排队）
           //   时报「全部任务完成」并区分最后一次是否带失败项
+          // 视频处理任务结束后按设置清理过期备份（仅开启时执行）
+          if (task.type === 'tool') this._cleanupBackups();
           if (status === 'error') {
             this._notify('任务失败：' + String(task.title || '').slice(0, 50),
               task.failReason || '存在失败项，可在任务列表中查看详情或继续制作');
@@ -5037,6 +5043,70 @@ let themes = [];
       downloadNeeded: !ffmpegPath || !ffprobePath || !filtersOk || !encodersOk,
       ffmpegDir: cfgDir,
     };
+  }
+
+  // 备份自动清理：删除超过保留天数的处理前备份（走回收站，可还原）；
+  // 目录取设置里的「默认备份目录」，未设置时用数据目录下的 backup
+  _cleanupBackups() {
+    try {
+      if (this.config.backup_auto_clean !== true) return;
+      const days = parseInt(this.config.backup_keep_days, 10) || 7;
+      const root = String(this.config.backup_dir || '').trim()
+        || path.join(this.storageDir || process.cwd(), 'backup');
+      if (!fs.existsSync(root)) return;
+      const expire = Date.now() - days * 24 * 60 * 60 * 1000;
+      let n = 0;
+      const walk = (d) => {
+        for (const name of fs.readdirSync(d)) {
+          const p2 = path.join(d, name);
+          let st = null;
+          try { st = fs.statSync(p2); } catch (e) { continue; }
+          if (st.isDirectory()) { walk(p2); continue; }
+          if (st.mtimeMs < expire) {
+            if (shell && typeof shell.trashItem === 'function') shell.trashItem(p2).catch(() => {});
+            n++;
+          }
+        }
+      };
+      walk(root);
+      if (n) this._lg('DEL', 'backup.cleanup', '清理过期备份 · ' + n + ' 个文件 · 保留 ' + days + ' 天');
+    } catch (e) {}
+  }
+
+  // 过期锁清理：进程被强杀（崩溃 / 任务管理器结束）时 finally 不执行，锁文件会残留下来；
+  // 而 .locks 目录只建不删 —— 残留会一直累积，用户也无从清理。
+  // 判定与 acquireLock 的过期规则一致：pid 不存活 或 写入时间超过 60 秒
+  _cleanupStaleLocks() {
+    try {
+      const dir = path.join(this.storageDir || process.cwd(), '.locks');
+      if (!fs.existsSync(dir)) return;
+      for (const name of fs.readdirSync(dir)) {
+        if (!/\.lock$/i.test(name)) continue;
+        const lockFile = path.join(dir, name);        // 锁文件是进程间同步用的临时控制文件，非业务数据
+        let st = null;
+        try { st = fs.statSync(lockFile); } catch (e) { continue; }
+        if (!st || !st.isFile()) continue;
+        let holder = null;
+        try { holder = JSON.parse(fs.readFileSync(lockFile, 'utf8')); } catch (e) { holder = null; }
+        let alive = false;
+        if (holder && holder.pid) {
+          try { process.kill(holder.pid, 0); alive = true; } catch (e) { alive = (e && e.code === 'EPERM'); }
+        }
+        const stale = !alive || (Date.now() - (st.mtimeMs || 0) > 60 * 1000);
+        if (stale) { try { fs.unlinkSync(lockFile); } catch (e) {} }
+      }
+    } catch (e) {}
+  }
+
+  // 打开备份目录：传空则用「默认备份目录」的设置（再空则回退数据目录下 backup）；
+  // 目录尚不存在时明确提示，而不是静默失败
+  openBackupDir(dir) {
+    const p = String(dir || '').trim()
+      || String(this.config.backup_dir || '').trim()
+      || path.join(this.storageDir || process.cwd(), 'backup');
+    if (!fs.existsSync(p)) return { ok: false, error: '备份目录尚不存在（还没有备份过文件）', path: p };
+    const err = shell.openPath(p);
+    return err ? { ok: false, error: err, path: p } : { ok: true, path: p };
   }
 
   // Windows 系统通知（任务失败 / 全部任务完成）：

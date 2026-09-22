@@ -1105,6 +1105,9 @@ function buildHttpExtraRoutes() {
         log_dir: runLog.getDir(),
         show_maintenance: c.show_maintenance === true,
         notify_task_end: c.notify_task_end !== false,
+        backup_dir: String(c.backup_dir || ''),
+        backup_auto_clean: c.backup_auto_clean === true,
+        backup_keep_days: parseInt(c.backup_keep_days, 10) || 7,
       };
     },
     // 运行日志目录（设置页「维护」区）
@@ -1124,7 +1127,13 @@ function buildHttpExtraRoutes() {
         if (s.check_update_hour !== undefined && s.check_update_hour !== null) { const h = parseInt(s.check_update_hour, 10); if (h >= 0 && h <= 23) cfg.check_update_hour = h; }
         if (typeof s.autostart === 'boolean') cfg.autostart = s.autostart;
       if (typeof s.notify_task_end === 'boolean') cfg.notify_task_end = s.notify_task_end;
+      if (typeof s.backup_dir === 'string') cfg.backup_dir = s.backup_dir;
+      if (typeof s.backup_auto_clean === 'boolean') cfg.backup_auto_clean = s.backup_auto_clean;
+      if (s.backup_keep_days !== undefined) cfg.backup_keep_days = parseInt(s.backup_keep_days, 10) || 7;
       if (typeof s.notify_task_end === 'boolean') cfg.notify_task_end = s.notify_task_end;
+      if (typeof s.backup_dir === 'string') cfg.backup_dir = s.backup_dir;
+      if (typeof s.backup_auto_clean === 'boolean') cfg.backup_auto_clean = s.backup_auto_clean;
+      if (s.backup_keep_days !== undefined) cfg.backup_keep_days = parseInt(s.backup_keep_days, 10) || 7;
         if (s.close_behavior === 'exit' || s.close_behavior === 'tray') cfg.close_behavior = s.close_behavior;
         if (s.update_source === 'github' || s.update_source === 'gitee') cfg.update_source = s.update_source;
         if (s.update_mode === 'auto' || s.update_mode === 'notify') cfg.update_mode = s.update_mode;
@@ -1398,6 +1407,9 @@ function registerIpc() {
       log_dir: runLog.getDir(),   // 运行日志目录（设置页「打开文件夹」用；与 HTTP 版 get_settings 对齐）
       show_maintenance: c.show_maintenance === true,   // 「维护」板块可见性（用户侧默认关闭）
       notify_task_end: c.notify_task_end !== false,    // 任务通知（默认开启）
+      backup_dir: String(c.backup_dir || ''),
+      backup_auto_clean: c.backup_auto_clean === true,
+      backup_keep_days: parseInt(c.backup_keep_days, 10) || 7,
       autostart: c.autostart === true,
       close_behavior: c.close_behavior === 'exit' ? 'exit' : 'tray',
       http_port: parseInt(c.http_port, 10) || 9527,
@@ -1548,6 +1560,7 @@ function registerIpc() {
       sendToSettings('env_fix_available', { missing: env.missing || [], hasFfmpeg: env.ffmpeg });
     } catch (e) {}
   }, 3500);
+  ipcMain.handle('open_backup_dir', async (e, p) => api.openBackupDir(p));
   ipcMain.handle('open_path', async (e, p) => { const target = path.resolve(p); if (fs.existsSync(target)) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '路径不存在' }; });
   ipcMain.handle('open_parent', async (e, p) => { const target = path.dirname(path.resolve(p)); if (fs.existsSync(target)) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '路径不存在' }; });
   // 打开单个文件所在的文件夹并在资源管理器中选中该文件（项目所有「打开文件夹」类操作统一走此逻辑）

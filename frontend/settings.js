@@ -342,6 +342,12 @@
       if (as) as.checked = s.autostart === true;
       var nte = $('notifyTaskEnd');
       if (nte) nte.checked = s.notify_task_end !== false;   // 默认开启
+      var bd = $('backupDir');
+      if (bd) bd.value = s.backup_dir || '';
+      var bac = $('backupAutoClean');
+      if (bac) bac.checked = s.backup_auto_clean === true;
+      var bkd = $('backupKeepDays');
+      if (bkd) bkd.value = String(s.backup_keep_days || 7);
       var cbv = s.close_behavior === 'exit' ? 'exit' : 'tray';
       document.querySelectorAll('input[name="closeBehavior"]').forEach(function (r) { r.checked = r.value === cbv; });
       document.querySelectorAll('input[name="updateSource"]').forEach(function (r) { r.checked = r.value === s.update_source; });
@@ -580,6 +586,9 @@
         check_update_hour: parseInt($('checkUpdateHour').value, 10) || 9,
         autostart: !!$('autoStart').checked,
         notify_task_end: !!$('notifyTaskEnd').checked,
+        backup_dir: ($('backupDir') && $('backupDir').value.trim()) || '',
+        backup_auto_clean: !!($('backupAutoClean') && $('backupAutoClean').checked),
+        backup_keep_days: parseInt(($('backupKeepDays') && $('backupKeepDays').value) || '7', 10) || 7,
         close_behavior: cbEl ? cbEl.value : 'tray',
         update_source: srcEl ? srcEl.value : 'gitee',
         update_mode: umEl ? umEl.value : 'notify',

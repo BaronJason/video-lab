@@ -246,8 +246,9 @@
         <div class="tl-sep"></div>
         <div class="tl-out__row">
           <label class="tl-check"><input type="checkbox" id="outBackup">处理前备份原文件</label>
-          <input class="tl-text" id="outBackupDir" placeholder="备份目录（留空 = 应用数据目录下）" style="max-width:320px">
+          <input class="tl-text" id="outBackupDir" placeholder="备份目录（留空 = 设置里的默认备份目录）" style="max-width:320px">
           <button class="tl-btn" id="btnPickBackupDir"><i data-icon="folder-open" data-size="14"></i>选择</button>
+          <button class="tl-btn" id="btnOpenBackupDir" title="打开当前设定的备份目录（留空则打开默认备份目录）"><i data-icon="folder-open" data-size="14"></i>打开备份目录</button>
         </div>
         <div class="tl-hint" id="outHint"></div>
       </div>

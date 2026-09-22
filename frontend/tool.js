@@ -479,6 +479,13 @@
       });
     });
     $('btnPickFiles').addEventListener('click', function () {
+      var obb = $('btnOpenBackupDir');
+      if (obb) obb.addEventListener('click', function () {
+        if (!api || !api.open_backup_dir) { setStatus('后端不支持打开目录', 'err'); return; }
+        api.open_backup_dir($('outBackupDir').value.trim()).then(function (r) {
+          if (!r || !r.ok) setStatus('打开备份目录失败：' + ((r && r.error) || '未知错误'), 'err');
+        }).catch(function (e) { setStatus('打开备份目录失败：' + e.message, 'err'); });
+      });
       if (!api || !api.pick_paths_files) return;
       api.pick_paths_files().then(function (list) {
         if (list && list.length) { state.files = list.slice(); state.root = ''; $('inRoot').value = list.join('；'); renderInputHint(); }

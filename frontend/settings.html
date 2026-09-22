@@ -48,6 +48,39 @@
     <button class="settings-nav__item" data-view="batch">批量拼接</button>
     <button class="settings-nav__item" data-view="replica">视频复刻</button>
     <button class="settings-nav__item" data-view="mask">遮罩叠加</button>
+    <button class="settings-nav__item" data-view="tool">视频处理</button>
+    <!-- ═══ 视频处理 ═══ -->
+    <section class="settings-view" id="view-tool">
+      <h2 class="settings-view__title">视频处理</h2>
+
+      <div class="settings-group"><span class="settings-group__title">备份</span></div>
+
+      <div class="form-group">
+        <label class="form-group__label">默认备份目录<small>「处理前备份」的文件存放位置；留空则放在应用数据目录下（与缓存同目录）</small></label>
+        <div class="dir-row">
+          <input class="form-input" id="backupDir" type="text" placeholder="">
+          <button class="btn btn-ghost" data-dir="backupDir">选择目录</button>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-group__label">自动清理备份<small>视频处理任务完成后，删除超过保留时间的备份（移入回收站，可还原）</small></label>
+        <div class="opt-row">
+          <label class="opt-check">
+            <input type="checkbox" id="backupAutoClean">
+            <span class="opt-check__box"></span>
+            <span>任务完成后自动清理</span>
+          </label>
+          <select class="form-input opt-time-select" id="backupKeepDays" title="备份保留时间">
+            <option value="3">保留 3 天</option>
+            <option value="7">保留 7 天</option>
+            <option value="15">保留 15 天</option>
+            <option value="30">保留 30 天</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
     <!-- 「维护」板块：默认隐藏，由 config.json 的 show_maintenance 控制（用户侧关闭） -->
     <button class="settings-nav__item" data-view="maintenance" style="display:none">维护</button>
     <button class="settings-nav__item" data-view="changelog">更新日志</button>

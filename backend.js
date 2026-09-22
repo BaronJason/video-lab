@@ -38,6 +38,7 @@ const FFMPEG_REQUIRED_ENCODERS = ['h264_nvenc', 'hevc_nvenc', 'av1_nvenc'];
 const DEFAULT_CONFIG = {
   skin: 'white_blue',
   ffmpeg_dir: '',             // FFmpeg 自愈下载目录（数据目录 ffmpeg\）；空 = 用系统 PATH 里的
+  notify_task_end: false,     // 任务失败 / 本轮跑完的 Windows 系统通知（用户侧默认关闭；本机调试可开）
   auto_check_update: true,    // 启动时自动检查更新
   check_update_daily: false,  // 每日定时检查更新（整点触发，需 app 保持运行）
   check_update_hour: 9,       // 每日定时检查更新时间（24 小时制整点 0-23，默认 9）
@@ -3487,6 +3488,23 @@ class Api {
           // 运行任务结束：清空运行位并启动执行队列中的下一个任务（暂停/继续不影响插入后的推进）
           this._runningTaskId = null;
           this._startNextQueued();
+          // ★ 系统通知（用户定案 2026-09-22）：任务失败必报；队列彻底空闲（无运行中、无排队）
+          //   时报「全部任务完成」并区分最后一次是否带失败项
+          if (status === 'error') {
+            this._notify('任务失败：' + String(task.title || '').slice(0, 50),
+              task.failReason || '存在失败项，可在任务列表中查看详情或继续制作');
+          }
+          // 队列已无待运行任务（queued 空）即视为「本轮跑完」——此时可能还有**暂停待续**的任务
+          // （用户主动暂停 / 软暂停让位），这类不在执行队列里，需在通知里明确提醒，避免误以为全做完
+          if (!this._runningTaskId && this._taskQueue.length === 0 && (status === 'done' || status === 'error')) {
+            var pendingPaused = 0;
+            this.tasks.forEach((t2) => { if (t2.status === 'paused') pendingPaused++; });
+            const head = status === 'error' ? '任务已跑完（存在失败项）' : '任务已跑完';
+            const tail = pendingPaused > 0
+              ? '另有 ' + pendingPaused + ' 个任务处于暂停待续，点「继续任务」可接着制作'
+              : '任务队列已清空，全部成功';
+            this._notify(head, tail);
+          }
         });
         child.on('error', (err2) => {
           task.log.push('[启动失败] ' + String(err2));
@@ -5019,6 +5037,20 @@ let themes = [];
       downloadNeeded: !ffmpegPath || !ffprobePath || !filtersOk || !encodersOk,
       ffmpegDir: cfgDir,
     };
+  }
+
+  // Windows 系统通知（任务失败 / 全部任务完成）：
+  // 走主进程 Notification（app.setAppUserModelId 已在 main 设置，通知才能正常显示）。
+  // 通知不可用时静默 —— 提示失败绝不能影响任务流本身
+  _notify(title, body) {
+    try {
+      // 开关：config.json 的 notify_task_end —— 用户侧默认关闭（不打扰）；本机/开发机可置 true
+      if (!(this.config && this.config.notify_task_end === true)) return;
+      const { Notification } = require('electron');
+      if (!Notification || (Notification.isSupported && !Notification.isSupported())) return;
+      new Notification({ title: String(title || ''), body: String(body || '') }).show();
+      this._lg('RUN', 'notify', '系统通知 · ' + title + ' · ' + String(body || '').slice(0, 60));
+    } catch (e) {}
   }
 
   _ffmpegTargetDir() {

@@ -487,7 +487,7 @@
       var obb = $('btnOpenBackupDir');
       if (obb) obb.addEventListener('click', function () {
         if (!api || !api.open_backup_dir) { setStatus('后端不支持打开目录', 'err'); return; }
-        api.open_backup_dir($('outBackupDir').value.trim()).then(function (r) {
+        api.open_backup_dir($('outBackupDir').value.trim() || state.defaultBackupDir).then(function (r) {
           if (!r || !r.ok) setStatus('打开备份目录失败：' + ((r && r.error) || '未知错误'), 'err');
         }).catch(function (e) { setStatus('打开备份目录失败：' + e.message, 'err'); });
       });
@@ -531,7 +531,7 @@
       if (!api || !api.list_dir) { setStatus('后端不支持目录浏览，请直接粘贴路径', 'err'); return; }
       pickDirDialog({
         title: '选择备份目录',
-        initial: $('outBackupDir').value || $('outBackupDir').placeholder || '',
+        initial: $('outBackupDir').value || state.defaultBackupDir || '',
         onPick: function (p) { $('outBackupDir').value = p; },
       });
     });
@@ -707,6 +707,7 @@
         return;
       }
       state.info = info;
+      state.defaultBackupDir = (info.output && info.output.defaultBackupDir) || '';
       (info.steps || []).forEach(function (s) {
         state.sel[s.id] = false;
         state.values[s.id] = {};

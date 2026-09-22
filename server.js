@@ -8,7 +8,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const { dialog, shell, BrowserWindow } = require('electron');
 
 const FRONTEND_DIR = path.join(__dirname, 'frontend');
@@ -19,11 +19,18 @@ const ICON_DIR = path.join(__dirname, 'icon');
 // Windows 前台锁压制、后台冒出。改为 cmd /c start（ShellExecute 方式）让 explorer 获得前台激活权
 function openDirForeground(target) {
   return new Promise((resolve) => {
-    // cmd /c start "" "path"：start 首个参数为窗口标题（空），第二个为目标目录
-    execFile('cmd.exe', ['/c', 'start', '""', '"' + target + '"'], { windowsHide: true }, (err) => {
-      if (err) resolve({ ok: false, error: String(err && err.message || err) });
-      else resolve({ ok: true });
-    });
+    // cmd /c start "" "path"：start 首个参数为窗口标题（空），第二个为目标目录。
+    // ⚠ 不能用 execFile 等退出：start 拉起的 explorer 会继承 cmd 的管道句柄，Node 的
+    // 回调要等到「管道 EOF」= explorer 窗口关闭才触发 → 浏览器端 open_path 表现为挂起/
+    // 无响应（还叠加 cmd 在前台锁压制时静默失败、弹 Windows 错误音）。改 spawn + detached
+    // + 忽略 stdio + unref：cmd 一退出即返回，explorer 由它自己的进程承载。
+    // start 是否真的拉起 explorer 无法可靠探知，超 150ms 即视为成功（目标存在性调用方已校验）。
+    try {
+      const cp = spawn('cmd.exe', ['/c', 'start', '""', '"' + target + '"'], { windowsHide: true, detached: true, stdio: 'ignore' });
+      cp.unref();
+      cp.on('error', (err) => resolve({ ok: false, error: String(err && err.message || err) }));
+      setTimeout(() => resolve({ ok: true }), 150);
+    } catch (e) { resolve({ ok: false, error: String(e && e.message || e) }); }
   });
 }
 

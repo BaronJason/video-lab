@@ -3903,7 +3903,9 @@ class Api {
         modes: [{ v: 'overwrite', t: '覆盖原视频' }, { v: 'directory', t: '输出到指定目录' }],
         nameModes: [{ v: 'keep', t: '原名' }, { v: 'suffix', t: '原名 + 后缀' }],
         conflicts: [{ v: 'index', t: '追加序号' }, { v: 'overwrite', t: '覆盖' }, { v: 'skip', t: '跳过' }],
-        defaultBackupDir: this.storageDir || '',
+        // 实际默认备份地址：设置里的默认备份目录 > 数据目录下 backup（供工具页同步使用）
+        defaultBackupDir: String(this.config.backup_dir || '').trim()
+          || path.join(this.storageDir || '', 'backup'),
       },
     };
   }

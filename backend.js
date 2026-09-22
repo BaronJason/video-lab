@@ -31,6 +31,10 @@ const FFMPEG_REQUIRED_FILTERS = [
   'format', 'signalstats', 'metadata',
 ];
 
+// 必需编码器（硬件编码硬约束）：三档转码格式都走 NVENC ——
+// 只查滤镜查不到编码器能力（老版本 ffmpeg 没有 av1_nvenc，会"检测合格但选 AV1 就失败"）
+const FFMPEG_REQUIRED_ENCODERS = ['h264_nvenc', 'hevc_nvenc', 'av1_nvenc'];
+
 const DEFAULT_CONFIG = {
   skin: 'white_blue',
   ffmpeg_dir: '',             // FFmpeg 自愈下载目录（数据目录 ffmpeg\）；空 = 用系统 PATH 里的
@@ -4984,6 +4988,7 @@ let themes = [];
     const ffprobePath = resolveBin('ffprobe', cfgDir ? path.join(cfgDir, 'ffprobe.exe') : '');
     // 滤镜链完整性：-filters 实跑比对
     const missing = [];
+    const missingEncoders = [];
     if (ffmpegPath) {
       try {
         const r = spawnSync(ffmpegPath, ['-hide_banner', '-filters'],
@@ -4993,15 +4998,25 @@ let themes = [];
           for (const f of FFMPEG_REQUIRED_FILTERS) if (!out.includes(' ' + f + ' ')) missing.push(f);
         } else missing.push(...FFMPEG_REQUIRED_FILTERS);
       } catch (e2) { missing.push(...FFMPEG_REQUIRED_FILTERS); }
+      // 硬件编码器同样实跑比对（滤镜可用 ≠ 编码器可用）
+      try {
+        const r2 = spawnSync(ffmpegPath, ['-hide_banner', '-encoders'],
+          { windowsHide: true, encoding: 'utf8', timeout: 20000, maxBuffer: 16 * 1024 * 1024 });
+        if (r2.status === 0) {
+          const out2 = String(r2.stdout || '');
+          for (const e3 of FFMPEG_REQUIRED_ENCODERS) if (!out2.includes(' ' + e3 + ' ')) missingEncoders.push(e3);
+        } else missingEncoders.push(...FFMPEG_REQUIRED_ENCODERS);
+      } catch (e4) { missingEncoders.push(...FFMPEG_REQUIRED_ENCODERS); }
     }
     const filtersOk = !!ffmpegPath && missing.length === 0;
+    const encodersOk = !!ffmpegPath && missingEncoders.length === 0;
     return {
       ffmpeg: !!ffmpegPath,
       ffprobe: !!ffprobePath,
       // 引擎入口是否就绪；false 即任务无法执行（前端据此提示重装）
       engine: !!this._engineRunnerPath(),
-      ffmpegPath, ffprobePath, filtersOk, missing,
-      downloadNeeded: !ffmpegPath || !ffprobePath || !filtersOk,
+      ffmpegPath, ffprobePath, filtersOk, encodersOk, missing, missingEncoders,
+      downloadNeeded: !ffmpegPath || !ffprobePath || !filtersOk || !encodersOk,
       ffmpegDir: cfgDir,
     };
   }

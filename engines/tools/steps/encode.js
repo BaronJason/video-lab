@@ -1,4 +1,10 @@
-// 步骤 · 码率控制 / 目标体积压缩
+// 步骤 · 转码 / 码率控制 / 目标体积压缩
+//
+// ★ 转码（用户定案 2026-09-22）：可选 H.264 / H.265 / AV1 三种编码格式（全部 NVENC）。
+//   兼容性硬保障（转码产物必须能被下游模块与常见软件正常使用）：
+//   · 像素格式统一 yuv420p（vf 的 FORCE_FORMAT 兜底）
+//   · 音轨统一 AAC 192k、mp4 容器 + faststart
+//   · H.265 强制 hvc1 标签（不写会导致部分软件打不开）
 //
 // 原脚本做法（scripts-archive/视频工具/重编码5000.ps1）：
 //   · 码率阈值 5000 kbps —— 超过才处理；CQ 从 26 起，每次 +1，最高 40
@@ -17,6 +23,14 @@ const num = (v, d) => {
   return isFinite(n) ? n : d;
 };
 
+/** 编码格式文案 → NVENC 编码器键（未知/缺省回退 h264，保持既有行为） */
+function codecKeyOf(v) {
+  const s = String(v || '');
+  if (s.indexOf('H.265') >= 0 || s.indexOf('HEVC') >= 0) return 'hevc';
+  if (s.indexOf('AV1') >= 0) return 'av1';
+  return 'h264';
+}
+
 /** 竖屏 → 1080×1920，横屏（含正方）→ 1920×1080（与原脚本一致） */
 function canonicalRes(w, h) {
   return (Number(w) > Number(h)) ? [1920, 1080] : [1080, 1920];
@@ -24,10 +38,13 @@ function canonicalRes(w, h) {
 
 module.exports = {
   id: 'encode',
-  title: '码率控制',
+  title: '转码 / 码率',
   group: '编码',
   danger: '',
   schema: [
+    { key: 'codec', label: '编码格式', type: 'select', default: 'H.264（最通用）',
+      options: ['H.264（最通用）', 'H.265 / HEVC（体积更小）', 'AV1（体积最小）'],
+      hint: '换格式会重编一遍；H.265/AV1 更省空间，老设备可能不支持' },
     { key: 'mode', label: '方式', type: 'select', default: '恒定质量',
       options: ['恒定质量', '码率上限', '目标体积'],
       hint: '恒定质量 = 只管画质；另两种按大小压' },
@@ -56,6 +73,8 @@ module.exports = {
   decide(info, params) {
     const dur = Number(info.duration) || 0;
     const mode = String(params.mode || '恒定质量');
+    const codec = codecKeyOf(params.codec);
+    const codecName = codec === 'hevc' ? 'H.265' : (codec === 'av1' ? 'AV1' : 'H.264');
     const snapRes = params.snapRes === true;
     const curW = Number(info.width) || 0;
     const curH = Number(info.height) || 0;
@@ -63,7 +82,7 @@ module.exports = {
     const resOff = snapRes && curW > 0 && (curW !== want[0] || curH !== want[1]);
 
     const base = {
-      mode, snapRes, snapTo: resOff ? want : null,
+      mode, codec, snapRes, snapTo: resOff ? want : null,
       curW, curH, curKbps: Math.round((Number(info.bitrate) || 0) / 1000),
     };
 
@@ -73,7 +92,7 @@ module.exports = {
       const cq = num(params.cq, 27);
       return Object.assign(base, {
         cq,
-        note: ['CQ ' + cq + '（重编码）', resNote].filter(Boolean).join('；'),
+        note: ['重编码为 ' + codecName + '（CQ ' + cq + '）', resNote].filter(Boolean).join('；'),
       });
     }
 
@@ -102,7 +121,7 @@ module.exports = {
 
     return Object.assign(base, {
       ramp: { targetKbps, initialCq, increment: cqIncrement, maxCq },
-      note: [what + '（当前 ' + (base.curKbps || '未知') + ' kbps；'
+      note: [what + '（转 ' + codecName + '；当前 ' + (base.curKbps || '未知') + ' kbps；'
         + '先按 10% 样本试算定 CQ（' + initialCq + ' 起，每次 +' + cqIncrement + '，上限 ' + maxCq
         + '），再整片编码一遍）', resNote].filter(Boolean).join('；'),
     });

@@ -3,17 +3,29 @@
 
 const { spawn } = require('node:child_process');
 
-// 硬约束：GPU 编码参数固定注入，禁止回退 libx264
-const NVENC_ARGS = ['-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'vbr', '-cq', '27', '-profile:v', 'high', '-level', '4.1'];
+// 硬约束：GPU 编码参数固定注入，禁止回退 libx264。
+// 三档编码格式全部走 NVENC（RTX 40 系原生支持 AV1），供「转码 / 码率」步骤按格式选用：
+// · H.264 —— 最通用（播放器/剪辑软件/手机全支持），默认档，行为与历史一致
+// · H.265 —— 同画质体积更小；**必须带 hvc1 标签**（mp4 里默认 hev1 时 Windows 照片、
+//   部分剪辑软件与预览组件不认，产物会"打不开"，进而拖垮下游模块 —— 兼容性硬保障）
+// · AV1 —— 体积最小；mp4 内默认 av01 标签即通用写法
+const NVENC_CODECS = {
+  h264: ['-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'vbr', '-cq', '27', '-profile:v', 'high', '-level', '4.1'],
+  hevc: ['-c:v', 'hevc_nvenc', '-preset', 'p4', '-rc', 'vbr', '-cq', '27', '-tag:v', 'hvc1'],
+  av1: ['-c:v', 'av1_nvenc', '-preset', 'p4', '-rc', 'vbr', '-cq', '27'],
+};
+const NVENC_ARGS = NVENC_CODECS.h264;
 
 /**
- * 按 CQ 生成编码参数（其余参数一律用硬约束值，**不开放调整**）。
- * 工具侧的「码率控制」步骤只改 CQ，其余由本源统一注入 —— 避免各处手写参数写出偏门组合。
+ * 按 CQ（+ 可选编码格式）生成编码参数（其余参数一律用硬约束值，**不开放调整**）。
+ * 工具侧的「转码 / 码率」步骤只改 CQ 与编码格式，其余由本源统一注入 —— 避免各处手写参数写出偏门组合。
  * @param {number|null|undefined} cq 传 null/undefined 时用默认 27
+ * @param {'h264'|'hevc'|'av1'} [codec] 编码格式，缺省 h264（向后兼容既有调用）
  */
-function nvencArgs(cq) {
+function nvencArgs(cq, codec) {
   const q = (cq == null || !isFinite(Number(cq))) ? '27' : String(Math.round(Number(cq)));
-  return NVENC_ARGS.map((x) => (x === '27' ? q : x));
+  const args = NVENC_CODECS[String(codec || 'h264')] || NVENC_CODECS.h264;
+  return args.map((x) => (x === '27' ? q : x));
 }
 
 /**

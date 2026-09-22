@@ -162,7 +162,7 @@ async function processFile(file, steps, opts) {
 
   /** 一轮编码；返回 {ok, code} */
   const encodeOnce = async (cqNow) => {
-    const list = head.concat(built.args).concat(nvencArgs(cqNow)).concat(tail);
+    const list = head.concat(built.args).concat(nvencArgs(cqNow, enc.codec)).concat(tail);
     const r = await runFfmpeg(list, { signal: o.signal, onProgress: forward });
     // 失败时带上 ffmpeg 错误尾部（诊断不丢失）
     const errTail = String(r.stderr || '').trim().split(/\r?\n/).filter(Boolean).slice(-3).join(' | ');
@@ -207,7 +207,7 @@ async function processFile(file, steps, opts) {
       }
       sArgs.push('-i', file);
       const r = await runFfmpeg(sArgs.concat(sBuilt.inputArgs || []).concat(sBuilt.args)
-        .concat(nvencArgs(cqNow)).concat(sTail), { signal: o.signal });
+        .concat(nvencArgs(cqNow, enc.codec)).concat(sTail), { signal: o.signal });
       samples++;
       if (r.code !== 0) return -1;
       const bit = await measureBitrateKbps(tmpSample);

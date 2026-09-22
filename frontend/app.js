@@ -267,12 +267,12 @@
         });
         var bOpen = root.querySelector('[data-wm="open"]');
         if (bOpen) bOpen.addEventListener('click', function () {
-          if (curWm) call('open_path', curWm).then(function (r) { if (r && !r.ok) toast(r.error || '路径不存在', true); }).catch(function (e) { toast('打开失败：' + e.message, true); });
+          if (curWm) openInShell(curWm);
           else toast('未设置主流水印，无法打开文件', true);
         });
         var bFold = root.querySelector('[data-wm="folder"]');
         if (bFold) bFold.addEventListener('click', function () {
-          if (curWm) call('open_folder_select', curWm).then(function (r) { if (r && !r.ok) toast(r.error || '路径不存在', true); }).catch(function (e) { toast('打开失败：' + e.message, true); });
+          if (curWm) openInShell(curWm);
           else toast('未设置主流水印，无法打开文件夹', true);
         });
       }
@@ -1300,7 +1300,7 @@
           runPrecheck(); refreshPreviewIfModified(); refreshConfigModified();
         }).catch(function (e) { setStatus('修改路径失败：' + e.message); });
       }
-      else if (t.classList.contains('config-path-row__open')) { var input = t.closest('.config-path-row').querySelector('.config-path-row__input'); call('open_path', input.value.trim()).then(function (r) { if (r && !r.ok) toast(r.error || '路径不存在', true); }).catch(function (e) { toast('打开失败：' + e.message, true); }); }
+      else if (t.classList.contains('config-path-row__open')) { var input = t.closest('.config-path-row').querySelector('.config-path-row__input'); openInShell(input.value.trim()); }
       else if (t.classList.contains('config-exclude-row__remove')) {
         var exRow = t.closest('.config-exclude-row');
         if (exRow.dataset.deleted === '1') {
@@ -1322,7 +1322,7 @@
       else if (t.classList.contains('config-watermark__path')) { changeWatermark(); } // 点击水印文件名 = 更换水印
       else if (t.classList.contains('config-watermark__btn')) {
         var wmV = state.configData && state.configData.watermark ? String(state.configData.watermark) : '';
-        if (t.dataset.wm === 'open' && wmV) call('open_path', wmV).then(function (r) { if (r && !r.ok) toast(r.error || '路径不存在', true); }).catch(function (e) { toast('打开失败：' + e.message, true); });
+        if (t.dataset.wm === 'open' && wmV) openInShell(wmV);
         else if (t.dataset.wm === 'folder' && wmV) call('open_parent', wmV);
       }
     }
@@ -1602,7 +1602,7 @@
           selectTxt(REPLICA_PROJECT, info.replicaMode);
           return;
         }
-        call('open_folder_select', info.logPath).then(function (r) { if (!(r && r.ok)) setStatus('打开日志文件夹失败'); });
+        openInShell(info.logPath);
         return;
       }
       state._locateLogPath = info.logPath;
@@ -1813,8 +1813,8 @@
         if (!p) return;
         var missing = clip.getAttribute('data-exists') === '0';
         var items = [
-          { label: '打开文件', disableIfMissing: true, title: missing ? '文件不存在' : '', action: function () { call('open_path', p); } },
-          { label: '打开路径', disableIfMissing: true, title: missing ? '文件不存在' : '', action: function () { call('open_folder_select', p); } }
+          { label: '打开文件', disableIfMissing: true, title: missing ? '文件不存在' : '', action: function () { openInShell(p); } },
+          { label: '打开路径', disableIfMissing: true, title: missing ? '文件不存在' : '', action: function () { openInShell(p); } }
         ];
         if (missing) items.forEach(function (it) { if (it.disableIfMissing) it.disabled = true; });
         showMenu(e.clientX, e.clientY, items);
@@ -1836,8 +1836,8 @@
           var openFile = (rep && rep.replicaFile) || clipFile;
           var openDir = (rep && rep.replicaDir) || dirItem;
           var items2 = [
-            { label: '打开成片', disableIfMissing: true, action: function () { call('open_path', openFile); } },
-            { label: '打开文件夹', disableIfMissing: true, action: function () { call('open_path', openDir); } }
+            { label: '打开成片', disableIfMissing: true, action: function () { openInShell(openFile); } },
+            { label: '打开文件夹', disableIfMissing: true, action: function () { openInShell(openDir); } }
           ];
           if (missingFile) items2.forEach(function (it) { if (it.disableIfMissing) it.disabled = true; it.title = '成片文件不存在'; });
           showMenu(e.clientX, e.clientY, items2);
@@ -2314,6 +2314,15 @@
     }
   }
   function setStatus(msg) { var el = $('statusLeft'); if (!el) return; el.classList.remove('status-bar__success'); el.textContent = msg; }
+
+  // 「打开路径/目录」统一入口：失败 toast；浏览器端由本体代开（explorer 可能被前台锁压到后台，
+  // 只在任务栏出现）→ 成功后提示去任务栏查看。全项目所有打开目录调用都走这里，文案与行为一致。
+  function openInShell(p) {
+    return call('open_folder_select', p).then(function (r) {
+      if (r && r.ok === false) { toast('打开失败：' + (r.error || '路径不存在'), true); return; }
+      if (location.protocol.indexOf('http') === 0) toast('资源管理器已在后台打开，可从任务栏查看', 'info');
+    }).catch(function (e) { toast('打开失败：' + e.message, true); });
+  }
   function setStatusDone(msg) { var el = $('statusLeft'); if (!el) return; el.classList.add('status-bar__success'); el.textContent = msg; }
 
   // 载入遮罩：工作路径扫描时提示用户
@@ -2839,8 +2848,8 @@
     document.addEventListener('dblclick', function (e) {
       var db = $('dateBranches'); if (!db || !db.contains(e.target)) return;
       var btn = e.target.closest('.date-branch-btn'); if (!btn) return;
-      var fp = btn.getAttribute('data-file'); if (fp) { call('open_folder_select', fp).catch(function () {}); return; }
-      var label = btn.getAttribute('data-label'); var v = state.versions.find(function (x) { return x.label === label; }); if (v) call('open_folder_select', v.path);
+      var fp = btn.getAttribute('data-file'); if (fp) { openInShell(fp); return; }
+      var label = btn.getAttribute('data-label'); var v = state.versions.find(function (x) { return x.label === label; }); if (v) openInShell(v.path);
     });
     document.addEventListener('contextmenu', function (e) {
       // 遮罩模式日志日期分支右键：打开成片路径（找不到成片置灰）/ 打开日志文件 / 迁移全部成片 / 移除该日志（仅日志或连同成片）
@@ -2865,8 +2874,8 @@
         target = fp;
         modeName = '日志';
         showMenu(e.clientX, e.clientY, [
-          { label: '打开文件', action: function () { call('open_path', fp); } },
-          { label: '打开路径', action: function () { call('open_folder_select', fp); } },
+          { label: '打开文件', action: function () { openInShell(fp); } },
+          { label: '打开路径', action: function () { openInShell(fp); } },
           { label: '移除', action: function () { confirmRemoveBranch(target, modeName, false); } }
         ]);
         return;
@@ -2877,8 +2886,8 @@
       target = v.path;
       modeName = '配置';
       showMenu(e.clientX, e.clientY, [
-        { label: '打开文件', action: function () { call('open_path', v.path); } },
-        { label: '打开路径', action: function () { call('open_folder_select', v.path); } },
+        { label: '打开文件', action: function () { openInShell(v.path); } },
+        { label: '打开路径', action: function () { openInShell(v.path); } },
         { label: '移除', action: function () { confirmRemoveBranch(target, modeName, !!v.isExternal); } }
       ]);
     });
@@ -3982,7 +3991,7 @@
         var btn = e.target.closest('.date-branch-btn');
         if (!btn) return;
         var fp = btn.getAttribute('data-masklog');
-        if (fp) call('open_folder_select', fp).catch(function (err) { setStatus('打开失败：' + err.message); });
+        if (fp) openInShell(fp);
       });
       top.querySelector('[data-maskview="config"]').addEventListener('click', function () { maskState.view = 'config'; buildMaskCenterHeader(); buildMaskCenter(); });
       top.querySelector('[data-maskview="log"]').addEventListener('click', function () { maskState.view = 'log'; buildMaskCenterHeader(); buildMaskCenter(); });
@@ -4096,7 +4105,7 @@
         var pName = el.getAttribute('data-maskproj');
         var pItem = maskState.projects.find(function (x) { return x.name === pName; });
         showMenu(e.clientX, e.clientY, [
-          { label: '打开项目位置', action: function () { if (pItem) call('open_path', pItem.path).catch(function (err) { setStatus('打开失败：' + err.message); }); } },
+          { label: '打开项目位置', action: function () { if (pItem) openInShell(pItem.path); } },
           { label: '项目设置', action: function () { if (pName) openMaskProjectSettings(pName, pItem ? pItem.path : ''); } }
         ]);
       });
@@ -4281,7 +4290,7 @@
     panel.innerHTML = html;
     // 绑定事件
     var po = $('maskOpenProj');
-    if (po) po.addEventListener('click', function () { call('open_path', p.path); });
+    if (po) po.addEventListener('click', function () { openInShell(p.path); });
     var ar = $('maskAddRawDir');
     if (ar) ar.addEventListener('click', function () { maskPickAdd('raw', 'dir'); });
     var arf = $('maskAddRawFile');
@@ -4294,8 +4303,8 @@
     panel.addEventListener('contextmenu', function (e) {
       var mkOpen = function (full) {
         showMenu(e.clientX, e.clientY, [
-          { label: '打开文件', action: function () { call('open_path', full); } },
-          { label: '打开路径', action: function () { call('open_folder_select', full); } }
+          { label: '打开文件', action: function () { openInShell(full); } },
+          { label: '打开路径', action: function () { openInShell(full); } }
         ]);
       };
       var gf = e.target.closest('.mask-group-file');
@@ -4308,8 +4317,8 @@
         if (fFull) {
           e.preventDefault();
           showMenu(e.clientX, e.clientY, [
-            { label: '打开文件', action: function () { call('open_path', fFull); } },
-            { label: '打开路径', action: function () { call('open_folder_select', fFull); } },
+            { label: '打开文件', action: function () { openInShell(fFull); } },
+            { label: '打开路径', action: function () { openInShell(fFull); } },
             { label: '删除该素材产生的成片', action: function () { maskDeleteByRaw(fFull); } }
           ]);
         }
@@ -4318,7 +4327,7 @@
       var fr = e.target.closest('.mask-folder-row');
       if (fr) {
         var rd = maskState.rawDirs[parseInt(fr.getAttribute('data-rawfold'), 10)];
-        if (rd && rd.path) { e.preventDefault(); showMenu(e.clientX, e.clientY, [{ label: '打开路径', action: function () { call('open_path', rd.path); } }]); }
+        if (rd && rd.path) { e.preventDefault(); showMenu(e.clientX, e.clientY, [{ label: '打开路径', action: function () { openInShell(rd.path); } }]); }
         return;
       }
     });
@@ -4847,8 +4856,8 @@
           var clip = cp.getAttribute('data-clip');
           if (!clip) return;
           showMenu(e.clientX, e.clientY, [
-            { label: '打开片段', action: function () { call('open_path', clip).catch(function (err) { setStatus('打开失败：' + err.message); }); } },
-            { label: '片段文件夹', action: function () { call('open_folder_select', clip).catch(function (err) { setStatus('打开失败：' + err.message); }); } },
+            { label: '打开片段', action: function () { openInShell(clip); } },
+            { label: '片段文件夹', action: function () { openInShell(clip); } },
             { label: '删除该素材产生的成片', action: function () { doDeleteRelated(clip); } }
           ]);
           return;
@@ -4865,10 +4874,10 @@
           var logDir = String(lp).replace(/[\\/]+/g, '\\').replace(/\\[^\\]*$/, '');
           var openPath = out || ((fname && logDir) ? logDir + '\\' + fname : '');
           var outDir = out ? String(out).replace(/[\\/]+/g, '\\').replace(/\\[^\\]*$/, '') : '';
-          var itemOpen = { label: '打开成片', disabled: false, title: '', action: function () { if (openPath) call('open_path', openPath).then(function (r) { if (r && !r.ok) toast(r.error || '路径不存在', true); }).catch(function (e) { toast('打开失败：' + e.message, true); }); } };
+          var itemOpen = { label: '打开成片', disabled: false, title: '', action: function () { if (openPath) openInShell(openPath); } };
           var itemFolder = { label: '打开成片文件夹', disabled: false, title: '', action: function () {
-              if (openPath) call('open_folder_select', openPath).catch(function () { call('open_path', outDir || logDir); });
-              else if (outDir || logDir) call('open_path', outDir || logDir);
+              if (openPath) openInShell(openPath);
+              else if (outDir || logDir) openInShell(outDir || logDir);
             } };
           var itemMove = { label: '迁移该成片', disabled: false, title: '', action: function () { if (video && openPath) doMoveOne(video); } };
           var itemRelocate = { label: '重新定位', disabled: !!openPath, title: openPath ? '成片已可定位' : '', action: function () { if (video) relocateMaskVideo(lp, video); } };
@@ -4996,12 +5005,12 @@
       var show = function (anyExists) {
         if (shown) return; shown = true;
         var openOut = { label: '打开成片路径', disabled: !anyExists, title: anyExists ? '' : '找不到成片', action: function () {
-            for (var i = 0; i < entries.length; i++) { if (entries[i].outPath) { call('open_folder_select', entries[i].outPath); return; } }
+            for (var i = 0; i < entries.length; i++) { if (entries[i].outPath) { openInShell(entries[i].outPath); return; } }
           } };
         showMenu(x, y, [
           openOut,
-          { label: '打开日志文件', action: function () { call('open_path', mfp); } },
-          { label: '打开日志文件夹', action: function () { call('open_folder_select', mfp); } },
+          { label: '打开日志文件', action: function () { openInShell(mfp); } },
+          { label: '打开日志文件夹', action: function () { openInShell(mfp); } },
           { label: '迁移该日志全部成片', disabled: !anyExists, title: anyExists ? '' : '找不到成片，无法迁移', action: function () { doMoveLogAll(mfp); } },
           { label: '重新定位', disabled: anyExists, title: anyExists ? '成片均已定位' : '', action: function () { relocateMaskBranch(mfp); } },
           { label: '移除该日志', action: function () { removeMaskLog(mfp); } }

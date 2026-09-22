@@ -332,15 +332,6 @@ body {
   background: var(--bg-overlay-l1);
   margin-bottom: 20px;
 }
-.producer-preview::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -9px;
-  height: 1px;
-  background: var(--border-neutral-l1);
-}
 .producer-preview__value {
   display: block;
   font-family: Consolas, "Courier New", monospace;

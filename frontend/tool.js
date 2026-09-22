@@ -362,84 +362,6 @@
   // 浏览器端没有本机文件对话框；系统对话框依赖本体窗口的前台状态（焦点在浏览器时
   // 会被压在后面，看起来像「点了没反应」）。改为页面内自绘选择器：
   // list_dir 只读目录名/文件名，桌面端与浏览器端体验一致。
-  function pickDirDialog(opts) {
-    var BS = '\\';                                 // 路径分隔符
-    var cur = String(opts.initial || '').trim();
-    var overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
-    var card = document.createElement('div');
-    card.className = 'modal-card modal-card--wide tl-browser';
-    card.innerHTML = '<button type="button" class="modal-close" title="关闭">✕</button>'
-      + '<div class="modal__title">' + esc(opts.title || '选择文件夹') + '</div>'
-      + '<div class="tl-browser__bar">'
-      + '<input class="tl-text tl-browser__path" value="' + esc(cur) + '">'
-      + '<button type="button" class="tl-btn" data-b="go">转到</button>'
-      + '<button type="button" class="tl-btn" data-b="up">上一级</button>'
-      + '</div>'
-      + '<div class="tl-browser__list"><div class="tl-browser__empty">读取中…</div></div>'
-      + '<div class="modal__actions">'
-      + '<button type="button" class="modal-btn" data-b="cancel">取消</button>'
-      + '<button type="button" class="modal-btn modal-btn--primary" data-b="ok">选择此目录</button>'
-      + '</div>';
-    overlay.appendChild(card);
-    document.body.appendChild(overlay);
-
-    var pathInput = card.querySelector('.tl-browser__path');
-    var listEl = card.querySelector('.tl-browser__list');
-    var closed = false;
-    function close() { closed = true; overlay.remove(); }
-
-    function load(p) {
-      if (closed) return;
-      listEl.innerHTML = '<div class="tl-browser__empty">读取中…</div>';
-      api.list_dir(p).then(function (r) {
-        if (closed) return;
-        if (!r || !r.ok) {
-          listEl.innerHTML = '<div class="tl-browser__empty">' + esc((r && r.error) || '读取失败') + '</div>';
-          return;
-        }
-        cur = r.path;
-        pathInput.value = cur;
-        var html = '';
-        if (r.parent) html += '<button type="button" class="tl-browser__item" data-dir="' + esc(r.parent) + '">'
-          + '上一级：' + esc(r.parent) + '</button>';
-        if (!r.dirs.length && !r.files.length) html += '<div class="tl-browser__empty">（空文件夹）</div>';
-        r.dirs.forEach(function (d) {
-          html += '<button type="button" class="tl-browser__item" data-dir="' + esc(r.path + '\\' + d) + '">'
-            + esc(d) + '</button>';
-        });
-        (r.files || []).forEach(function (f) {
-          html += '<span class="tl-browser__item tl-browser__item--file">' + esc(f) + '</span>';
-        });
-        listEl.innerHTML = html;
-      }).catch(function (e) {
-        if (!closed) listEl.innerHTML = '<div class="tl-browser__empty">' + esc((e && e.message) || e) + '</div>';
-      });
-    }
-
-    overlay.addEventListener('click', function (e) {
-      if (e.target === overlay) { close(); return; }
-      var el = e.target.closest('[data-b]');
-      if (el) {
-        var b = el.getAttribute('data-b');
-        if (b === 'cancel') close();
-        else if (b === 'ok') { var v = cur; close(); if (opts.onPick) opts.onPick(v); }
-        else if (b === 'go') load(pathInput.value);
-        else if (b === 'up') {
-          // 上一级：去掉末段；已在盘根（如 C:\）则保持不变
-          var idx = cur.lastIndexOf(BS);
-          var upPath = (idx > 0) ? (idx <= 3 ? cur.slice(0, idx + 1) : cur.slice(0, idx)) : cur;
-          load(upPath);
-        }
-        return;
-      }
-      var dirBtn = e.target.closest('[data-dir]');
-      if (dirBtn) load(dirBtn.getAttribute('data-dir'));
-    });
-    load(cur);
-  }
-
-  // ── 输入 / 输出区 ──
   function renderInputHint() {
     var hint = $('inputHint');
     if (state.files.length) {
@@ -471,26 +393,12 @@
     $('outMode').addEventListener('change', syncOutputRows);
     $('outBackup').addEventListener('change', syncOutputRows);
     $('btnPickDir').addEventListener('click', function () {
-      if (!api || !api.list_dir) { setStatus('后端不支持目录浏览，请直接粘贴路径', 'err'); return; }
-      pickDirDialog({
-        title: '选择要处理的文件夹',
-        initial: state.root || '',
-        onPick: function (p) { state.root = p; state.files = []; $('inRoot').value = p; renderInputHint(); },
+      if (!api || !api.pick_directory) { setStatus('后端不支持目录选择', 'err'); return; }
+      api.pick_directory('选择要处理的文件夹', state.root || undefined).then(function (p) {
+        if (p) { state.root = p; state.files = []; $('inRoot').value = p; renderInputHint(); }
       });
     });
     $('btnPickFiles').addEventListener('click', function () {
-      // 备份目录占位符显示实际默认地址（取设置里的生效值）
-      if (api.get_settings) api.get_settings().then(function (st) {
-        var eff = st && st.backup_dir_effective;
-        if (eff) $('outBackupDir').placeholder = eff;
-      }).catch(function () {});
-      var obb = $('btnOpenBackupDir');
-      if (obb) obb.addEventListener('click', function () {
-        if (!api || !api.open_backup_dir) { setStatus('后端不支持打开目录', 'err'); return; }
-        api.open_backup_dir($('outBackupDir').value.trim() || state.defaultBackupDir).then(function (r) {
-          if (!r || !r.ok) setStatus('打开备份目录失败：' + ((r && r.error) || '未知错误'), 'err');
-        }).catch(function (e) { setStatus('打开备份目录失败：' + e.message, 'err'); });
-      });
       if (!api || !api.pick_paths_files) return;
       api.pick_paths_files().then(function (list) {
         if (list && list.length) { state.files = list.slice(); state.root = ''; $('inRoot').value = list.join('；'); renderInputHint(); }
@@ -520,20 +428,23 @@
     });
     $('inRecursive').addEventListener('change', function () { state.recursive = !!$('inRecursive').checked; renderInputHint(); });
     $('btnPickOutDir').addEventListener('click', function () {
-      if (!api || !api.list_dir) { setStatus('后端不支持目录浏览，请直接粘贴路径', 'err'); return; }
-      pickDirDialog({
-        title: '选择输出目录',
-        initial: $('outDir').value || state.root || '',
-        onPick: function (p) { $('outDir').value = p; },
+      if (!api || !api.pick_directory) { setStatus('后端不支持目录选择', 'err'); return; }
+      api.pick_directory('选择输出目录', $('outDir').value || state.root || undefined).then(function (p) {
+        if (p) $('outDir').value = p;
       });
     });
     $('btnPickBackupDir').addEventListener('click', function () {
-      if (!api || !api.list_dir) { setStatus('后端不支持目录浏览，请直接粘贴路径', 'err'); return; }
-      pickDirDialog({
-        title: '选择备份目录',
-        initial: $('outBackupDir').value || state.defaultBackupDir || '',
-        onPick: function (p) { $('outBackupDir').value = p; },
+      if (!api || !api.pick_directory) { setStatus('后端不支持目录选择', 'err'); return; }
+      api.pick_directory('选择备份目录', $('outBackupDir').value || state.defaultBackupDir || undefined).then(function (p) {
+        if (p) $('outBackupDir').value = p;
       });
+    });
+    var obb = $('btnOpenBackupDir');
+    if (obb) obb.addEventListener('click', function () {
+      if (!api || !api.open_backup_dir) { setStatus('后端不支持打开目录', 'err'); return; }
+      api.open_backup_dir($('outBackupDir').value.trim() || state.defaultBackupDir).then(function (r) {
+        if (!r || !r.ok) setStatus('打开备份目录失败：' + ((r && r.error) || '未知错误'), 'err');
+      }).catch(function (e) { setStatus('打开备份目录失败：' + e.message, 'err'); });
     });
     $('logHead').addEventListener('click', function () { $('logBox').classList.toggle('tl-log--open'); });
     $('btnRun').addEventListener('click', onSubmit);
@@ -708,6 +619,7 @@
       }
       state.info = info;
       state.defaultBackupDir = (info.output && info.output.defaultBackupDir) || '';
+      if (state.defaultBackupDir) $('outBackupDir').placeholder = state.defaultBackupDir;   // 占位符显示实际地址
       (info.steps || []).forEach(function (s) {
         state.sel[s.id] = false;
         state.values[s.id] = {};

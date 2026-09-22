@@ -48,7 +48,8 @@
     <button class="settings-nav__item" data-view="batch">批量拼接</button>
     <button class="settings-nav__item" data-view="replica">视频复刻</button>
     <button class="settings-nav__item" data-view="mask">遮罩叠加</button>
-    <button class="settings-nav__item" data-view="maintenance">维护</button>
+    <!-- 「维护」板块：默认隐藏，由 config.json 的 show_maintenance 控制（用户侧关闭） -->
+    <button class="settings-nav__item" data-view="maintenance" style="display:none">维护</button>
     <button class="settings-nav__item" data-view="changelog">更新日志</button>
     <button class="settings-nav__item" data-view="about">关于</button>
   </aside>
@@ -69,6 +70,17 @@
         <div class="dir-row">
           <input class="form-input" id="cfgRoot" type="text" placeholder="">
           <button class="btn btn-ghost" data-dir="cfgRoot">选择目录</button>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-group__label">任务通知<small>任务失败、或本轮任务全部跑完时，弹 Windows 系统通知提醒</small></label>
+        <div class="opt-row">
+          <label class="opt-check">
+            <input type="checkbox" id="notifyTaskEnd">
+            <span class="opt-check__box"></span>
+            <span>任务跑完或失败时弹系统通知</span>
+          </label>
         </div>
       </div>
 
@@ -283,7 +295,7 @@
     </section>
 
     <!-- ═══ 维护 ═══ 低频兜底操作：日常刷新预缓存走主窗口侧栏 -->
-    <section class="settings-view" id="view-maintenance">
+    <section class="settings-view" id="view-maintenance" style="display:none">
       <h2 class="settings-view__title">维护</h2>
 
       <div class="form-group">

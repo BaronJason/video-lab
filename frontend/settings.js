@@ -340,6 +340,8 @@
       if (ch) ch.value = (s.check_update_hour >= 0 && s.check_update_hour <= 23) ? s.check_update_hour : 9;
       var as = $('autoStart');
       if (as) as.checked = s.autostart === true;
+      var nte = $('notifyTaskEnd');
+      if (nte) nte.checked = s.notify_task_end !== false;   // 默认开启
       var cbv = s.close_behavior === 'exit' ? 'exit' : 'tray';
       document.querySelectorAll('input[name="closeBehavior"]').forEach(function (r) { r.checked = r.value === cbv; });
       document.querySelectorAll('input[name="updateSource"]').forEach(function (r) { r.checked = r.value === s.update_source; });
@@ -396,6 +398,12 @@
       if (ld) ld.textContent = s.log_dir || '';
       var cdp = $('cfgDirPath');
       if (cdp) cdp.textContent = s.config_path || '';
+      // 「维护」板块可见性：config.json 的 show_maintenance（用户侧默认关闭；本机可置 true）
+      var mtOn = s.show_maintenance === true;
+      var mtNav = document.querySelector('.settings-nav__item[data-view="maintenance"]');
+      var mtView = $('view-maintenance');
+      if (mtNav) mtNav.style.display = mtOn ? '' : 'none';
+      if (mtView) mtView.style.display = mtOn ? '' : 'none';
       var b = s.batch || {};
       $('batchSuffixMark').value = b.suffix_mark != null ? b.suffix_mark : '';
       $('batchMaxDuration').value = b.max_duration != null ? b.max_duration : '';
@@ -571,6 +579,7 @@
         check_update_daily: !!$('checkUpdateDaily').checked,
         check_update_hour: parseInt($('checkUpdateHour').value, 10) || 9,
         autostart: !!$('autoStart').checked,
+        notify_task_end: !!$('notifyTaskEnd').checked,
         close_behavior: cbEl ? cbEl.value : 'tray',
         update_source: srcEl ? srcEl.value : 'gitee',
         update_mode: umEl ? umEl.value : 'notify',

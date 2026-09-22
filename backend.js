@@ -38,7 +38,8 @@ const FFMPEG_REQUIRED_ENCODERS = ['h264_nvenc', 'hevc_nvenc', 'av1_nvenc'];
 const DEFAULT_CONFIG = {
   skin: 'white_blue',
   ffmpeg_dir: '',             // FFmpeg 自愈下载目录（数据目录 ffmpeg\）；空 = 用系统 PATH 里的
-  notify_task_end: false,     // 任务失败 / 本轮跑完的 Windows 系统通知（用户侧默认关闭；本机调试可开）
+  notify_task_end: true,      // 任务失败 / 本轮跑完的 Windows 系统通知（默认开启，可在 设置-通用设置 关闭）
+  show_maintenance: false,    // 设置页「维护」板块是否可见（用户侧默认关闭：重建缓存/日志等属维护用途）
   auto_check_update: true,    // 启动时自动检查更新
   check_update_daily: false,  // 每日定时检查更新（整点触发，需 app 保持运行）
   check_update_hour: 9,       // 每日定时检查更新时间（24 小时制整点 0-23，默认 9）

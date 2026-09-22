@@ -1103,6 +1103,8 @@ function buildHttpExtraRoutes() {
         http_token: String(c.http_token || ''),
         http_url: httpUrl(),
         log_dir: runLog.getDir(),
+        show_maintenance: c.show_maintenance === true,
+        notify_task_end: c.notify_task_end !== false,
       };
     },
     // 运行日志目录（设置页「维护」区）
@@ -1121,6 +1123,8 @@ function buildHttpExtraRoutes() {
         if (typeof s.check_update_daily === 'boolean') cfg.check_update_daily = s.check_update_daily;
         if (s.check_update_hour !== undefined && s.check_update_hour !== null) { const h = parseInt(s.check_update_hour, 10); if (h >= 0 && h <= 23) cfg.check_update_hour = h; }
         if (typeof s.autostart === 'boolean') cfg.autostart = s.autostart;
+      if (typeof s.notify_task_end === 'boolean') cfg.notify_task_end = s.notify_task_end;
+      if (typeof s.notify_task_end === 'boolean') cfg.notify_task_end = s.notify_task_end;
         if (s.close_behavior === 'exit' || s.close_behavior === 'tray') cfg.close_behavior = s.close_behavior;
         if (s.update_source === 'github' || s.update_source === 'gitee') cfg.update_source = s.update_source;
         if (s.update_mode === 'auto' || s.update_mode === 'notify') cfg.update_mode = s.update_mode;
@@ -1392,6 +1396,8 @@ function registerIpc() {
       config_path_program: path.dirname(programConfigPath()),   // 显示目录（含引导文件与三库）
       config_path_appdata: path.dirname(appdataConfigPath()),
       log_dir: runLog.getDir(),   // 运行日志目录（设置页「打开文件夹」用；与 HTTP 版 get_settings 对齐）
+      show_maintenance: c.show_maintenance === true,   // 「维护」板块可见性（用户侧默认关闭）
+      notify_task_end: c.notify_task_end !== false,    // 任务通知（默认开启）
       autostart: c.autostart === true,
       close_behavior: c.close_behavior === 'exit' ? 'exit' : 'tray',
       http_port: parseInt(c.http_port, 10) || 9527,

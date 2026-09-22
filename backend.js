@@ -2333,8 +2333,8 @@ class Api {
       [/无有效视频文件夹/, '没有可用的视频文件夹'],
       [/不是TXT格式/, '指定的文件不是 TXT 格式'],
       [/检测到重复成片名/, '存在重复的成片名'],
-      [/全局异常/, '脚本运行过程中出现异常'],
-      [/脚本执行完成（有错误）/, '脚本执行出错'],
+      [/全局异常/, '运行过程中出现异常'],
+      [/(脚本|任务)完成（有错误）/, '运行出错'],
       [/ffmpeg|ffprobe/, '视频处理工具不可用'],
     ];
     for (let i = lines.length - 1; i >= 0; i--) {
@@ -2343,7 +2343,7 @@ class Api {
         if (re.test(line)) return msg;
       }
     }
-    return '脚本执行失败';
+    return '运行失败';
   }
 
   // 任务的成片是否还在磁盘上：仅对「曾经产出过」的已结束任务判定。
@@ -3349,7 +3349,6 @@ class Api {
         this._lg('RUN', 'task.start',
           '任务开始 · ' + task.type + ' · ' + String(task.title || '').slice(0, 60) + ' · pid=' + child.pid,
           { id: task.id, type: task.type, pid: child.pid, env: this._envBrief(task.env) });
-        task.log.push('[引擎] Node 引擎（module=' + task.type + '）');
         this._emitTasks();
         // 任务真正开始：创建任务标记（含 env 快照，供失败重开精确还原）
         this._touchMarker(task);
@@ -3415,7 +3414,7 @@ class Api {
           }
           if (/等待获取互斥锁/.test(s)) task.lockState = 'waiting';
           else if (/已获取互斥锁/.test(s)) task.lockState = 'locked';
-          else if (/互斥锁已释放|任务全部完成|脚本完成/.test(s)) { task.lockState = 'released'; task.progress.liveLine = null; }
+          else if (/互斥锁已释放|任务完成/.test(s)) { task.lockState = 'released'; task.progress.liveLine = null; }
           // 产物记录进任务标记：成片完成路径 / batch 专属输出目录（重开时据此精确删除）
           const outpM = s.match(/✅ 成片完成：(.+)$/);
           if (outpM) {
@@ -3510,10 +3509,10 @@ class Api {
         child.on('error', (err2) => {
           task.log.push('[启动失败] ' + String(err2));
           task.status = 'error';
-          task.failReason = '内置引擎启动失败，请重新安装或校验程序文件';
+          task.failReason = '程序运行组件启动失败，请重新安装或校验程序文件';
           task.endedAt = Date.now();
           this._lg('ERR', 'engine.spawn',
-            '内置引擎启动失败 · ' + task.type + ' · ' + String(task.title || '').slice(0, 40),
+            '运行组件启动失败 · ' + task.type + ' · ' + String(task.title || '').slice(0, 40),
             { id: task.id, enginesDir: this.enginesDir, error: String(err2) });
           this._emitTasks();
         });
@@ -3884,7 +3883,7 @@ class Api {
   /** 步骤清单 + 参数 schema + 输出策略可选项（供前端渲染表单） */
   listTools() {
     const mod = this._toolSteps();
-    if (!mod) return { ok: false, error: '内置引擎不可用（resources\\Engines\\tools\\index.js 缺失），请重新安装或校验程序文件' };
+    if (!mod) return { ok: false, error: '程序文件不完整（缺少处理组件），请重新安装或校验程序文件' };
     const steps = mod.stepSchema ? mod.stepSchema() : [];
     return {
       ok: true,
@@ -3942,9 +3941,9 @@ class Api {
    * @returns {{ok:boolean, taskId?:string, error?:string}}
    */
   runTool(spec) {
-    if (!this.shouldUseNodeEngine('tool')) return { ok: false, error: '内置引擎不可用（resources\\Engines\\engine-runner.js 缺失），请重新安装或校验程序文件' };
+    if (!this.shouldUseNodeEngine('tool')) return { ok: false, error: '程序文件不完整（缺少运行组件），请重新安装或校验程序文件' };
     const mod = this._toolSteps();
-    if (!mod) return { ok: false, error: '内置引擎不可用（resources\\Engines\\tools\\index.js 缺失），请重新安装或校验程序文件' };
+    if (!mod) return { ok: false, error: '程序文件不完整（缺少处理组件），请重新安装或校验程序文件' };
     const s = spec || {};
 
     // ① 步骤：逐个校验存在性（前端可能缓存了旧 schema）
@@ -4028,7 +4027,7 @@ class Api {
   }
 
   runBatch(filePath, count, group) {
-    if (!this.shouldUseNodeEngine('batch')) return { ok: false, error: '内置引擎不可用（resources\\Engines\\engine-runner.js 缺失），请重新安装或校验程序文件' };
+    if (!this.shouldUseNodeEngine('batch')) return { ok: false, error: '程序文件不完整（缺少运行组件），请重新安装或校验程序文件' };
     const notSet = this._settingsError('batch');
     if (notSet.length) return { ok: false, error: '批量拼接参数未设置：' + notSet.join('、') + '，请到 设置-批量拼接 中配置后再启动' };
     const b = this.config.batch || {};
@@ -4058,7 +4057,7 @@ class Api {
   }
 
   runReplica(logPath, mode = 1, entryVideo) {
-    if (!this.shouldUseNodeEngine('replica')) return { ok: false, error: '内置引擎不可用（resources\\Engines\\engine-runner.js 缺失），请重新安装或校验程序文件' };
+    if (!this.shouldUseNodeEngine('replica')) return { ok: false, error: '程序文件不完整（缺少运行组件），请重新安装或校验程序文件' };
     const notSet = this._settingsError('replica');
     if (notSet.length) return { ok: false, error: '视频复刻参数未设置：' + notSet.join('、') + '，请到 设置-视频复刻 中配置后再启动' };
     const r = this.config.replica || {};
@@ -4233,7 +4232,7 @@ class Api {
   // 遮罩叠加任务：payload 来自主窗口遮罩叠加模式（mode/rawDirs/videos/maskDirs/watermark/outputDir），
   // 经环境变量 MASK_* 驱动内置引擎的 mask 模块；无设置页配置组，参数随任务提交
   runMask(p) {
-    if (!this.shouldUseNodeEngine('mask')) return { ok: false, error: '内置引擎不可用（resources\\Engines\\engine-runner.js 缺失），请重新安装或校验程序文件' };
+    if (!this.shouldUseNodeEngine('mask')) return { ok: false, error: '程序文件不完整（缺少运行组件），请重新安装或校验程序文件' };
     const errs = [];
     const dirs = Array.isArray(p && p.rawDirs) ? p.rawDirs.filter((d) => String(d).trim()) : [];
     if (!dirs.length) errs.push('原片文件夹');

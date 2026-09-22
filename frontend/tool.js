@@ -710,9 +710,9 @@
       if (!info.engine) {
         var w = $('envWarn');
         w.hidden = false;
-        w.textContent = '内置引擎不可用（resources\\Engines 缺失），无法执行处理，请重新安装或校验程序文件。';
-        setRunEnabled(false, '内置引擎不可用，无法执行处理');
-        setStatus('内置引擎不可用', 'err');
+        w.textContent = '程序文件不完整（缺少运行组件），无法执行处理，请重新安装或校验。';
+        setRunEnabled(false, '程序文件不完整，无法执行处理');
+        setStatus('程序文件不完整，请重新安装或校验', 'err');
       } else {
         // ★ 就绪即启用主操作按钮 —— 参数不完整时交给点击后的校验去提示，
         //   否则按钮一直灰着，用户不知道为什么不能点

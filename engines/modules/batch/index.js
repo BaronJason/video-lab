@@ -1290,7 +1290,7 @@ async function run(ctx, env = process.env) {
 
   if (hasError) {
     logger.info('');
-    logger.info('脚本执行完成（有错误）');
+    logger.info('任务完成（有错误）');
     return 1;
   }
   logger.info('');

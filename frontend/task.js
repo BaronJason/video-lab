@@ -1101,7 +1101,7 @@
   function emptyText(tab) {
     if (tab === 'done') return '暂无已完成任务';
     if (tab === 'stopped') return '暂未停止或出错的任务';
-    return '暂无正在运行的任务，在主窗口点击「启动脚本」或「复刻」开始生成';
+    return '暂无正在运行的任务，在主窗口点击「开始制作」或「复刻」开始生成';
   }
 
   function setCnt(id, n) { var el = $(id); if (el) el.textContent = String(n); }

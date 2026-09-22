@@ -77,7 +77,7 @@ async function main() {
   let mod;
   try { mod = getModule(id); } catch (e) { logger.error('engine-runner', e.message); process.exit(2); }
 
-  logger.info('================ Video Lab Engine ================');
+  logger.info('================ Video Lab ================');
   logger.info('模块：' + mod.title);
 
   const ctx = Object.assign({ logger, registry: listModules() }, base);

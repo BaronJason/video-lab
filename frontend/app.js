@@ -921,7 +921,7 @@
     html += '<span class="config-bottombar__error config-bottombar__error--inline" id="watermarkFlagError" style="display:none">水印错误</span>';
     html += '<button class="config-btn config-btn--save" id="btnSaveConfig">' + icon('save', 14) + '覆盖当前配置</button>';
     html += '<button class="config-btn config-btn--save-today" id="btnSaveToday">' + icon('calendar-plus', 14) + '保存为当日配置</button>';
-    html += '<button class="config-btn config-btn--run" id="btnRunScript">' + icon('play', 14) + '启动脚本</button></div>';
+    html += '<button class="config-btn config-btn--run" id="btnRunScript">' + icon('play', 14) + '开始制作</button></div>';
     bar.innerHTML = html;
     // 注意：不可直接传 saveConfig —— 它首参是 noConfirm，直接绑定会让 MouseEvent 顶替该参数（恒真）而跳过确认气泡
     $('btnSaveConfig').addEventListener('click', function () { saveConfig(); });
@@ -1685,7 +1685,7 @@
         if (dest === null) { setStatus('已取消启动'); return; }
         call('save_config_today', dest, state.activeTxt, configName, ed.folders, ed.excludes, ed.watermark).then(function (saved) {
           if (!saved || !saved.ok) { setStatus('保存失败：' + ((saved && saved.error) || '未知错误')); return; }
-          toast('已保存并启动脚本', 'ok');
+          toast('已保存并开始制作', 'ok');
           // 水印归属在选中配置预检测时已判定并提示，此处不再阻断启动
           call('run_batch', saved.path, count, group).then(function (r) {
             if (!(r && r.ok)) { setStatus('启动失败：' + ((r && r.error) || '未知错误')); return; }
@@ -3510,12 +3510,12 @@
       if (!r.ffmpeg) miss.push('ffmpeg');
       if (!r.ffprobe) miss.push('ffprobe');
       // 内置引擎缺失即无法执行任务：单独提示重装，不与环境缺失混为一谈
-      if (r.engine === false) miss.push('内置引擎');
+      if (r.engine === false) miss.push('程序组件');
       state.envMissing = miss;
       var mark = $('envWarnMark');
       if (mark) {
         if (r.engine === false) {
-          mark.textContent = '内置引擎缺失，请重新安装或校验程序文件';
+          mark.textContent = '程序文件不完整，请重新安装或校验';
           mark.className = 'status-bar__envwarn';
           mark.style.display = '';
         } else if (miss.length) {
@@ -3528,7 +3528,7 @@
         }
       }
       applyEnvDisabled();
-    }).catch(function () { state.envMissing = ['内置引擎', 'ffmpeg', 'ffprobe']; applyEnvDisabled(); });
+    }).catch(function () { state.envMissing = ['程序组件', 'ffmpeg', 'ffprobe']; applyEnvDisabled(); });
   }
   function _envBad() { return (state.envMissing || []).length > 0; }
   function setBtnHint(b, hint) {

@@ -78,7 +78,7 @@ class Logger {
     this.raw('==========================================');
   }
 
-  done() { this.raw('脚本完成'); }
+  done() { this.raw('任务完成'); }
 }
 
 module.exports = Logger;

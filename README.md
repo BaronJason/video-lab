@@ -8,10 +8,10 @@
 
 <br>
 
-[![版本](https://img.shields.io/badge/版本-2.1.0-0078D7?style=flat-square)](https://github.com/BaronJason/video-lab/releases)
+[![版本](https://img.shields.io/badge/版本-2.2.0-0078D7?style=flat-square)](https://github.com/BaronJason/video-lab/releases)
 ![Platform](https://img.shields.io/badge/平台-Windows%2010%2F11-00A4EF?style=flat-square)
-![Engine](https://img.shields.io/badge/任务引擎-内置%20Node-5391FE?style=flat-square)
-![FFmpeg](https://img.shields.io/badge/FFmpeg-必需-FF7F2A?style=flat-square)
+![Engine](https://img.shields.io/badge/任务引擎-内置-5391FE?style=flat-square)
+![FFmpeg](https://img.shields.io/badge/FFmpeg-可自动下载-FF7F2A?style=flat-square)
 
 </div>
 
@@ -22,6 +22,8 @@
 | 类别 | 说明 |
 | --- | --- |
 | 内置任务引擎 | 遮罩 / 复刻 / 批量任务由随包分发的 Node 引擎执行，无需系统安装 PowerShell |
+| 视频处理工具 | 对已有视频批量后处理 —— 去黑屏 / 变速 / 转分辨率 / 转码（H.264 · H.265 · AV1）/ 叠加图片 / 截取 / 删帧 / 倒放 / 旋转镜像 / 音频 / 帧率，步骤自由组合，只编码一次 |
+| 任务队列与通知 | 成片任务与视频处理任务同一队列：可排队、可在当前成片完成后暂停排队、失败可续跑；任务失败或本轮跑完弹系统通知 |
 | 遮罩叠加 | 多原片 × 多遮罩自由组合（遮罩+水印 / 仅水印 / 仅遮罩），GPU 硬件编码，失败任务断点续跑 |
 | 复刻与续跑 | 完全复刻 / 去重复刻双模式，失败成片可「继续制作」从断点恢复 |
 | 日期分支管理 | TXT 配置按日期分支归档，历史版本随时比对与跳转 |
@@ -60,7 +62,7 @@ Video Lab/
 
 ## 运行环境
 
-应用依赖以下外部环境（便携版与安装版均不内置，请按需安装；应用会在缺失时于状态栏提醒）：
+应用依赖以下外部环境（便携版与安装版均不内置）。**FFmpeg 缺失或不完整时，应用会提示并可一键自动下载**（国内镜像，无需手动配置）：
 
 - **NVIDIA 显卡（必需）**
 
@@ -72,7 +74,7 @@ Video Lab/
   - 下载页：<https://www.gyan.dev/ffmpeg/builds/>
   - 直接下载：<https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z>
 
-  解压后把 `bin` 目录加入系统 PATH。也可用 winget 快速安装：
+  解压后把 `bin` 目录加入系统 PATH，或用 winget 安装；也可直接使用应用内的「一键下载」（推荐，免手动配置）：
 
   ```bash
   winget install --id Gyan.FFmpeg
@@ -94,7 +96,7 @@ Video Lab/
 2026-09-20 16:19:36.225  DEL  task.artifacts.remove  清除任务产物 · batch · 2 个文件 · 共 2.0 KB  · {"files":[...]}
 ```
 
-任务记录、任务标记与成片产物都可能被清除，这份日志独立留存、不受清除操作影响 —— 排查「某次成片去哪了」时从这里查证。设置页「维护」区可打开日志目录。
+任务记录、任务标记与成片产物都可能被清除，这份日志独立留存、不受清除操作影响 —— 排查「某次成片去哪了」时从这里查证（日志位于上述保存位置的 `log` 子目录）。
 
 ## 构建与运行
 

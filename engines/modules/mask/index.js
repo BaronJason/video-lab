@@ -312,8 +312,8 @@ async function run(ctx, env = process.env) {
     logger.lockReleased();
   }
 
-  if (hasError) { logger.info(''); logger.info('脚本执行完成（有错误）'); return 1; }
-  logger.info(''); logger.info('脚本完成');
+  if (hasError) { logger.info(''); logger.info('任务完成（有错误）'); return 1; }
+  logger.info(''); logger.info('任务完成');
   return 0;
 }
 

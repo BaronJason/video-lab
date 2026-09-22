@@ -5127,10 +5127,22 @@ let themes = [];
     }
   }
 
-  _saveAppSettings() {
+  // 单个应用级设置的读取（settings.db 优先，回退内存 config）—— 供 main 的 get_settings 使用：
+  // backup_* 只落 settings.db 不进 config.json，读回必须走这里而不是 loadConfig()
+  getAppSetting(key, fallback) {
+    if (this._useSettings()) {
+      const v = this._settingsStore.get('app', key);
+      if (v !== undefined && v !== null) return v;
+    }
+    return (this.config && this.config[key] !== undefined) ? this.config[key] : fallback;
+  }
+
+  _saveAppSettings(values) {
     if (!this._useSettings()) return;
+    const vals = (values && typeof values === 'object') ? values : this.config;
     for (const k of Api.APP_SETTING_KEYS) {
-      try { this._settingsStore.set('app', k, this.config[k]); } catch (e) {}
+      if (vals[k] === undefined) continue;
+      try { this._settingsStore.set('app', k, vals[k]); } catch (e) {}
     }
   }
 

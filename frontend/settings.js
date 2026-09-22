@@ -672,8 +672,16 @@
       if (discardPop && discardPop.style.display !== 'none' && !discardPop.contains(e.target)) hideDiscardPop();
     });
     setupMultiTags('batchTxtPrefix', 'batchTxtPrefixTags', function () { return state.batch.txt_prefix; }, onBatchTagsChanged, 'batchTxtPrefixCaret');
-    $('batchSuffixMark').addEventListener('input', updatePreview);
-    $('batchProducer').addEventListener('input', updatePreview);
+    // 后缀/创作者改动需先同步 state 再刷新预览 —— updatePreview 读的是 state，
+    // 只调刷新不回写 state 的话，预览永远不包含刚输入的内容
+    $('batchSuffixMark').addEventListener('input', function () {
+      state.batch.suffix_mark = $('batchSuffixMark').value.trim();
+      updatePreview();
+    });
+    $('batchProducer').addEventListener('input', function () {
+      state.batch.producer = $('batchProducer').value.trim();
+      updatePreview();
+    });
   }
 
   function flashCloseButton() {

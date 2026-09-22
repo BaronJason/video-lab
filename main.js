@@ -1105,10 +1105,10 @@ function buildHttpExtraRoutes() {
         log_dir: runLog.getDir(),
         show_maintenance: c.show_maintenance === true,
         notify_task_end: c.notify_task_end !== false,
-        backup_dir: String(c.backup_dir || ''),
-        backup_auto_clean: c.backup_auto_clean === true,
-        backup_keep_days: parseInt(c.backup_keep_days, 10) || 7,
-        backup_dir_effective: String(c.backup_dir || '').trim()
+        backup_dir: api.getAppSetting('backup_dir', ''),
+        backup_auto_clean: api.getAppSetting('backup_auto_clean', false) === true,
+        backup_keep_days: parseInt(api.getAppSetting('backup_keep_days', 7), 10) || 7,
+        backup_dir_effective: String(api.getAppSetting('backup_dir', '') || '').trim()
           || require('path').join(storageDir(), 'backup'),   // 占位符直接显示实际默认地址
       };
     },
@@ -1129,10 +1129,8 @@ function buildHttpExtraRoutes() {
         if (s.check_update_hour !== undefined && s.check_update_hour !== null) { const h = parseInt(s.check_update_hour, 10); if (h >= 0 && h <= 23) cfg.check_update_hour = h; }
         if (typeof s.autostart === 'boolean') cfg.autostart = s.autostart;
       if (typeof s.notify_task_end === 'boolean') cfg.notify_task_end = s.notify_task_end;
-      if (typeof s.backup_dir === 'string') cfg.backup_dir = s.backup_dir;
-      if (typeof s.backup_auto_clean === 'boolean') cfg.backup_auto_clean = s.backup_auto_clean;
-      if (s.backup_keep_days !== undefined) cfg.backup_keep_days = parseInt(s.backup_keep_days, 10) || 7;
-      if (typeof s.notify_task_end === 'boolean') cfg.notify_task_end = s.notify_task_end;
+      // backup_* 只落 settings.db（v2.2.1 新增字段，旧版本回退也没有对应代码，写 config 无意义）：
+      // 合入 cfg 供运行时读取，写盘前再从 cfg 摘除（见下方 saveConfig 处）
       if (typeof s.backup_dir === 'string') cfg.backup_dir = s.backup_dir;
       if (typeof s.backup_auto_clean === 'boolean') cfg.backup_auto_clean = s.backup_auto_clean;
       if (s.backup_keep_days !== undefined) cfg.backup_keep_days = parseInt(s.backup_keep_days, 10) || 7;
@@ -1150,10 +1148,17 @@ function buildHttpExtraRoutes() {
         const mv = moveConfigFile(target);
         if (mv.ok && mv.moved) { configMoved = true; }
       }
+      // backup_* 从写盘对象摘除（config.json 不含它们），内存 config 保留运行时值
+      var bkpDir = cfg.backup_dir, bkpAuto = cfg.backup_auto_clean, bkpDays = cfg.backup_keep_days;
+      delete cfg.backup_dir; delete cfg.backup_auto_clean; delete cfg.backup_keep_days;
       saveConfig(cfg);
-      try { api._saveAppSettings(); } catch (e) {}   // 应用级设置双写：同步落 settings.db（scope='app'）
-      try { if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: cfg.autostart === true, args: ['--autostart'] }); } catch (e) {}
       Object.assign(config, cfg);
+      // backup_* 补回内存 config（读取路径不变），再由 _saveAppSettings 落 settings.db
+      if (bkpDir !== undefined) config.backup_dir = bkpDir;
+      if (bkpAuto !== undefined) config.backup_auto_clean = bkpAuto;
+      if (bkpDays !== undefined) config.backup_keep_days = bkpDays;
+      // 显式传值：main 的 config 与 backend 的 config 是两个对象，_saveAppSettings 不能默认读 backend.config
+      try { api._saveAppSettings({ backup_dir: bkpDir, backup_auto_clean: bkpAuto, backup_keep_days: bkpDays }); } catch (e) {}
       // 端口/令牌实际变更才重启 HTTP 服务器（重启会断开浏览器既有 SSE 连接）；
       // 皮肤等其它设置变更保留连接，settings_saved 广播可即时送达浏览器，无需手动刷新
       const httpPortWanted = parseInt(cfg.http_port, 10) || 9527;
@@ -1410,10 +1415,11 @@ function registerIpc() {
       log_dir: runLog.getDir(),   // 运行日志目录（设置页「打开文件夹」用；与 HTTP 版 get_settings 对齐）
       show_maintenance: c.show_maintenance === true,   // 「维护」板块可见性（用户侧默认关闭）
       notify_task_end: c.notify_task_end !== false,    // 任务通知（默认开启）
-      backup_dir: String(c.backup_dir || ''),
-      backup_auto_clean: c.backup_auto_clean === true,
-      backup_keep_days: parseInt(c.backup_keep_days, 10) || 7,
-      backup_dir_effective: String(c.backup_dir || '').trim()
+      // backup_* 只落 settings.db，读回必须走 getAppSetting（loadConfig 的磁盘 config 不含它们）
+      backup_dir: api.getAppSetting('backup_dir', ''),
+      backup_auto_clean: api.getAppSetting('backup_auto_clean', false) === true,
+      backup_keep_days: parseInt(api.getAppSetting('backup_keep_days', 7), 10) || 7,
+      backup_dir_effective: String(api.getAppSetting('backup_dir', '') || '').trim()
         || path.join(storageDir(), 'backup'),   // 占位符直接显示实际默认地址
       autostart: c.autostart === true,
       close_behavior: c.close_behavior === 'exit' ? 'exit' : 'tray',

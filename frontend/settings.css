@@ -440,6 +440,28 @@ body {
 }
 .opt-radio:hover .opt-radio__dot { border-color: var(--brand-500); }
 .opt-radio__label { display: flex; flex-direction: column; gap: 2px; }
+/* 设置分组头：小标题 + 右延横线（设置项较多，用横线分组区隔，便于快速定位） */
+.settings-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 22px 0 10px;
+}
+.settings-group:first-of-type { margin-top: 6px; }
+.settings-group__title {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--text-tertiary);
+}
+.settings-group::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-neutral-l1);
+}
+
 .opt-path {
   font-size: 11px;
   /* 提示/路径文字：用次级文字色（不是三级）—— 深色皮肤下三级色偏暗（黑橙 #707070 on 近黑底）

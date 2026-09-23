@@ -4804,9 +4804,7 @@ body.mask-mode #menuResetPrecheck,
 body.mask-mode #menuChoosePath { display: none !important; }
 /* 遮罩模式专属：项目刷新入口（批量隐藏、遮罩显示） */
 #menuMaskRescan,
-#menuMaskRebuild { display: none; }
 body.mask-mode #menuMaskRescan,
-body.mask-mode #menuMaskRebuild { display: flex; }
 /* 遮罩模式右侧为素材统计预览，隐藏其标题栏 */
 body.mask-mode .right-panel__header,
 body.mask-mode .right-panel__subtitle { display: none; }
@@ -10235,9 +10233,7 @@ body.mask-mode #menuResetPrecheck,
 body.mask-mode #menuChoosePath { display: none !important; }
 /* 遮罩模式专属：项目刷新入口（批量隐藏、遮罩显示） */
 #menuMaskRescan,
-#menuMaskRebuild { display: none; }
 body.mask-mode #menuMaskRescan,
-body.mask-mode #menuMaskRebuild { display: flex; }
 /* 遮罩模式右侧为素材统计预览，隐藏其标题栏 */
 body.mask-mode .right-panel__header,
 body.mask-mode .right-panel__subtitle { display: none; }

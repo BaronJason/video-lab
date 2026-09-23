@@ -917,7 +917,7 @@
     var html = '<div class="config-editor' + (silent ? ' config-editor--static' : '') + '">';
     html += '<div class="config-editor__col config-editor__col--paths">';
     html += '<div class="config-path-subheader"><span class="config-path-subheader__sort">排序</span><span class="config-path-subheader__nopoll">取消轮询</span><span class="config-path-subheader__path">路径</span><span class="config-path-subheader__check">预检测结果'
-      + '<button type="button" class="config-path-subheader__refresh" id="btnRefreshPrecache" title="刷新预缓存（增量更新、不重置：只重探缺失或已变化的视频）">' + icon('refresh-cw', 12) + '</button>'
+      + '<button type="button" class="config-path-subheader__refresh" id="btnRefreshPrecache" title="刷新预缓存：更新变化的视频并清理失效缓存（含批量与遮罩素材）">' + icon('refresh-cw', 12) + '</button>'
       + '</span><span class="config-path-subheader__browse"></span><span class="config-path-subheader__open"></span><span class="config-path-subheader__remove"></span></div>';
     html += '<div class="config-editor__path-list" id="pathList">';
     folders.forEach(function (f, idx) {
@@ -3846,25 +3846,6 @@
     }).catch(function () { setStatus('刷新失败'); });
   }
   // 左下角菜单「重建缓存」：清空本项目持久化缓存并全量重建扫描（已选状态重置）
-  function maskRebuildCache() {
-    if (!maskOn() || !maskState.project) { setStatus('未选择遮罩叠加项目'); return; }
-    var p = maskState.project;
-    confirmPopover({ title: '重建缓存', message: '将清空本项目的原片/遮罩缓存并全量重建扫描（已选状态将重置）', okLabel: '重建' }).then(function (v) {
-      if (!v) return;
-      setStatus('正在重建遮罩缓存…');
-      call('clear_mask_session', p.name).then(function () {
-        if (!maskOn() || !maskState.project || maskState.project.name !== p.name) return;
-        maskState.rawDirs = []; maskState.rawSel = {}; maskState.maskSel = {}; maskState.themes = [{ path: p.path, name: p.name }];
-        return call('scan_mask_raw_dirs', p.path);
-      }).then(function (dirs) {
-        if (!maskOn() || !maskState.project || maskState.project.name !== p.name) return;
-        maskState.rawDirs = Array.isArray(dirs) ? dirs : [];
-        buildMaskCenter(); buildMaskConfigBar(); refreshMaskStartHint();
-        if (maskNeedMask()) loadAllMaskGroups();
-        toast('缓存已重建', 'ok');
-      }).catch(function () { setStatus('重建失败'); });
-    });
-  }
   // 删除/操作结果告知：轻量 toast 呈现（失败为红、其余为绿），不再开窗打断
   function maskTellResult(title, msg) {
     var t = String(title || '');
@@ -5404,8 +5385,6 @@
       refreshMaskProjects();
     });
     // 遮罩模式菜单「重建缓存」：清空持久化缓存并全量重建
-    var mrb = $('menuMaskRebuild');
-    if (mrb) mrb.addEventListener('click', function () { closeMenu(); if (maskOn()) maskRebuildCache(); });
     // 遮罩模式自愈：低频对比项目列表签名，外部增删主题/项目时自动刷新（对应批量配置自愈轮询）
     setInterval(function () { if (maskOn()) pollMaskSelfHeal(); }, 6000);
   }

@@ -1291,10 +1291,12 @@ class Api {
   // 保证「刷新预检测」与「跑任务」两条路径行为一致。
   // 认领成功后原条目的路径整体转到新路径（含计数与作用域标记），旧路径随之消失。
   // 返回真正发生迁移的条数（已在库中的路径不算）。
-  _claimUsageForPaths(paths) {
+  // 认领使用计数：新路径（素材被替换/移动后）继承既有同字节条目的使用计数。
+  // scopesMask 默认批量|复刻；遮罩素材刷新时传 mask —— 三类归属各自认领，互不干扰。
+  _claimUsageForPaths(paths, scopesMask) {
     if (!paths || !paths.length || !this._useDbCache()) return 0;
     const store = this._cacheStore;
-    const mask = this._scopes.batch | this._scopes.replica;
+    const mask = Number(scopesMask) || (this._scopes.batch | this._scopes.replica);
     let n = 0;
     for (const p of paths) {
       try {
@@ -1643,6 +1645,9 @@ class Api {
         if (p) pathSet.add(p);
       }
     }
+    // 遮罩模式登记的素材目录（含手动添加的项目外路径）一并纳入刷新范围 ——
+    // 增量探测成本低，用户点一次即可同时刷新批量与遮罩的预缓存，不必分两处各点一次
+    for (const p of this._maskSessionDirs()) pathSet.add(p);
     const seen = new Set();
     const allVideos = [];
     for (const p of pathSet) {
@@ -1749,6 +1754,30 @@ class Api {
     // 传入本次刚枚举出的路径集合：这些文件必然存在，GC 直接判「保留」，不再逐条 fs.stat
     // （原先数千条同步 existsSync 会占住主线程数秒～数十秒，把紧随其后的行内预检测 IPC 一起堵住，
     //  前端表现为刷新完成后徽章仍长时间停在「检测中…」）；剩余候选项也已异步分批并让路事件循环。
+    // 遮罩素材：单独认领使用计数并落库标注 mask 作用域 ——
+    // 作用域位掩码即归属标记（与批量/复刻分开，同一素材多模式共用时按位或累加）；
+    // 它们已在 allVideos 中，失效清理不会误判为「非当前 root 的残留」而删除；
+    // 素材被暂时删除/替换时，DB 侧只置 missing_since 走软删除，并在保留期内等待新路径认领。
+    if (!cancelled) {
+      const maskFiles = [];
+      for (const d of this._maskSessionDirs()) {
+        try {
+          const st = fs.statSync(d);
+          if (st.isDirectory()) { for (const f of walkFiles(d)) if (VIDEO_EXTS.has(path.extname(f).toLowerCase())) maskFiles.push(f); }
+          else if (VIDEO_EXTS.has(path.extname(d).toLowerCase())) maskFiles.push(d);
+        } catch (e) { /* 目录不存在时跳过（软删除留待保留期处理） */ }
+      }
+      if (maskFiles.length) {
+        const claimedMask = this._claimUsageForPaths(maskFiles, this._scopes.mask);
+        if (claimedMask > 0) console.log('[video_cache] 遮罩素材认领既有使用计数 ' + claimedMask + ' 条');
+        for (const f of maskFiles) {
+          const c = cache[f];
+          if (c && typeof c.Duration === 'number') {
+            this._saveScopedVideoInfo(f, { duration: c.Duration, width: c.Width || 0, height: c.Height || 0, valid: !!c.Valid }, this._scopes.mask);
+          }
+        }
+      }
+    }
     if (!cancelled) {
       this._gcVideoCache(new Set(allVideos))
         .then((n) => { if (n > 0) console.log('[video_cache] 后台清理失效条目 ' + n + ' 条'); })
@@ -4620,6 +4649,23 @@ let themes = [];
 
   // 原片/遮罩会话状态（缓存，非设置）：存于 cache_kv（键 mask_session:<项目名>）
   // 不手动清除/移除就会一直在列表里；重建缓存菜单项清空后回退自动扫描
+  // 遮罩会话登记的全部素材目录（含手动添加的项目外路径）：统一刷新、作用域落库与认领共用
+  _maskSessionDirs() {
+    const out = [];
+    try {
+      const projects = (this.listProjects() || []).map((x) => (x && x.name) || x).filter(Boolean);
+      for (const name of projects) {
+        let sess = null;
+        try { sess = this.getMaskSession(name); } catch (e) { sess = null; }
+        if (!sess) continue;
+        for (const d of [].concat(sess.rawDirs || [], sess.themes || [])) {
+          const p = stripQuotes(String((d && d.path) || '').trim());
+          if (p) out.push(p);
+        }
+      }
+    } catch (e) { /* 会话不可读时返回已收集部分 */ }
+    return out;
+  }
   getMaskSession(projectName) {
     if (!this._useDbCache()) return null;
     try {

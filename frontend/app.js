@@ -208,7 +208,9 @@
   // 业务背景：不一致占比过低会被判重复度不过审，过高会被判为全新视频（继承不到流量），因此要控在区间内。
   function replicaParamsDialog() {
     return new Promise(function (resolve) {
+      // 不静默吞错：弹窗构建/取设置失败时明确告知，避免「点了没反应」
       api.get_settings().then(function (st) {
+        try {
         var r = (st && st.replica) || {};
         var dMin = r.dedup_ratio != null ? String(r.dedup_ratio) : '';
         var dMax = r.dedup_ratio_max != null ? String(r.dedup_ratio_max) : '';
@@ -254,7 +256,17 @@
           if (minOnNow && maxOnNow && parseFloat(maxV) < parseFloat(minV)) { toast('重复度上限不能小于下限', true); return; }
           done({ dedupRatio: minV, dedupRatioMax: maxV, dedupRatioOn: minOnNow, dedupRatioMaxOn: maxOnNow });
         });
-      }).catch(function () { resolve(null); });
+        } catch (err) {
+          // 构建阶段异常：明确提示（含原因），不再表现为"点了没反应"
+          var ov = document.querySelector('.modal-overlay');
+          if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+          toast('复刻设置弹窗打开失败：' + ((err && err.message) || err), true);
+          resolve(null);
+        }
+      }).catch(function (e) {
+        toast('读取复刻设置失败：' + ((e && e.message) || e), true);
+        resolve(null);
+      });
     });
   }
 
@@ -1174,14 +1186,15 @@
   }
   function batchReplica(mode) {
     if (_envBad()) { setStatus('运行环境缺失'); return; }
-    if (!state.selectMode) return;
+    // 未进入选择模式时给明确提示（原先静默 return，表现为"点了没反应"）
+    if (!state.selectMode) { toast('请先打开右上角「选择」开关并勾选要复刻的成片', true); return; }
     var items = [];
     for (var k in (state.selectedLogPaths || {})) { var v = state.selectedLogPaths[k]; if (v) items.push({ path: (v.path || v), video: v.video || '' }); }
-    if (!items.length) { setStatus('请先勾选要复刻的成片'); return; }
+    if (!items.length) { toast('请先勾选要复刻的成片', true); return; }
     var cnt = items.length, done = 0;
     var ask = (mode === '2') ? replicaParamsDialog() : Promise.resolve({});
     ask.then(function (opts) {
-      if (opts === null) { setStatus('已取消复刻'); return; }
+      if (opts === null) { setStatus('已取消复刻'); return; }   // 取消时保留选择状态，便于重新设置
       setStatus('已对 ' + cnt + ' 个成片启动批量' + (mode === '1' ? '完全' : '去重') + '复刻…');
       items.forEach(function (it) {
         // 按选中成片精确复刻（传入成片名，脚本仅处理该成片）
@@ -1191,10 +1204,10 @@
           else if (done === cnt) { toast('已全部启动 ' + cnt + ' 个批量复刻脚本', 'ok'); }
         }).catch(function () { done++; });
       });
+      // 已确认启动后才退出选择模式（此前是弹窗前就清空，导致再点另一个按钮无反应）
+      state.selectMode = false; state.selectedLogPaths = {};
+      buildLogList();
     });
-    // 批量启动完成后退出选择模式
-    state.selectMode = false; state.selectedLogPaths = {};
-    buildLogList();
   }
   function bindResizers(scope) {
     scope.querySelectorAll('.config-resizer').forEach(function (rz) {

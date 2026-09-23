@@ -3726,10 +3726,24 @@
     var rawDirs = (maskState.rawDirs || []).slice();
     var themes = (maskState.themes || []).slice();
     if (!rawDirs.length && !themes.length) return;
+    // 原片目录校验分两类（用户定案 2026-09-23）：
+    //  · 项目内扫描源：沿用「为空即移除」（扫描会重新给出，移除安全）；
+    //  · 手动添加的外部路径 / 单文件：只校验「是否还存在」——外部路径是用户主动添加的，
+    //    不能因为「暂时读不到素材」或「接口调用失败」就被移除（否则会随会话落盘永久丢失）。
+    var _rootP = String(p.path).replace(/[\\/]+$/, '').toLowerCase();
+    var _inProj = function (dp) {
+      var x = String(dp || '').replace(/[\\/]+$/, '').toLowerCase();
+      return x === _rootP || x.indexOf(_rootP + '\\') === 0 || x.indexOf(_rootP + '/') === 0;
+    };
     var rawKeep = rawDirs.map(function (d) {
+      if (d.single || !_inProj(d.path)) {
+        return call('check_exists', [d.path]).then(function (m) {
+          return (m && m[d.path] === true) ? d : null;   // 仅「确实不存在」才移除
+        }).catch(function () { return d; });             // 调用失败一律保留，不误删
+      }
       return call('list_mask_videos', d.path).then(function (f) {
         return (Array.isArray(f) && f.length) ? d : null;
-      }).catch(function () { return null; });
+      }).catch(function () { return d; });               // 同上：失败保留
     });
     var themeKeep = themes.map(function (t) {
       // 项目根扫描源只看目录是否还在；外部添加目录同此判定（其下有无素材由后续加载体现）
@@ -3848,17 +3862,6 @@
     var isErr = /失败|错误|异常|无法/.test(t);
     var text = String(msg == null ? '' : msg);
     toast((t ? t + '：' : '') + text, isErr ? 'error' : 'ok');
-  }
-  // 删除所有使用该原片素材产生的遮罩叠加成片（按本遮罩日志精确匹配）
-  function maskDeleteByRaw(full) {
-    confirmPopover({ title: '删除素材成片', message: '将删除所有使用该素材的遮罩叠加成片\n' + full, okLabel: '删除', danger: true }).then(function (v) {
-      if (!v) return;
-      call('delete_mask_related', maskState.project.path, [full]).then(function (r) {
-        if (!r || !r.ok) { maskTellResult('删除失败', ((r && r.error) || '未知错误')); return; }
-        maskTellResult('删除结果', '已删除 ' + ((r.deleted || []).length) + ' 个成片');
-        if (maskState.view === 'log') buildMaskLogView();
-      }).catch(function (err) { maskTellResult('删除失败', err.message); });
-    });
   }
   function maskResetSession() {
     maskState.project = null; maskState.rawDirs = []; maskState.rawSel = {};
@@ -4398,8 +4401,7 @@
           e.preventDefault();
           showMenu(e.clientX, e.clientY, [
             { label: '打开文件', action: function () { openInShell(fFull); } },
-            { label: '打开路径', action: function () { openInShell(fFull); } },
-            { label: '删除该素材产生的成片', action: function () { maskDeleteByRaw(fFull); } }
+            { label: '打开路径', action: function () { openInShell(fFull); } }
           ]);
         }
         return;
@@ -4474,14 +4476,17 @@
       // 同文件夹+时长一致视为一组；时长不一致拆多组，组名 = 文件夹名-序号（单组不加序号）
       // 分组按 ±1s 容差聚类（与时长校验阈值一致，避免 59.9s/60.1s 这种微小偏差被拆开）
       var rawGroups = [];
+      // 分组以「文件夹优先」：同一子目录的素材归入同一组（避免不同文件夹里时长相等的文件被并成一组），
+      // 组内再按「时长相近（±1s）」细分 —— 既保留细分能力，又不再跨文件夹合并
       files.forEach(function (f) {
         if (!f.rel) f.rel = f.sub ? f.sub + '/' + f.name : f.name;
         var d = f.dur || 0;
+        var key = f.sub || '';   // 所属文件夹（相对子目录）；根目录下的文件同属一组
         var gi = -1;
         for (var gi2 = 0; gi2 < rawGroups.length; gi2++) {
-          if (Math.abs(rawGroups[gi2].dur - d) <= 1.0) { gi = gi2; break; }
+          if (rawGroups[gi2].dir === key && Math.abs(rawGroups[gi2].dur - d) <= 1.0) { gi = gi2; break; }
         }
-        if (gi < 0) { gi = rawGroups.length; rawGroups.push({ dur: d, files: [] }); }
+        if (gi < 0) { gi = rawGroups.length; rawGroups.push({ dir: key, dur: d, files: [] }); }
         rawGroups[gi].files.push(f);
       });
       var html = '';
@@ -4498,7 +4503,7 @@
             '<div class="mask-raw-group__head" data-rawgrp="' + gid + '" title="点击展开/收起该组">' +
             '<label class="mask-raw-group__check" title="全选/取消该组素材"><input type="checkbox" data-rawgrpall="' + gid + '"' + (gall ? ' checked' : '') + '><span class="mask-raw-group__box"></span></label>' +
             '<span class="mask-raw-group__name">' + escapeHtml(gname) + '</span>' +
-            '<span class="mask-raw-group__meta">' + g.files.length + ' 个 · ' + maskFmtDur(g.dur) + '</span>' +
+            '<span class="mask-raw-group__meta">' + g.files.length + ' 个 · ' + maskFmtDur(g.dur) + (g.dir ? ' · ' + escapeHtml(g.dir) : '') + '</span>' +
             '<span class="mask-raw-group__arrow"></span></div>' +
             '<div class="mask-raw-group__files"' + (gany ? '' : ' style="display:none"') + '>';
           g.files.forEach(function (f) {
@@ -4898,17 +4903,6 @@
           }).catch(function (err) { maskTellResult('删除失败', err.message); });
         });
       }
-      function doDeleteRelated(clip) {
-        var base = baseNameNoExt(clip);
-        confirmPopover({ title: '删除相关成片', message: '将删除所有使用素材「' + base + '」的遮罩叠加成片', okLabel: '删除', danger: true }).then(function (v) {
-          if (!v) return;
-          call('delete_mask_related', maskState.project.path, [clip]).then(function (r) {
-            if (!r || !r.ok) { maskTellResult('删除失败', ((r && r.error) || '未知错误')); return; }
-            maskTellResult('删除结果', '已删除 ' + ((r.deleted || []).length) + ' 个相关成片');
-            buildMaskLogView();
-          }).catch(function (err) { maskTellResult('删除失败', err.message); });
-        });
-      }
       // 条目标题点击：展开/收起素材列表（箭头随状态旋转）；删除按钮区域不触发
       box.querySelectorAll('.log-entry').forEach(function (row) {
         var head = row.querySelector('.log-entry__header');
@@ -4926,8 +4920,8 @@
       box.querySelectorAll('[data-delone]').forEach(function (b) {
         b.addEventListener('click', function (e) { e.stopPropagation(); doDeleteOne(b.getAttribute('data-delone')); });
       });
-      // 片段行左键仅展开/收起素材所属成片条目，不绑定删除（删除该素材产生的成片在右键菜单）
-      // 右键菜单：片段行（打开片段/片段文件夹/删除该素材产生的成片）在前，
+      // 片段行左键仅展开/收起素材所属成片条目，不绑定删除
+      // 右键菜单：片段行（打开片段/片段文件夹）在前，
       // 成片条目在后——片段位于条目内部，先判片段避免被成片菜单拦截
       box.oncontextmenu = function (e) {
         var cp = e.target.closest('.log-entry__clip');
@@ -4937,8 +4931,7 @@
           if (!clip) return;
           showMenu(e.clientX, e.clientY, [
             { label: '打开片段', action: function () { openInShell(clip); } },
-            { label: '片段文件夹', action: function () { openInShell(clip); } },
-            { label: '删除该素材产生的成片', action: function () { doDeleteRelated(clip); } }
+            { label: '片段文件夹', action: function () { openInShell(clip); } }
           ]);
           return;
         }

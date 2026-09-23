@@ -1351,7 +1351,6 @@ function registerIpc() {
   ipcMain.handle('clear_mask_session', (e, name) => api.clearMaskSession(name));
   ipcMain.handle('get_mask_default_dir', (e, name) => api.getMaskDefaultDir(name));
   ipcMain.handle('set_mask_default_dir', (e, name, dir) => api.setMaskDefaultDir(name, dir));
-  ipcMain.handle('delete_mask_related', (e, projectPath, targets) => api.deleteMaskRelated(projectPath, targets));
   ipcMain.handle('delete_mask_videos', (e, projectPath, names) => api.deleteMaskVideos(projectPath, names));
   ipcMain.handle('move_mask_out', (e, projectPath, videoName, newDir) => api.moveMaskOut(projectPath, videoName, newDir));
   ipcMain.handle('relocate_mask_out', (e, projectPath, videoName, newDir) => api.relocateMaskOut(projectPath, videoName, newDir));

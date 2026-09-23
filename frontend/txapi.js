@@ -154,7 +154,6 @@
     set_mask_default_dir: function (name, dir) { return invokeArgs('set_mask_default_dir', name, dir); },
     save_mask_session: function (name, data) { return invokeArgs('save_mask_session', name, data); },
     clear_mask_session: function (name) { return invokeArgs('clear_mask_session', name); },
-    delete_mask_related: function (projectPath, targets) { return invokeArgs('delete_mask_related', projectPath, targets); },
     delete_mask_videos: function (projectPath, names) { return invokeArgs('delete_mask_videos', projectPath, names); },
     move_mask_out: function (projectPath, videoName, newDir) { return invokeArgs('move_mask_out', projectPath, videoName, newDir); },
     relocate_mask_out: function (projectPath, videoName, newDir) { return invokeArgs('relocate_mask_out', projectPath, videoName, newDir); },

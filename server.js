@@ -93,7 +93,6 @@ const PURE_BACKEND_ROUTES = {
   clear_mask_session: { m: 'clearMaskSession', a: (args) => [args[0]] },
   get_mask_default_dir: { m: 'getMaskDefaultDir', a: (args) => [args[0]] },
   set_mask_default_dir: { m: 'setMaskDefaultDir', a: (args) => [args[0], args[1]] },
-  delete_mask_related: { m: 'deleteMaskRelated', a: (args) => [args[0], args[1]] },
   delete_mask_videos: { m: 'deleteMaskVideos', a: (args) => [args[0], args[1]] },
   move_mask_out: { m: 'moveMaskOut', a: (args) => [args[0], args[1], args[2]] },
   relocate_mask_out: { m: 'relocateMaskOut', a: (args) => [args[0], args[1], args[2]] },

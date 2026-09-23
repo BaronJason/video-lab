@@ -194,7 +194,7 @@ async function sortByValidThenDuration(list, info) {
  * - excludeNames 文件名排除（同名即同一片段，成片内不得重复）
  * - shorterThan >0 时只接受严格更短的候选（无更短 → 返回空，由调用方标记该段耗尽）
  */
-async function selectReplacementVideo({ originalPath, exclude = [], preferShort = false, shorterThan = 0, excludeNames = [], info }) {
+async function selectReplacementVideo({ originalPath, exclude = [], preferShort = false, shorterThan = 0, excludeNames = [], info, targetDurMax = 0 }) {
   const excludeSet = new Set(exclude);
   const nameSet = new Set(excludeNames);
   let cands = sameDirCandidates(originalPath).filter((p) => !excludeSet.has(p) && !nameSet.has(path.basename(p)));
@@ -203,11 +203,37 @@ async function selectReplacementVideo({ originalPath, exclude = [], preferShort 
     for (const c of cands) { const i = await info(c); if ((i.duration || 0) < shorterThan) keep.push(c); }
     cands = keep;
   }
+  if (targetDurMax > 0) {
+    const keep = [];
+    for (const c of cands) { const i = await info(c); if ((i.duration || 0) <= targetDurMax) keep.push(c); }
+    cands = keep;
+  }
   if (!cands.length) return { path: null, equivalent: false };
 
   const origSuffix = getNumberSuffix(originalPath);
   const sameSuffix = origSuffix ? cands.filter((c) => getNumberSuffix(c) === origSuffix) : [];
   const others = cands.filter((c) => !sameSuffix.includes(c));
+
+  // 时长预算模式（targetDurMax>0）：在上限内选「最长」候选（并列随机）——
+  // 去重复刻目标是换入尽量多的新内容，预算充裕时换更长的片段更容易达到不一致占比
+  if (targetDurMax > 0) {
+    const pickLongestTie = async (list) => {
+      const s = await sortByValidThenDuration(list, info);
+      if (!s.length) return null;
+      const last = s[s.length - 1];
+      const iL = await info(last);
+      const tie = [last];
+      for (let k = s.length - 2; k >= 0; k--) {
+        const ik = await info(s[k]);
+        if (ik.valid !== iL.valid || Math.abs((ik.duration || 0) - (iL.duration || 0)) > 0.05) break;
+        tie.push(s[k]);
+      }
+      return tie[Math.floor(Math.random() * tie.length)];
+    };
+    if (sameSuffix.length) { const p = await pickLongestTie(sameSuffix); if (p) return { path: p, equivalent: true }; }
+    if (others.length) { const p = await pickLongestTie(others); if (p) return { path: p, equivalent: false }; }
+    return { path: null, equivalent: false };
+  }
 
   if (preferShort) {
     // 排序后从「与首位并列」的候选组（valid/时长相同）里随机取一个：
@@ -302,7 +328,7 @@ function resolveFromVideoCache(oldPath, { exclude = [], excludeNames = [], index
 // ─────────────────── 模式2：尾部替换（Select-VariancePaths） ───────────────────
 async function selectVariancePaths({
   originalPaths, alreadyChangedIndices = [], alreadyEquivalentIndices = [],
-  triedSubs = new Map(), preferShort = false, dedupRatio, info, logger,
+  triedSubs = new Map(), preferShort = false, dedupRatio, info, logger, durationCap = 0,
 }) {
   const origDurations = [];
   let totalOrig = 0;
@@ -336,8 +362,17 @@ async function selectVariancePaths({
     for (let k = 0; k < newPaths.length; k++) if (k !== i && newPaths[k]) usedNames.push(path.basename(newPaths[k]));
     const excludeAll = excludeSubs.concat(newPaths.filter((p) => p && p !== originalPaths[i]));
 
+    // 时长预算：其余位置（已替换用新时长）之后本位置还可容纳的最大片段时长，
+    // 用于「预算内选最长」；预算无余量则不传，维持原 preferShort 压时长语义
+    let budget = 0;
+    if (durationCap > 0) {
+      let othersNewDur = 0;
+      for (let k = 0; k < newPaths.length; k++) if (k !== i && newPaths[k]) { const ik = await info(newPaths[k]); othersNewDur += (ik.duration || 0); }
+      budget = Math.max(0, durationCap - othersNewDur);
+    }
     const sel = await selectReplacementVideo({
       originalPath: originalPaths[i], exclude: excludeAll, excludeNames: usedNames, preferShort, info,
+      targetDurMax: budget > 0 ? budget : 0,
     });
     if (!sel.path) continue;
     newPaths[i] = sel.path;
@@ -572,6 +607,9 @@ async function run(ctx, env = process.env) {
               alreadyChangedIndices: job.missingReplacedIndices,
               alreadyEquivalentIndices: job.missingEquivalentIndices,
               triedSubs, preferShort: true, dedupRatio: cfg.dedupRatio, info, logger,
+              // 总时长预算 = 成片上限：尾部替换在预算内优先选更长候选（填满上限、更多新内容），
+              // 预算不足时退回原压时长语义；超限后由渐进压时长轮次兜底
+              durationCap: maxDuration,
             });
             newVideos = r.paths;
           } else {

@@ -1853,7 +1853,7 @@
         var checked = sel && curSel[normalizePath(lp)];
         html += '<div class="log-entry' + (checked ? ' log-entry--selected' : '') + '" data-log-path="' + escapeHtml(lp) + '" data-video="' + escapeHtml(entry.video || '') + '">';
         html += '<div class="log-entry__header">';
-        if (sel) html += '<input type="checkbox" class="log-entry__check"' + (checked ? ' checked' : '') + ' title="选择该成片进行批量复刻">';
+        if (sel) html += '<label class="opt-check log-entry__check-wrap"><input type="checkbox" class="log-entry__check"' + (checked ? ' checked' : '') + ' title="选择该成片进行批量复刻"><span class="opt-check__box"></span></label>';
         html += '<span class="log-entry__arrow">' + icon('chevron-right', 14) + '</span>' + icon('video', 14);
         html += '<span class="log-entry__video-name" title="' + escapeHtml(entry.video) + '">' + escapeHtml(entry.video || '（未命名成片）') + '</span>';
         html += '<span class="log-entry__clip-count">' + clips.length + ' 片段</span>';
@@ -1941,7 +1941,7 @@
         var sEl = e.target.closest('.log-entry');
         if (sEl) {
           e.stopPropagation();
-          if (e.target && e.target.classList && e.target.classList.contains('log-entry__check')) return; // 复选事件单独处理
+          if (e.target && e.target.closest && e.target.closest('.log-entry__check-wrap')) return; // 复选事件单独处理
           toggleLogSelect(sEl);
         }
         return;
@@ -1958,7 +1958,7 @@
       }
     };
     container.addEventListener('change', function (e) {
-      var cb = e.target.closest('.log-entry__check');
+      var cb = e.target.closest('.log-entry__check-wrap');
       if (!cb) return;
       var entry = cb.closest('.log-entry');
       if (entry) toggleLogSelect(entry, cb.checked);
@@ -3209,7 +3209,7 @@
       '<div class="modal__title">关闭主窗口</div>' +
       '<div class="modal__message">请选择关闭主窗口后的行为：</div>' +
       '<div class="modal__close-foot">' +
-      '<label class="modal__close-remind"><input type="checkbox" id="closeRemindChk"><span>不再询问</span></label>' +
+      '<label class="opt-check"><input type="checkbox" id="closeRemindChk"><span class="opt-check__box"></span><span>不再询问</span></label>' +
       '<div class="modal__actions">' +
       '<button type="button" class="modal-btn" id="cbCloseTray">最小化至系统托盘</button>' +
       '<button type="button" class="modal-btn modal-btn--danger" id="cbCloseExit">退出软件</button>' +

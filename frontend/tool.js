@@ -242,7 +242,7 @@
       : (step.schema || []).filter(function (sc) { return fieldVisible(step.id, sc); })
         .map(function (sc) { return paramField(step.id, sc); }).join('');
     div.innerHTML = '<div class="tl-step__head">'
-      + '<input class="ui-checkbox" type="checkbox" data-check="' + step.id + '"' + (on ? ' checked' : '') + '>'
+      + '<label class="opt-check opt-check--nolabel"><input type="checkbox" data-check="' + step.id + '"' + (on ? ' checked' : '') + '><span class="opt-check__box"></span></label>'
       + '<span class="tl-step__arrow" data-fold="' + step.id + '" title="展开/收起参数">' + iconEl('chevron-right', 13) + '</span>'
       + '<span class="tl-step__title">' + esc(step.title || step.id) + '</span>'
       + (step.danger === 'lossy' ? '<span class="tl-step__flag">会丢内容</span>' : '')
@@ -319,9 +319,10 @@
       }
       var head = e.target.closest('.tl-step__head');
       if (head) {
-        // 点标题行（复选框以外的区域）= 切换勾选；点复选框本身由原生 change 处理
+        // 点标题行（复选框以外的区域）= 切换勾选；点复选框（.opt-check 区域内）由 label 原生联动
+        // 触发 input 的 change，再经 change 委托走 setStepOn —— 若这里也手动切换会双重触发相互抵消
         var cb = head.querySelector('input[data-check]');
-        if (e.target !== cb) setStepOn(cb.getAttribute('data-check'), !cb.checked);
+        if (cb && !e.target.closest('.opt-check')) setStepOn(cb.getAttribute('data-check'), !cb.checked);
         return;
       }
       var pick = e.target.closest('button[data-pick]');

@@ -10862,10 +10862,6 @@ button.is-vl-disabled {
 .rp-form__num { width: 120px; flex: 0 0 auto; }
 .rp-form__hint { font-size: 12px; line-height: 1.5; opacity: .72; }
 
-/* 原生复选框统一样式（用于有自管点击逻辑、不便套 label 结构的场景：尺寸与品牌色对齐 .opt-check） */
-.ui-checkbox { width: 16px; height: 16px; flex-shrink: 0; accent-color: var(--brand-500); cursor: pointer; }
-/* 无文字复选框（文字在左侧栏）：不占额外间距 */
-.opt-check--nolabel { gap: 0; }
 /* ── 统一复选框/单选框（全局唯一样式：16px + SVG 勾 + 品牌色）── */
 .opt-check,
 .opt-radio {
@@ -10904,4 +10900,9 @@ button.is-vl-disabled {
   -webkit-mask: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center / contain no-repeat;
   mask: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center / contain no-repeat;
 }
+/* ── 复选框变体（必须定义在 .opt-check 之后才能覆盖全局值）── */
+/* 无文字复选框（文字在左侧栏）：不占额外间距 */
+.opt-check--nolabel { gap: 0; }
+/* 紧凑变体：工具页沿用原 .tl-check 的视觉密度（小字号、窄间距），勾选框样式仍与全局一致 */
+.opt-check--sm { gap: 5px; font-size: var(--body-sm-font-size); }
 .opt-check:hover .opt-check__box { border-color: var(--brand-500); }

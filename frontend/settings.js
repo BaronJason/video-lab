@@ -710,6 +710,18 @@
     s.classList.add('is-flash');
     setTimeout(function () { s.classList.remove('is-flash'); s.textContent = ''; }, 1600);
   }
+
+  // 全局错误兜底：未捕获异常 / 未处理的 Promise 拒绝一律弹提示 ——
+  // 教训（2026-09-23）：复刻弹窗里误用未声明的 `api` 导致 ReferenceError，
+  // 被就地 catch 静默吞掉，表现为「点了没反应」，排查代价很大。此处保证任何前端异常都可见。
+  window.addEventListener('error', function (e) {
+    try { toast('界面异常：' + ((e && e.message) || '未知错误'), true); } catch (x) {}
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e && e.reason;
+    try { toast('操作失败：' + ((r && r.message) || r || '未知错误'), true); } catch (x) {}
+  });
+
   function init() {
     wrapAllInputs();
     // 勾选框/单选切换也参与未保存修改标记（保存按钮始终可用，此项用于关闭确认与高亮）

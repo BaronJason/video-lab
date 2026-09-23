@@ -213,7 +213,8 @@
         resolve(null);
       };
       try {
-        Promise.resolve(api.get_settings ? api.get_settings() : {}).then(function (st) {
+        // 注意：app.js 里没有全局 api，通信统一走 call(...)（api.* 仅在函数内 var api = getApi() 后可用）
+        Promise.resolve(call('get_settings')).then(function (st) {
           try {
             var r = (st && st.replica) || {};
             var dMin = r.dedup_ratio != null ? String(r.dedup_ratio) : '';
@@ -3527,6 +3528,18 @@
       getApi().get_root().then(function (r) { (r ? hideBootGuide() : showBootGuide()); }).catch(showBootGuide);
     }
   }
+
+  // 全局错误兜底：未捕获异常 / 未处理的 Promise 拒绝一律弹提示 ——
+  // 教训（2026-09-23）：复刻弹窗里误用未声明的 `api` 导致 ReferenceError，
+  // 被就地 catch 静默吞掉，表现为「点了没反应」，排查代价很大。此处保证任何前端异常都可见。
+  window.addEventListener('error', function (e) {
+    try { toast('界面异常：' + ((e && e.message) || '未知错误'), true); } catch (x) {}
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e && e.reason;
+    try { toast('操作失败：' + ((r && r.message) || r || '未知错误'), true); } catch (x) {}
+  });
+
   function init() {
     // 任务列表「定位」监听：异常隔离，不影响主界面初始化
     try { if (getApi() && getApi().on_locate) getApi().on_locate(handleLocateRequest); } catch (e) {}

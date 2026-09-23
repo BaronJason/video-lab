@@ -8,6 +8,18 @@
 //   · 不向用户展示执行顺序（顺序是固定的内部逻辑，展示只会增加理解负担）
 //   · 未勾选的步骤参数置灰不可用，从视觉上表达"不参与本次处理"
 (function () {
+
+  // 全局错误兜底：未捕获异常 / 未处理的 Promise 拒绝一律弹提示 ——
+  // 教训（2026-09-23）：复刻弹窗里误用未声明的 `api` 导致 ReferenceError，
+  // 被就地 catch 静默吞掉，表现为「点了没反应」，排查代价很大。此处保证任何前端异常都可见。
+  window.addEventListener('error', function (e) {
+    try { toast('界面异常：' + ((e && e.message) || '未知错误'), true); } catch (x) {}
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e && e.reason;
+    try { toast('操作失败：' + ((r && r.message) || r || '未知错误'), true); } catch (x) {}
+  });
+
   'use strict';
 
   var api = window.txapi;

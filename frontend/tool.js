@@ -220,7 +220,7 @@
       }).join('');
       input = '<select class="tl-sel" data-step="' + stepId + '" data-key="' + sc.key + '">' + opts + '</select>';
     } else if (type === 'bool') {
-      input = '<input type="checkbox" data-step="' + stepId + '" data-key="' + sc.key + '" data-bool="1"' + (v ? ' checked' : '') + '>';
+      input = '<label class="opt-check opt-check--nolabel"><input type="checkbox" data-step="' + stepId + '" data-key="' + sc.key + '" data-bool="1"' + (v ? ' checked' : '') + '><span class="opt-check__box"></span></label>';
     } else if (type === 'file') {
       input = '<span class="tl-field__row">'
         + '<input class="tl-path" type="text" data-step="' + stepId + '" data-key="' + sc.key + '" value="' + esc(v) + '" placeholder="选择文件…">'
@@ -242,7 +242,7 @@
       : (step.schema || []).filter(function (sc) { return fieldVisible(step.id, sc); })
         .map(function (sc) { return paramField(step.id, sc); }).join('');
     div.innerHTML = '<div class="tl-step__head">'
-      + '<input type="checkbox" data-check="' + step.id + '"' + (on ? ' checked' : '') + '>'
+      + '<input class="ui-checkbox" type="checkbox" data-check="' + step.id + '"' + (on ? ' checked' : '') + '>'
       + '<span class="tl-step__arrow" data-fold="' + step.id + '" title="展开/收起参数">' + iconEl('chevron-right', 13) + '</span>'
       + '<span class="tl-step__title">' + esc(step.title || step.id) + '</span>'
       + (step.danger === 'lossy' ? '<span class="tl-step__flag">会丢内容</span>' : '')

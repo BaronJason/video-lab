@@ -119,6 +119,7 @@
     .tl-link--on { color: var(--brand-500); border-color: var(--brand-500); }
     .tl-link--on svg { transform: rotate(-45deg); }
     .tl-mini {
+      display: inline-flex; align-items: center; gap: 4px;
       height: 25px; padding: 0 8px; border-radius: var(--radius-6); border: 1px solid var(--border-neutral-l2);
       background: transparent; color: var(--text-secondary); cursor: pointer; font-size: var(--body-xs-font-size);
       font-family: var(--font-family-default);
@@ -189,7 +190,7 @@
       <button class="tl-btn" id="btnPickDir"><i data-icon="folder-open" data-size="14"></i>选择文件夹</button>
       <button class="tl-btn" id="btnPickFiles"><i data-icon="video" data-size="14"></i>选择视频</button>
       <button class="tl-btn" id="btnClearInput" title="清空已选输入"><i data-icon="x" data-size="14"></i>清空</button>
-      <label class="tl-check"><input type="checkbox" id="inRecursive" checked>递归子目录</label>
+      <label class="opt-check"><input type="checkbox" id="inRecursive" checked><span class="opt-check__box"></span><span>递归子目录</span></label>
     </div>
     <div class="tl-hint" id="inputHint"></div>
   </div>
@@ -245,7 +246,7 @@
         </div>
         <div class="tl-sep"></div>
         <div class="tl-out__row">
-          <label class="tl-check"><input type="checkbox" id="outBackup">处理前备份原文件</label>
+          <label class="opt-check"><input type="checkbox" id="outBackup"><span class="opt-check__box"></span><span>处理前备份原文件</span></label>
           <input class="tl-text" id="outBackupDir" placeholder="备份目录（留空 = 设置里的默认备份目录）" style="max-width:320px">
           <button class="tl-btn" id="btnPickBackupDir"><i data-icon="folder-open" data-size="14"></i>选择备份目录</button>
           <button class="tl-btn" id="btnOpenBackupDir" title="打开当前设定的备份目录（留空则打开默认备份目录）"><i data-icon="folder-open" data-size="14"></i>打开备份目录</button>

@@ -10862,6 +10862,10 @@ button.is-vl-disabled {
 .rp-form__num { width: 120px; flex: 0 0 auto; }
 .rp-form__hint { font-size: 12px; line-height: 1.5; opacity: .72; }
 
+/* 原生复选框统一样式（用于有自管点击逻辑、不便套 label 结构的场景：尺寸与品牌色对齐 .opt-check） */
+.ui-checkbox { width: 16px; height: 16px; flex-shrink: 0; accent-color: var(--brand-500); cursor: pointer; }
+/* 无文字复选框（文字在左侧栏）：不占额外间距 */
+.opt-check--nolabel { gap: 0; }
 /* ── 统一复选框/单选框（全局唯一样式：16px + SVG 勾 + 品牌色）── */
 .opt-check,
 .opt-radio {

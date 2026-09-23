@@ -210,8 +210,22 @@ async function selectReplacementVideo({ originalPath, exclude = [], preferShort 
   const others = cands.filter((c) => !sameSuffix.includes(c));
 
   if (preferShort) {
-    if (sameSuffix.length) { const s = await sortByValidThenDuration(sameSuffix, info); return { path: s[0], equivalent: true }; }
-    if (others.length) { const s = await sortByValidThenDuration(others, info); return { path: s[0], equivalent: false }; }
+    // 排序后从「与首位并列」的候选组（valid/时长相同）里随机取一个：
+    // 否则同一成片连续多次去重会每次选中同一片段，产出字节级相同的成片
+    const pickTie = async (list) => {
+      const s = await sortByValidThenDuration(list, info);
+      if (!s.length) return null;
+      const i0 = await info(s[0]);
+      const best = [s[0]];
+      for (let k = 1; k < s.length; k++) {
+        const ik = await info(s[k]);
+        if (ik.valid !== i0.valid || Math.abs((ik.duration || 0) - (i0.duration || 0)) > 0.05) break;
+        best.push(s[k]);
+      }
+      return best[Math.floor(Math.random() * best.length)];
+    };
+    if (sameSuffix.length) return { path: await pickTie(sameSuffix), equivalent: true };
+    if (others.length) return { path: await pickTie(others), equivalent: false };
     return { path: null, equivalent: false };
   }
   if (sameSuffix.length) return { path: sameSuffix[Math.floor(Math.random() * sameSuffix.length)], equivalent: true };

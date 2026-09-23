@@ -2392,7 +2392,7 @@ class Api {
         id: t.id, type: t.type, title: t.title, pid: t.pid,
         status: t.status, lockState: t.lockState, paused: !!t.paused,
         progress: t.progress || { current: 0, total: 0 }, failReason: t.failReason || '',
-        createdAt: t.createdAt, endedAt: t.endedAt, outDir: t.outDir || '',
+        createdAt: t.createdAt, startedAt: t.startedAt || null, endedAt: t.endedAt, outDir: t.outDir || '',
         groupDate: typeof t.groupDate === 'string' ? t.groupDate : '', // 业务归属日（前端排序用，不展示）
         softPaused: t._softPaused === true,   // 软暂停待续任务（继续时按类型补缺片/接续）
         // 任务总用时（秒）：首次开始至今的墙钟时间；已结束任务取结束时间

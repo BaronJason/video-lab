@@ -224,7 +224,7 @@
             var overlay = document.createElement('div');
             overlay.className = 'modal-overlay';
             var card = document.createElement('div');
-            card.className = 'modal-card modal-card--wide';
+            card.className = 'modal-card';
             card.innerHTML = '<button type="button" class="modal-close" title="关闭">✕</button>'
               + '<div class="modal__title">复刻</div>'
               + '<div class="rp-form">'

@@ -10866,7 +10866,7 @@ button.is-vl-disabled {
 .vl-pop__btn--danger:hover { filter: brightness(.94); }
 
 /* ── 复刻参数弹窗（去重复刻）：上下限行 + 启用勾选 ── */
-.rp-form { display: flex; flex-direction: column; gap: 10px; margin: 6px 0 14px; }
+.rp-form { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: var(--spacer-12) var(--spacer-20) var(--spacer-4); }
 .rp-form__row { display: flex; align-items: center; gap: 10px; }
 .rp-form__label { flex: 0 0 84px; font-size: 13px; color: var(--text-default); }
 .rp-form__num { width: 120px; flex: 0 0 auto; }

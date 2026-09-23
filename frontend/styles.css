@@ -4792,13 +4792,15 @@ body[data-preview-collapsed] .center-global-search .ds-input {
 }
 
 /* ════════════ 遮罩叠加模式（复用主窗口，布局与配置管理模式一致） ════════════ */
-/* 隐藏批量"管理入口"（新建配置/排序/搜索/A-Z索引/置顶）；菜单项与批量模式保持一致（功能各自独立） */
+/* 隐藏批量"管理入口"（新建配置/排序/搜索/A-Z索引/置顶）与批量专属菜单项「刷新配置列表」
+   （遮罩侧对应项为「刷新」menuMaskRescan，两者角色等价、数量一致）；「选择路径」两模式通用 */
 body.mask-mode #btnNewConfig,
 body.mask-mode #btnSortName,
 body.mask-mode #btnSortTime,
 body.mask-mode .sidebar__search,
 body.mask-mode #azIndexBar,
-body.mask-mode #sidebarToTop { display: none !important; }
+body.mask-mode #sidebarToTop,
+body.mask-mode #menuRefreshConfigs { display: none !important; }
 /* 遮罩模式专属：项目刷新入口（批量隐藏、遮罩显示） */
 #menuMaskRescan { display: none; }
 body.mask-mode #menuMaskRescan { display: flex; }
@@ -10218,13 +10220,15 @@ body[data-preview-collapsed] .center-global-search .ds-input {
 }
 
 /* ════════════ 遮罩叠加模式（复用主窗口，布局与配置管理模式一致） ════════════ */
-/* 隐藏批量"管理入口"（新建配置/排序/搜索/A-Z索引/置顶）；菜单项与批量模式保持一致（功能各自独立） */
+/* 隐藏批量"管理入口"（新建配置/排序/搜索/A-Z索引/置顶）与批量专属菜单项「刷新配置列表」
+   （遮罩侧对应项为「刷新」menuMaskRescan，两者角色等价、数量一致）；「选择路径」两模式通用 */
 body.mask-mode #btnNewConfig,
 body.mask-mode #btnSortName,
 body.mask-mode #btnSortTime,
 body.mask-mode .sidebar__search,
 body.mask-mode #azIndexBar,
-body.mask-mode #sidebarToTop { display: none !important; }
+body.mask-mode #sidebarToTop,
+body.mask-mode #menuRefreshConfigs { display: none !important; }
 /* 遮罩模式专属：项目刷新入口（批量隐藏、遮罩显示） */
 #menuMaskRescan { display: none; }
 body.mask-mode #menuMaskRescan { display: flex; }

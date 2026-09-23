@@ -203,6 +203,61 @@
       });
     });
   }
+  // 复刻参数弹窗（仅去重复刻）：设定本次任务的重复度上下限与是否启用。
+  // 占位符显示「设置-视频复刻」里的默认值，勾选状态同样取设置里的默认启用；本次任务生效，不改设置。
+  // 业务背景：不一致占比过低会被判重复度不过审，过高会被判为全新视频（继承不到流量），因此要控在区间内。
+  function replicaParamsDialog() {
+    return new Promise(function (resolve) {
+      api.get_settings().then(function (st) {
+        var r = (st && st.replica) || {};
+        var dMin = r.dedup_ratio != null ? String(r.dedup_ratio) : '';
+        var dMax = r.dedup_ratio_max != null ? String(r.dedup_ratio_max) : '';
+        var minOn = r.dedup_ratio_on !== false;
+        var maxOn = r.dedup_ratio_max_on !== false;
+        var overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+        var card = document.createElement('div');
+        card.className = 'modal-card modal-card--wide';
+        card.innerHTML = '<button type="button" class="modal-close" title="关闭">✕</button>'
+          + '<div class="modal__title">去重复刻设置</div>'
+          + '<div class="modal__message">不一致占比过低会被判重复度不过审，过高会被判为全新视频；建议设定区间</div>'
+          + '<div class="rp-form">'
+          + '<div class="rp-form__row"><span class="rp-form__label">重复度下限</span>'
+          + '<input class="form-input rp-form__num" id="rpMin" type="number" min="0" max="1" step="0.05" placeholder="' + escapeHtml(dMin) + '">'
+          + '<label class="opt-check"><input type="checkbox" id="rpMinOn"' + (minOn ? ' checked' : '') + '><span class="opt-check__box"></span><span>启用</span></label>'
+          + '</div>'
+          + '<div class="rp-form__row"><span class="rp-form__label">重复度上限</span>'
+          + '<input class="form-input rp-form__num" id="rpMax" type="number" min="0" max="1" step="0.05" placeholder="' + escapeHtml(dMax) + '">'
+          + '<label class="opt-check"><input type="checkbox" id="rpMaxOn"' + (maxOn ? ' checked' : '') + '><span class="opt-check__box"></span><span>启用</span></label>'
+          + '</div>'
+          + '<div class="rp-form__hint">留空则使用设置里的默认值；低于下限时任务会失败并通知（避免无效出片）</div>'
+          + '</div>'
+          + '<div class="modal__actions">'
+          + '<button type="button" class="modal-btn" data-b="cancel">取消</button>'
+          + '<button type="button" class="modal-btn modal-btn--primary" data-b="ok">开始复刻</button>'
+          + '</div>';
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+        var done = function (v) { overlay.remove(); resolve(v); };
+        overlay.addEventListener('click', function (e) { if (e.target === overlay) done(null); });
+        var cb = card.querySelector('.modal-close');
+        if (cb) cb.addEventListener('click', function () { done(null); });
+        card.querySelector('[data-b="cancel"]').addEventListener('click', function () { done(null); });
+        card.querySelector('[data-b="ok"]').addEventListener('click', function () {
+          var minOnNow = card.querySelector('#rpMinOn').checked;
+          var maxOnNow = card.querySelector('#rpMaxOn').checked;
+          var minV = (card.querySelector('#rpMin').value || '').trim() || (minOnNow ? dMin : '');
+          var maxV = (card.querySelector('#rpMax').value || '').trim() || (maxOnNow ? dMax : '');
+          // 校验：启用的项必须有合法值；两者都启用时 下限 ≤ 上限
+          if (minOnNow && !(parseFloat(minV) > 0)) { toast('请填写重复度下限（或取消勾选启用）', true); return; }
+          if (maxOnNow && !(parseFloat(maxV) > 0)) { toast('请填写重复度上限（或取消勾选启用）', true); return; }
+          if (minOnNow && maxOnNow && parseFloat(maxV) < parseFloat(minV)) { toast('重复度上限不能小于下限', true); return; }
+          done({ dedupRatio: minV, dedupRatioMax: maxV, dedupRatioOn: minOnNow, dedupRatioMaxOn: maxOnNow });
+        });
+      }).catch(function () { resolve(null); });
+    });
+  }
+
   // 保存归属选择弹窗：每行左侧提示"保存到 XX 项目：<项目名>"，右侧统一「保存」按钮（右对齐、样式一致）
   function showSaveDestDialog(opts) {
     return new Promise(function (resolve) {
@@ -1124,14 +1179,18 @@
     for (var k in (state.selectedLogPaths || {})) { var v = state.selectedLogPaths[k]; if (v) items.push({ path: (v.path || v), video: v.video || '' }); }
     if (!items.length) { setStatus('请先勾选要复刻的成片'); return; }
     var cnt = items.length, done = 0;
-    setStatus('已对 ' + cnt + ' 个成片启动批量' + (mode === '1' ? '完全' : '去重') + '复刻…');
-    items.forEach(function (it) {
-      // 按选中成片精确复刻（传入成片名，脚本仅处理该成片）
-      call('run_replica', it.path, mode, it.video).then(function (r) {
-        done++;
-        if (!(r && r.ok)) setStatus('启动失败：' + ((r && r.error) || '未知错误'));
-        else if (done === cnt) { toast('已全部启动 ' + cnt + ' 个批量复刻脚本', 'ok'); }
-      }).catch(function () { done++; });
+    var ask = (mode === '2') ? replicaParamsDialog() : Promise.resolve({});
+    ask.then(function (opts) {
+      if (opts === null) { setStatus('已取消复刻'); return; }
+      setStatus('已对 ' + cnt + ' 个成片启动批量' + (mode === '1' ? '完全' : '去重') + '复刻…');
+      items.forEach(function (it) {
+        // 按选中成片精确复刻（传入成片名，脚本仅处理该成片）
+        call('run_replica', it.path, mode, it.video, opts).then(function (r) {
+          done++;
+          if (!(r && r.ok)) setStatus('启动失败：' + ((r && r.error) || '未知错误'));
+          else if (done === cnt) { toast('已全部启动 ' + cnt + ' 个批量复刻脚本', 'ok'); }
+        }).catch(function () { done++; });
+      });
     });
     // 批量启动完成后退出选择模式
     state.selectMode = false; state.selectedLogPaths = {};
@@ -1863,8 +1922,12 @@
         var entryVideo = entry.getAttribute('data-video') || '';
         showDialog({ title: '复刻', message: '请选择复刻方式', buttons: [ { label: '取消', value: null }, { label: '完全复刻', value: '1', primary: true }, { label: '去重复刻', value: '2', primary: true } ] }).then(function (mode) {
           if (!mode) { setStatus('已取消复刻'); return; }
-          // 仅复刻该单个成片（传入成片名，脚本精确处理该成片）
-          call('run_replica', logPath, mode, entryVideo).then(function (r) { setStatus(r && r.ok ? '已启动该成片复刻脚本' : '启动失败：' + ((r && r.error) || '')); });
+          var ask = (mode === '2') ? replicaParamsDialog() : Promise.resolve({});
+          ask.then(function (opts) {
+            if (opts === null) { setStatus('已取消复刻'); return; }
+            // 仅复刻该单个成片（传入成片名，脚本精确处理该成片）
+            call('run_replica', logPath, mode, entryVideo, opts).then(function (r) { setStatus(r && r.ok ? '已启动该成片复刻脚本' : '启动失败：' + ((r && r.error) || '')); });
+          });
         });
         return;
       }

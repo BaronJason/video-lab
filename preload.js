@@ -46,7 +46,7 @@ contextBridge.exposeInMainWorld('txapi', {
   get_project_watermark: (project) => invoke('get_project_watermark', project),
   set_project_watermark: (project, wm, enabled, applyToAll, group, groupEnabled) => invoke('set_project_watermark', project, wm, enabled, applyToAll, group, groupEnabled),
   run_batch: (p, count, group) => invoke('run_batch', p, count, group),
-  run_replica: (logPath, mode, entryVideo) => invoke('run_replica', logPath, mode, entryVideo),
+  run_replica: (logPath, mode, entryVideo, opts) => invoke('run_replica', logPath, mode, entryVideo, opts),
   continue_replica: (taskId) => invoke('continue_replica', taskId),
   run_mask: (payload) => invoke('run_mask', payload),
   continue_mask: (taskId) => invoke('continue_mask', taskId),

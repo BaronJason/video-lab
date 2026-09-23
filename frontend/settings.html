@@ -281,8 +281,27 @@
 
             <div class="settings-group"><span class="settings-group__title">去重</span></div>
       <div class="form-group">
-        <label class="form-group__label">去重阈值<small>模式2尾部替换需达到的不一致时长占比</small></label>
-        <input class="form-input" id="replicaDedupRatio" type="number" min="0" max="1" step="0.05" placeholder="">
+        <label class="form-group__label">重复度下限<small>不一致时长占比的下限；低于它会被判定为重复度过高（不过审），复刻将提示失败</small></label>
+        <div class="opt-row">
+          <input class="form-input opt-num-input" id="replicaDedupRatio" type="number" min="0" max="1" step="0.05" placeholder="">
+          <label class="opt-check">
+            <input type="checkbox" id="replicaDedupRatioOn">
+            <span class="opt-check__box"></span>
+            <span>默认启用</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-group__label">重复度上限<small>不一致时长占比的上限；超过它会被判定为全新视频（继承不到流量）</small></label>
+        <div class="opt-row">
+          <input class="form-input opt-num-input" id="replicaDedupMax" type="number" min="0" max="1" step="0.05" placeholder="">
+          <label class="opt-check">
+            <input type="checkbox" id="replicaDedupMaxOn">
+            <span class="opt-check__box"></span>
+            <span>默认启用</span>
+          </label>
+        </div>
       </div>
     </section>
 

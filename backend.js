@@ -63,7 +63,10 @@ const DEFAULT_CONFIG = {
   replica: {
     max_duration: 179,   // MaxTotalDurationSec
     speed_limit: 1.2,    // SpeedThreshold
-    dedup_ratio: 0.4,    // DedupRatio 去重阈值
+    dedup_ratio: 0.4,    // 重复度下限（DedupRatio）：低于它会被判定重复度过高
+    dedup_ratio_max: 0.5,    // 重复度上限：超过它会被判定为全新视频（继承不到流量）
+    dedup_ratio_on: true,    // 下限是否启用（复刻弹窗默认勾选状态）
+    dedup_ratio_max_on: true,// 上限是否启用（复刻弹窗默认勾选状态）
   },
   // 遮罩叠加：独立工作路径 + 固定水印（设置页配置，遮罩模式界面默认使用）
   mask: {
@@ -4073,18 +4076,27 @@ class Api {
     return { ok: true, taskId: task.id };
   }
 
-  runReplica(logPath, mode = 1, entryVideo) {
+  runReplica(logPath, mode = 1, entryVideo, opts) {
     if (!this.shouldUseNodeEngine('replica')) return { ok: false, error: '程序文件不完整（缺少运行组件），请重新安装或校验程序文件' };
     const notSet = this._settingsError('replica');
     if (notSet.length) return { ok: false, error: '视频复刻参数未设置：' + notSet.join('、') + '，请到 设置-视频复刻 中配置后再启动' };
     const r = this.config.replica || {};
+    const o = opts || {};
+    const num = (v, dft) => { const n = parseFloat(v); return Number.isFinite(n) && n > 0 ? n : dft; };
+    const boolOn = (v, dft) => (v === undefined || v === null) ? (dft !== false) : (v === true);
     const env = Object.assign({
       REPLICA_TXT: path.resolve(logPath),
       REPLICA_MODE: String(mode) === '2' ? '2' : '1',
       REPLICA_NO_WAIT: '1',
       REPLICA_MAX_DURATION: String(r.max_duration),
       REPLICA_SPEED_LIMIT: String(r.speed_limit),
-      REPLICA_DEDUP_RATIO: String(r.dedup_ratio),
+      // 重复度区间：本次任务弹窗传入优先，未传则用设置里的默认值与默认启用状态
+      // （下限=至少替换到的占比；上限=尽量避免超过，超过会被平台判为全新视频）
+      REPLICA_DEDUP_RATIO: String(num(o.dedupRatio, r.dedup_ratio)),
+      REPLICA_DEDUP_MIN: String(num(o.dedupRatio, r.dedup_ratio)),
+      REPLICA_DEDUP_MAX: String(num(o.dedupRatioMax, r.dedup_ratio_max)),
+      REPLICA_DEDUP_MIN_ON: boolOn(o.dedupRatioOn, r.dedup_ratio_on) ? '1' : '0',
+      REPLICA_DEDUP_MAX_ON: boolOn(o.dedupRatioMaxOn, r.dedup_ratio_max_on) ? '1' : '0',
     }, this._cacheEnvBase());
     // 任务提交时刻：排队跨天运行时，复刻命名/日志/输出目录按提交日期而非运行日期
     env.REPLICA_SUBMIT_TS = String(Date.now());

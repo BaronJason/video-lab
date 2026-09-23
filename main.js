@@ -1247,7 +1247,7 @@ function registerIpc() {
   ipcMain.handle('get_project_watermark', (e, project) => api.getProjectWatermark(project));
   ipcMain.handle('set_project_watermark', (e, project, wm, enabled, applyToAll, group, groupEnabled) => api.setProjectWatermark(project, wm, enabled, applyToAll, group, groupEnabled));
   ipcMain.handle('run_batch', (e, p, count, group) => api.runBatch(p, count, group));
-  ipcMain.handle('run_replica', (e, logPath, mode, entryVideo) => api.runReplica(logPath, mode, entryVideo));
+  ipcMain.handle('run_replica', (e, logPath, mode, entryVideo, opts) => api.runReplica(logPath, mode, entryVideo, opts));
   ipcMain.handle('continue_replica', (e, taskId) => api.continueReplica(taskId));
   ipcMain.handle('list_tasks', () => api.snapshotTasks());
   ipcMain.handle('locate_task', (e, taskId, target) => {

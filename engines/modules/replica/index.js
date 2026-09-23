@@ -36,6 +36,11 @@ function readEnv(env = process.env) {
     maxDuration: num('REPLICA_MAX_DURATION', 179),
     speedLimit: num('REPLICA_SPEED_LIMIT', 1.2),
     dedupRatio: num('REPLICA_DEDUP_RATIO', 0.4),
+    // 重复度区间（平台规则：占比过低判重复不过审、过高判全新视频继承不到流量）
+    dedupMin: num('REPLICA_DEDUP_MIN', num('REPLICA_DEDUP_RATIO', 0.4)),
+    dedupMax: num('REPLICA_DEDUP_MAX', 0),
+    dedupMinOn: n('REPLICA_DEDUP_MIN_ON', '1') !== '0',
+    dedupMaxOn: n('REPLICA_DEDUP_MAX_ON', '1') !== '0',
     outputDir: n('REPLICA_OUTPUT_DIR'),
     fallbackDir: n('REPLICA_FALLBACK_DIR'),
     onlyNames: n('REPLICA_ONLY_NAMES'),
@@ -329,6 +334,7 @@ function resolveFromVideoCache(oldPath, { exclude = [], excludeNames = [], index
 async function selectVariancePaths({
   originalPaths, alreadyChangedIndices = [], alreadyEquivalentIndices = [],
   triedSubs = new Map(), preferShort = false, dedupRatio, info, logger, durationCap = 0,
+  dedupMax = 0, dedupMaxOn = false,
 }) {
   const origDurations = [];
   let totalOrig = 0;
@@ -350,10 +356,20 @@ async function selectVariancePaths({
   let equivalentReplaced = 0;
   const replaceDetails = [];
   const equivalentDetails = [];
+  const skippedOverCap = [];   // 会把占比推过上限而暂缓替换的位置（保下限时回补）
+  // 策略（用户定案）：① 第一段永不主动替换（批量拼接重试的硬规则）② 越靠后越优先替换
+  //   ③ 上限优先于顺序：靠后位置会超上限就跳过、继续往前找能在上限内完成的位置
+  //   ④ 下限优先于上限：往前找遍仍不达标时回补，允许略微超上限（宁多不少）
 
-  for (let i = originalPaths.length - 1; i >= 0; i--) {
+  for (let i = originalPaths.length - 1; i >= 1; i--) {   // i>=1：第 0 段永不主动替换
     if (trulyChangedDur / totalOrig >= dedupRatio) break;
     if (changedSet.has(i) || equivalentSet.has(i)) continue;
+    // 上限软约束：替换该位置会把占比推过上限 → 先跳过，继续往前试（靠前位置通常更短）
+    if (dedupMaxOn && dedupMax > 0
+      && (trulyChangedDur + (origDurations[i] || 0)) / totalOrig > dedupMax) {
+      skippedOverCap.push(i);
+      continue;
+    }
     const origKey = String(originalPaths[i]);
     const excludeSubs = [];
     for (const k of triedSubs.keys()) if (k.startsWith(origKey + '|')) excludeSubs.push(k.slice(origKey.length + 1));
@@ -386,6 +402,35 @@ async function selectVariancePaths({
       replaceDetails.push(`    第 ${i + 1} 段: ${path.basename(originalPaths[i])} -> ${path.basename(sel.path)}`);
     }
   }
+
+  // 保下限优先：为守上限跳过的位置，若导致没达到下限则回补直到达标（允许略微超上限）
+  let overCap = false;
+  if (dedupMaxOn && dedupMax > 0 && trulyChangedDur / totalOrig < dedupRatio && skippedOverCap.length) {
+    for (const i of skippedOverCap) {
+      if (i <= 0) continue;   // 第一段硬约束
+      if (trulyChangedDur / totalOrig >= dedupRatio) break;
+      const origKey2 = String(originalPaths[i]);
+      const excludeSubs2 = [];
+      for (const k of triedSubs.keys()) if (k.startsWith(origKey2 + '|')) excludeSubs2.push(k.slice(origKey2.length + 1));
+      const usedNames2 = [];
+      for (let k = 0; k < newPaths.length; k++) if (k !== i && newPaths[k]) usedNames2.push(path.basename(newPaths[k]));
+      const excludeAll2 = excludeSubs2.concat(newPaths.filter((pp) => pp && pp !== originalPaths[i]));
+      const sel2 = await selectReplacementVideo({
+        originalPath: originalPaths[i], exclude: excludeAll2, excludeNames: usedNames2, preferShort, info,
+      });
+      if (!sel2.path) continue;
+      newPaths[i] = sel2.path;
+      if (sel2.equivalent) { equivalentReplaced++; }
+      else {
+        actuallyReplaced++;
+        changedSet.add(i);
+        trulyChangedDur += origDurations[i];
+        overCap = true;
+        replaceDetails.push(`    第 ${i + 1} 段: ${path.basename(originalPaths[i])} -> ${path.basename(sel2.path)}（为守住下限补足）`);
+      }
+    }
+  }
+  if (overCap) logger.warn(`模式2：为守住下限，替换后不一致占比略超上限（${round1(trulyChangedDur / totalOrig * 100)}% > ${round1(dedupMax * 100)}%）`);
 
   if (actuallyReplaced === 0 && equivalentReplaced === 0 && alreadyChangedDur / totalOrig < dedupRatio) {
     logger.warn('模式2：没有可替换的尾部片段，本次仅保留已随机替换的片段');
@@ -610,6 +655,8 @@ async function run(ctx, env = process.env) {
               // 总时长预算 = 成片上限：尾部替换在预算内优先选更长候选（填满上限、更多新内容），
               // 预算不足时退回原压时长语义；超限后由渐进压时长轮次兜底
               durationCap: maxDuration,
+              dedupMax: cfg.dedupMax,
+              dedupMaxOn: cfg.dedupMaxOn,
             });
             newVideos = r.paths;
           } else {
@@ -686,6 +733,31 @@ async function run(ctx, env = process.env) {
         logger.info(`   ✅ 已替换消除 ${dupFixed} 组重复片段`);
         totalDuration = 0;
         for (const p of videos) totalDuration += (await info(p)).duration || 0;
+      }
+
+      // ── 重复度区间校验（模式2）──
+      // 口径：按最终片段与原片的差异重算不一致时长占比（含缺失修复、补足替换、重复消除的全部改动）
+      // 下限未达标 → 该成片不出片（重复度过高）；超上限 → 告警（受片段时长粒度限制，生成时已优先保下限）
+      if (mode === 2 && job.videos.length) {
+        let changedDurFinal = 0, origDurTotal = 0;
+        for (let vi = 0; vi < job.videos.length; vi++) {
+          const od = (await info(job.videos[vi])).duration || 0;
+          origDurTotal += od;
+          if (videos[vi] !== job.videos[vi]) changedDurFinal += od;
+        }
+        const ratioFinal = origDurTotal > 0 ? changedDurFinal / origDurTotal : 0;
+        const minTxt = cfg.dedupMinOn ? round1(cfg.dedupMin * 100) + '%' : '未启用';
+        const maxTxt = (cfg.dedupMaxOn && cfg.dedupMax > 0) ? round1(cfg.dedupMax * 100) + '%' : '未启用';
+        logger.info(`🔀 不一致时长占比 ${round1(ratioFinal * 100)}%（下限 ${minTxt} / 上限 ${maxTxt}）`);
+        if (cfg.dedupMinOn && ratioFinal < cfg.dedupMin) {
+          logger.error('复刻-重复度下限', `不一致占比 ${round1(ratioFinal * 100)}% 低于下限 ${round1(cfg.dedupMin * 100)}%（重复度过高）`);
+          logger.fail(job.name, `不一致占比 ${round1(ratioFinal * 100)}% 低于下限`);
+          hasError = true;
+          continue;
+        }
+        if (cfg.dedupMaxOn && cfg.dedupMax > 0 && ratioFinal > cfg.dedupMax) {
+          logger.warn(`不一致占比 ${round1(ratioFinal * 100)}% 超过上限 ${round1(cfg.dedupMax * 100)}%（可能被判为全新视频）`);
+        }
       }
 
       // ── 时长与加速 ──

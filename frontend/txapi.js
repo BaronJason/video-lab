@@ -139,7 +139,7 @@
     get_project_watermark: function (project) { return invokeArgs('get_project_watermark', project); },
     set_project_watermark: function (project, wm, enabled, applyToAll, group, groupEnabled) { return invokeArgs('set_project_watermark', project, wm, enabled, applyToAll, group, groupEnabled); },
     run_batch: function (p, count, group) { return invokeArgs('run_batch', p, count, group); },
-    run_replica: function (logPath, mode, entryVideo) { return invokeArgs('run_replica', logPath, mode, entryVideo); },
+    run_replica: function (logPath, mode, entryVideo, opts) { return invokeArgs('run_replica', logPath, mode, entryVideo, opts); },
     continue_replica: function (taskId) { return invokeArgs('continue_replica', taskId); },
     run_mask: function (payload) { return invokeArgs('run_mask', payload); },
     continue_mask: function (taskId) { return invokeArgs('continue_mask', taskId); },

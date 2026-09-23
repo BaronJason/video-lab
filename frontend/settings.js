@@ -18,7 +18,7 @@
   ];
   var state = {
     batch: { max_duration: '', max_retry: '', speed_limit: '', txt_prefix: [], producer: '', suffix_mark: '' },
-    replica: { max_duration: '', speed_limit: '', dedup_ratio: '' },
+    replica: { max_duration: '', speed_limit: '', dedup_ratio: '', dedup_ratio_max: '', dedup_ratio_on: true, dedup_ratio_max_on: true },
     mask: { root: '', watermark_mov: '', watermark_alpha: '' }
   };
   // 保存按钮启用跟踪：记录加载后的原始值，任意一行变动即高亮该行并启用保存
@@ -429,6 +429,12 @@
       $('replicaMaxDuration').value = r.max_duration != null ? r.max_duration : '';
       $('replicaSpeedLimit').value = r.speed_limit != null ? r.speed_limit : '';
       $('replicaDedupRatio').value = r.dedup_ratio != null ? r.dedup_ratio : '';
+      var rdm = $('replicaDedupMax');
+      if (rdm) rdm.value = r.dedup_ratio_max != null ? r.dedup_ratio_max : '';
+      var rdo = $('replicaDedupRatioOn');
+      if (rdo) rdo.checked = r.dedup_ratio_on !== false;      // 默认启用
+      var rdmo = $('replicaDedupMaxOn');
+      if (rdmo) rdmo.checked = r.dedup_ratio_max_on !== false;
       var mk = s.mask || {};
       $('maskRoot').value = mk.root || '';
       $('maskWatermark').value = mk.watermark_mov || '';
@@ -570,6 +576,9 @@
       state.replica.max_duration = $('replicaMaxDuration').value.trim();
       state.replica.speed_limit = $('replicaSpeedLimit').value.trim();
       state.replica.dedup_ratio = $('replicaDedupRatio').value.trim();
+      state.replica.dedup_ratio_max = ($('replicaDedupMax') || {}).value ? $('replicaDedupMax').value.trim() : '';
+      state.replica.dedup_ratio_on = !!($('replicaDedupRatioOn') && $('replicaDedupRatioOn').checked);
+      state.replica.dedup_ratio_max_on = !!($('replicaDedupMaxOn') && $('replicaDedupMaxOn').checked);
       state.mask.root = $('maskRoot').value.trim();
       state.mask.watermark_mov = $('maskWatermark').value.trim();
       state.mask.watermark_alpha = $('maskAlpha').value.trim();
@@ -580,7 +589,11 @@
       if (!state.batch.producer.trim()) missing.push('批量拼接·创作者名');
       
       var rn = ['max_duration', 'speed_limit', 'dedup_ratio'];
-      for (var j = 0; j < rn.length; j++) if (!(parseFloat(state.replica[rn[j]]) > 0)) missing.push('视频复刻·' + ({ max_duration: '最大时长', speed_limit: '倍速阈值', dedup_ratio: '去重阈值' })[rn[j]]);
+      for (var j = 0; j < rn.length; j++) if (!(parseFloat(state.replica[rn[j]]) > 0)) missing.push('视频复刻·' + ({ max_duration: '最大时长', speed_limit: '倍速阈值', dedup_ratio: '重复度下限' })[rn[j]]);
+      // 上下限关系校验（仅两者都启用时）；上限用于规避「去重过高被判定为全新视频」
+      var rdMin = parseFloat(state.replica.dedup_ratio), rdMax = parseFloat(state.replica.dedup_ratio_max);
+      if (state.replica.dedup_ratio_max_on && !(rdMax > 0)) missing.push('视频复刻·重复度上限');
+      if (state.replica.dedup_ratio_max_on && rdMax > 0 && rdMin > 0 && rdMax < rdMin) missing.push('视频复刻·重复度上限（不能小于下限）');
       if (missing.length) { setStatus('参数未设置：' + missing.join('、'), false); return; }
 
       var skin = document.documentElement.getAttribute('data-skin') || THEMES[0].id;

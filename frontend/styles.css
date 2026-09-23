@@ -4800,7 +4800,6 @@ body.mask-mode .sidebar__search,
 body.mask-mode #azIndexBar,
 body.mask-mode #sidebarToTop,
 body.mask-mode #menuRefreshConfigs,
-body.mask-mode #menuResetPrecheck,
 body.mask-mode #menuChoosePath { display: none !important; }
 /* 遮罩模式专属：项目刷新入口（批量隐藏、遮罩显示） */
 #menuMaskRescan { display: none; }
@@ -10229,7 +10228,6 @@ body.mask-mode .sidebar__search,
 body.mask-mode #azIndexBar,
 body.mask-mode #sidebarToTop,
 body.mask-mode #menuRefreshConfigs,
-body.mask-mode #menuResetPrecheck,
 body.mask-mode #menuChoosePath { display: none !important; }
 /* 遮罩模式专属：项目刷新入口（批量隐藏、遮罩显示） */
 #menuMaskRescan { display: none; }

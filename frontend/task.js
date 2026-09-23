@@ -845,7 +845,7 @@
         }).catch(function (e) { toast(e.message, true); });
         return;
       }
-      call('open_path', t.outDir).then(function (r) {
+      call('open_folder_select', t.outDir).then(function (r) {
         if (r && !r.ok) toast(r.error || '成片文件夹不存在', true);
       }).catch(function () {});
     }

@@ -763,23 +763,23 @@
     });
     // 「配置和数据保存位置」行：打开当前生效的配置存储目录
     var openCfg = document.getElementById('btnOpenCfgDir');
-    if (openCfg && api && api.open_path) openCfg.addEventListener('click', function () {
+    if (openCfg && api && api.open_folder_select) openCfg.addEventListener('click', function () {
       var sel = document.querySelector('input[name="configStorage"]:checked');
       var isAppdata = sel && sel.value === 'appdata';
       var pp = document.getElementById('cfgPathProgram'), pa = document.getElementById('cfgPathAppdata');
       var dir = isAppdata ? (pa ? pa.textContent : '') : (pp ? pp.textContent : '');
       if (!dir) { setStatus('尚未确定保存目录', false); return; }
-      api.open_path(dir).then(function (r) {
+      api.open_folder_select(dir).then(function (r) {
         if (!(r && r.ok)) toast('打开失败：' + ((r && r.error) || '路径不存在'), true);
       }).catch(function (e) { toast('打开失败：' + e.message, true); });
     });
     // 「运行日志」行：打开日志目录（排查时先找到文件）
     var openLog = document.getElementById('btnOpenLogDir');
-    if (openLog && api && api.open_path) openLog.addEventListener('click', function () {
+    if (openLog && api && api.open_folder_select) openLog.addEventListener('click', function () {
       var el = document.getElementById('logDirPath');
       var dir = el ? el.textContent : '';
       if (!dir) { setStatus('日志目录尚未就绪', false); return; }
-      api.open_path(dir).then(function (r) {
+      api.open_folder_select(dir).then(function (r) {
         if (!(r && r.ok)) toast('打开失败：' + ((r && r.error) || '路径不存在'), true);
       }).catch(function () { setStatus('打开失败', false); });
     });

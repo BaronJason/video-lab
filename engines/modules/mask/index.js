@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { runFfmpeg } = require('../../base/ffmpeg');
-const { probe } = require('../../base/probe');
+const { probe, probeDetail } = require('../../base/probe');
 const { acquireLock } = require('../../base/lock');
 const { exists, getMaskDirName } = require('../../base/paths');
 
@@ -268,7 +268,7 @@ async function run(ctx, env = process.env) {
         ffArgs = ['-y', '-loglevel', 'error', '-stats',
           '-i', j.vidPath, '-i', cfg.watermark,
           '-filter_complex', filter,
-          '-map', '[outv]', '-map', '0:a',
+          '-map', '[outv]', '-map', '0:a?',
           '-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'vbr', '-cq', '25',
           '-c:a', 'aac', '-b:a', '192k', '-shortest',
           j.outFile];
@@ -282,10 +282,31 @@ async function run(ctx, env = process.env) {
         if (vidDur < maskDur && (maskDur - vidDur) > 1.0) {
           logger.warn(`原片时长（${Math.round(vidDur * 100) / 100} s）比遮罩时长（${Math.round(maskDur * 100) / 100} s）短超过1秒，将按原片时长输出`);
         }
+        // 音频来源判定：有音频流还不够 —— 可能是静音音轨（有流但全程没声音），
+        // 这种情况按「无音频」处理，成片改用原视频音轨，否则成片会没有声音
+        let maskHasAudio = false;
+        try { maskHasAudio = !!(probeDetail(srcForDur) || {}).hasAudio; } catch (e) { maskHasAudio = false; }
+        if (maskHasAudio) {
+          let vol = NaN;
+          try {
+            const vd = await runFfmpeg(
+              ['-hide_banner', '-i', srcForDur, '-vn', '-af', 'volumedetect', '-f', 'null', '-'],
+              { captureStdout: true }
+            );
+            const txt = String((vd && (vd.stderr || vd.stdout)) || '');
+            const mM = txt.match(/mean_volume:\s*(-?[\d.]+)\s*dB/);
+            if (mM) vol = parseFloat(mM[1]);
+          } catch (e) { /* 探测失败则按「有音频」处理，沿用遮罩音轨 */ }
+          // 无音量信息、或平均音量低于 -60dB（近乎静音）→ 视为无音频
+          if (!(vol > -60)) maskHasAudio = false;
+        }
+        if (!maskHasAudio) logger.info('   · 遮罩无可用音频（无音频流或静音音轨），成片将使用原视频音轨');
         ffArgs = ['-y', '-loglevel', 'error', '-stats', '-t', String(targetDur),
           '-i', j.vidPath, '-i', srcForDur,
           '-filter_complex', '[1:v]setpts=PTS-STARTPTS[ov];[0:v][ov]overlay=0:0[outv]',
-          '-map', '[outv]', '-map', '1:a?',
+          // 音频来源：遮罩自带音轨时用遮罩音轨；遮罩没有音频流时回退原视频音轨，
+          // 否则成片会完全没有声音（此前固定取 1:a?，遮罩无声即输出无音轨）
+          '-map', '[outv]', '-map', maskHasAudio ? '1:a?' : '0:a?',
           '-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'vbr', '-cq', '25',
           '-c:a', 'aac', '-b:a', '192k',
           j.outFile];

@@ -147,9 +147,11 @@ class Logger {
     this.raw('出错步骤: ' + step);
     this.raw('错误详情: ' + msg);
     if (h && h.how) this.raw('如何解决: ' + h.how);
+    // 中性表述：只说明问题类型，不做否定式自证（那读起来像在推责）。
+    // 属于程序侧时补一句「已记录运行日志，可反馈」—— 这是有用的行动信息，不是辩解。
     if (h && h.who) {
-      this.raw('问题归属: ' + h.who
-        + (String(h.who).indexOf('程序') === 0 ? '（已记录运行日志，可反馈）' : '（不是程序缺陷）'));
+      const isProgramSide = String(h.who).indexOf('程序') === 0;
+      this.raw('问题类型: ' + h.who + (isProgramSide ? '（已记录运行日志，可反馈）' : ''));
     }
     this.raw('==========================================');
   }

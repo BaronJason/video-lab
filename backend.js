@@ -3529,12 +3529,17 @@ class Api {
               const tailLog = (task.log || []).slice(-40);
               const stderrTail = String((err && err.data && err.data.length) ? err.data.toString('utf8') : '').slice(-1500);
               // 引擎报错块优先：先把「错误信息」那几行提到摘要里，肉眼扫读即可见
+              // 摘要优先取「错误详情」（信息量最大：含具体路径/原因），其次「出错步骤」等，
+              // 目标是扫一眼错误日志就知道为什么失败，不必展开 JSON
               let why = '';
               for (const l of (task.log || [])) {
-                const t = String(l || '');
-                if (/出错步骤|错误详情|ERROR|Error|错误/.test(t) && !/^(=|\s*$)/.test(t.trim())) {
-                  why = t.trim().slice(0, 200);
-                  break;
+                const t = String(l || '').trim();
+                if (/^错误详情[:：]/.test(t)) { why = t.slice(0, 200); break; }
+              }
+              if (!why) {
+                for (const l of (task.log || [])) {
+                  const t = String(l || '').trim();
+                  if (/出错步骤[:：]|未找到|不存在|失败[:：]|ERROR|Error/.test(t) && !/^=+$/.test(t)) { why = t.slice(0, 200); break; }
                 }
               }
               this._lg('RUN', 'task.error',

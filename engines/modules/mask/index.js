@@ -132,7 +132,7 @@ function makeFfArgs(args, logger) {
 async function run(ctx, env = process.env) {
   const { logger } = ctx;
   const cfg = readEnv(env);
-  const fail = (msg, step) => { logger.error(step, msg); return 1; };
+  const fail = (msg, step) => { logger.diag('fail', { step: String(step || ''), msg: String(msg || '').slice(0, 300) }); logger.error(step, msg); return 1; };
 
   // ── 参数校验（与 PS1 顺序、文案一致） ──
   if (!cfg.rawDirs.length || !cfg.outputDir.trim()) {
@@ -312,7 +312,8 @@ async function run(ctx, env = process.env) {
           j.outFile];
       }
       logger.clipDuration(targetDur);
-      const { code } = await makeFfArgs(ffArgs, logger);
+      const { code, stderr: maskFfErr } = await makeFfArgs(ffArgs, logger);
+      const maskFfTail = logger.ffmpegTail(maskFfErr);
       if (code === 0 && exists(j.outFile)) {
         logger.info(`   ✅ 成片完成：${j.outFile}`);
         if (cfg.logDir) {
@@ -331,7 +332,9 @@ async function run(ctx, env = process.env) {
           fs.appendFileSync(logFile, lines.join('\r\n') + '\r\n', 'utf8');
         }
       } else {
-        logger.fail(j.outName, `ffmpeg 退出码 ${code}`);
+        // 合成失败：把 ffmpeg 的 stderr 尾部带出来（此前只有一句「退出码 N」）
+        if (maskFfTail) logger.diag('ffmpeg.fail', { step: 'mask.synth', name: j.outName, code, tail: maskFfTail });
+        logger.fail(j.outName, `编码失败（退出码 ${code}）`);
         hasError = true;
       }
     }

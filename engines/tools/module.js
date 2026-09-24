@@ -81,12 +81,14 @@ async function run(ctx) {
   const storageDir = String(process.env.VL_STORAGE_DIR || '').trim();
   const spec = readSpec();
   if (!spec) {
+    logger.diag('fail', { step: '参数解析', msg: 'TOOL_SPEC 缺失或不是合法 JSON' });
     logger.error('参数解析', 'TOOL_SPEC 缺失或不是合法 JSON');
     return 1;
   }
 
   const stepIds = Array.isArray(spec.stepIds) ? spec.stepIds.map(String) : [];
   if (!stepIds.length) {
+    logger.diag('fail', { step: '参数校验', msg: '未选择任何处理步骤', spec: { stepIds: stepIds.length } });
     logger.error('参数校验', '未选择任何处理步骤');
     return 1;
   }
@@ -107,6 +109,7 @@ async function run(ctx) {
   try {
     if (lockRoot) {
       try { lock = await ctx.lock.acquireLock(lockPathFor(lockRoot)); } catch (e) {
+        logger.diag('fail', { step: '互斥锁', msg: (e && e.message) || String(e), lockRoot: String(lockRoot || '') });
         logger.error('互斥锁', (e && e.message) || String(e));
         return 1;
       }
@@ -139,6 +142,7 @@ async function run(ctx) {
         },
       });
     } catch (e) {
+      logger.diag('fail', { step: '处理异常', msg: (e && e.message) || String(e), stack: String((e && e.stack) || '').slice(0, 800) });
       logger.error('处理异常', (e && e.message) || String(e));
       return 1;
     }

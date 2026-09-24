@@ -27,6 +27,14 @@ class Logger {
     } catch (e) { /* 诊断失败绝不影响主流程 */ }
   }
 
+  /** ffmpeg 报错尾部：stderr 末几行合成一行 —— 让错误详情自带上下文，不必再去翻原始输出 */
+  ffmpegTail(stderr, lines = 6) {
+    try {
+      return String(stderr || '').split(/\r?\n/).map((x) => x.trim()).filter(Boolean)
+        .slice(-(lines || 6)).join(' ｜ ').slice(0, 500);
+    } catch (e) { return ''; }
+  }
+
   /** 把「上次交出之后新增」的过程事件交给后端（取走即清空，避免重复；环形上限仍生效） */
   dumpDiag() {
     try {

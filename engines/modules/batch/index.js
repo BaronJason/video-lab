@@ -453,7 +453,7 @@ async function run(ctx, env = process.env) {
   // 缓存库缺失时的兜底目录：仅用于放互斥锁，绝不写模块目录（那会污染源码仓并随打包进入发布物）
   const cacheDir = path.join(os.tmpdir(), 'video-lab-engine-cache');
   try { fs.mkdirSync(cacheDir, { recursive: true }); } catch (e) {}
-  const fail = (msg, step) => { logger.error(step, msg); return 1; };
+  const fail = (msg, step) => { logger.diag('fail', { step: String(step || ''), msg: String(msg || '').slice(0, 300) }); logger.error(step, msg); return 1; };
 
   // ── 缓存载入：缓存库只读复用（避免 Ticks 精度回写风险），计数语义在库内维护 ──
   const videoStore = openVideoStore();
@@ -1136,7 +1136,10 @@ async function run(ctx, env = process.env) {
 
       if (!foundCombination) {
         const rounds = Math.min(retryCount + 1, Math.round(cfg.maxRetry));
-        let msg = failReason || `重试 ${rounds} 轮仍无法找到满足时长的组合（时长上限 ${cfg.maxTotalDuration} 秒）`;
+        // 面向用户的文案：只说「发生了什么」，用户不需要缺口/源状态这类内部细节
+        const userMsg = failReason || `重试 ${rounds} 轮仍无法找到满足时长的组合（时长上限 ${cfg.maxTotalDuration} 秒）`;
+        // 面向排查的完整诊断：只进诊断通道（后端日志），不出现在任务窗口
+        let diagText = userMsg;
         // ★ 可操作诊断（用户定案 2026-09-24）：只给「用尽」这类结论时，人不知道补素材还是调参数、
         //   程序也无从选择修复方式。这里把「能凑出多少 / 缺口多少 / 哪些源耗尽 / 可调什么」一并写进
         //   错误详情 —— 人照着提示就能动手，也为后续「分级自动修复」留下决策数据。
@@ -1155,7 +1158,7 @@ async function run(ctx, env = process.env) {
           if (deadNames.length) hints.push(`向已耗尽的源补充素材（${deadNames.join('、')}）`);
           hints.push(`放宽时长上限（当前 ${cfg.maxTotalDuration}s）或允许超出比例（当前 ${overPct}%）`);
           if (rounds >= Math.round(cfg.maxRetry)) hints.push(`提高重试轮数（当前上限 ${Math.round(cfg.maxRetry)} 轮，本次已用尽）`);
-          msg += ` ｜ 诊断：${isOver ? '最优组合仍超出' : '最优组合距上限还差'} ${gap.toFixed(1)}s`
+          diagText += ` ｜ 诊断：${isOver ? '最优组合仍超出' : '最优组合距上限还差'} ${gap.toFixed(1)}s`
             + `（可凑出 ${totalDuration.toFixed(1)}s / 上限 ${cfg.maxTotalDuration}s，允许超出 ${overPct}%，已重试 ${rounds} 轮）`
             + ` ｜ 源状态：${srcStat}`
             + ` ｜ 可尝试：${hints.map((h, k) => (k + 1) + ') ' + h).join('；')}`;
@@ -1165,9 +1168,10 @@ async function run(ctx, env = process.env) {
         logger.diag('fail', { n: outIndex, rounds: retryCount + 1, step: thrStep + 1,
           dur: Math.round(totalDuration * 10) / 10, allow: Math.round(ladderAllowed * 10) / 10,
           limit: cfg.maxTotalDuration, reason: String(failReason || '').slice(0, 200),
+          detail: diagText,
           exhausted: Array.from(exhaustedSrcs).map((i) => i + 1) });
-        logger.failIndex(outIndex, msg);
-        logger.error(`第 ${outIndex} 个成片`, msg);
+        logger.failIndex(outIndex, userMsg);
+        logger.error(`第 ${outIndex} 个成片`, userMsg);
         hasError = true;
         continue;
       }
@@ -1252,10 +1256,14 @@ async function run(ctx, env = process.env) {
       ];
       const targetDur = totalDuration > cfg.maxTotalDuration ? cfg.maxTotalDuration : totalDuration;
       logger.clipDuration(targetDur);
-      const { code } = await runFfmpeg(inputArgs.concat(encArgs), { onProgress: (line) => logger.raw(line) });
+      const { code, stderr } = await runFfmpeg(inputArgs.concat(encArgs), { onProgress: (line) => logger.raw(line) });
       if (code !== 0) {
+        // ffmpeg 的真实报错此前被丢弃（只留「编码失败」）—— 退出码与 stderr 尾部一并带出：
+        // 结论进用户视图，完整尾部进诊断通道（任务失败时落运行日志）
+        const ffTail = logger.ffmpegTail(stderr);
+        logger.diag('ffmpeg.fail', { step: 'batch.encode', n: outIndex, code, tail: ffTail });
         logger.error(`第 ${outIndex} 个成片`, '一次性编码失败');
-        logger.fail(finalOutName, 'ffmpeg 编码失败');
+        logger.fail(finalOutName, 'ffmpeg 编码失败（退出码 ' + code + '）');
         hasError = true;
         continue;
       }

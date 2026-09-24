@@ -446,7 +446,7 @@ async function selectVariancePaths({
 async function run(ctx, env = process.env) {
   const { logger } = ctx;
   const cfg = readEnv(env);
-  const fail = (msg, step) => { logger.error(step, msg); return 1; };
+  const fail = (msg, step) => { logger.diag('fail', { step: String(step || ''), msg: String(msg || '').slice(0, 300) }); logger.error(step, msg); return 1; };
 
   // ── 输入 TXT ──
   if (!cfg.txt) return fail('未通过环境变量 REPLICA_TXT 提供日志 TXT 文件（脚本由 Video Lab 驱动，不再支持手动输入）', '日志TXT输入');
@@ -833,10 +833,13 @@ async function run(ctx, env = process.env) {
       ];
       const targetDur = totalDuration > maxDuration ? maxDuration : totalDuration;
       logger.clipDuration(round2(targetDur));
-      const { code } = await runFfmpeg(inputArgs.concat(encArgs), { onProgress: (line) => logger.raw(line) });
+      const { code, stderr } = await runFfmpeg(inputArgs.concat(encArgs), { onProgress: (line) => logger.raw(line) });
       if (code !== 0) {
+        // 同批量模块：把 ffmpeg 的退出码与 stderr 尾部带出来，不再只有「编码失败」
+        const ffTail = logger.ffmpegTail(stderr);
+        logger.diag('ffmpeg.fail', { step: 'replica.encode', name: job.name, code, tail: ffTail });
         logger.error('日志复刻-编码', `编码失败：${job.name}`);
-        logger.fail(job.name, 'ffmpeg 编码失败');
+        logger.fail(job.name, 'ffmpeg 编码失败（退出码 ' + code + '）');
         hasError = true;
         continue;
       }

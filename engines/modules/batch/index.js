@@ -945,7 +945,14 @@ async function run(ctx, env = process.env) {
 
     const dPrefix = datePrefix(taskDate(cfg.submitTs));
     const parentFolder = path.basename(baseDir);
-    const maxAllowedEstimate = cfg.maxTotalDuration * cfg.speedThreshold;
+    // ★ 分级降级（用户定案 2026-09-24）：先按用户设置跑足重试轮数（100 轮足够），
+    //   仍凑不出组合再逐级加大加速倍率；倍率设硬顶，避免画面加速过狠。
+    //   红线：输出时长始终以 maxTotalDuration 封顶（平台规则，超出无法过审）——
+    //   加大倍率只放宽「允许的组合时长」，不改输出上限。
+    const RETRY_PER_STEP = Math.max(100, Math.round(cfg.maxRetry));   // 每档轮数（用户确认 100 轮足够）
+    const THR_STEPS = [1, 1.25, 1.5, 1.75, 2];                        // 加速倍率梯度（相对用户设置）
+    const MAX_SPEED_RATIO = 2.0;                                      // 加速倍率硬顶（画面可接受范围）
+    const ladderRounds = RETRY_PER_STEP * THR_STEPS.length;
 
     for (const outIndex of indexList) {
       logger.info('');
@@ -966,7 +973,21 @@ async function run(ctx, env = process.env) {
       const exhaustedSrcs = new Set();
       let retryCount = 0;
 
-      for (retryCount = 0; retryCount < cfg.maxRetry; retryCount++) {
+      // 当前生效的"允许组合时长"（随档位变化；输出上限不变，见上方红线说明）
+      let ladderAllowed = cfg.maxTotalDuration * cfg.speedThreshold;
+      for (retryCount = 0; retryCount < ladderRounds; retryCount++) {
+        const thrStep = Math.min(Math.floor(retryCount / RETRY_PER_STEP), THR_STEPS.length - 1);
+        ladderAllowed = Math.min(
+          cfg.maxTotalDuration * cfg.speedThreshold * THR_STEPS[thrStep],
+          cfg.maxTotalDuration * MAX_SPEED_RATIO
+        );
+        if (retryCount > 0 && retryCount % RETRY_PER_STEP === 0) {
+          // 换档：清掉上一档的失败记忆与耗尽标记，否则候选一直被挡、换档等于没换
+          exhaustedSrcs.clear();
+          retryExcluded.clear();
+          logger.info(`⤴️  加大加速倍率至 ${(cfg.speedThreshold * THR_STEPS[thrStep]).toFixed(2)} 倍，继续尝试`
+            + `（输出时长仍以上限 ${cfg.maxTotalDuration}s 封顶）`);
+        }
         const tempParts = [];
         const tempPlans = [];
         totalDuration = 0;
@@ -1071,7 +1092,7 @@ async function run(ctx, env = process.env) {
           continue; // 首轮失败：静默进入渐进替换
         }
 
-        if (totalDuration <= maxAllowedEstimate) {
+        if (totalDuration <= ladderAllowed) {
           if (totalDuration > cfg.maxTotalDuration) {
             logger.warn(`预估时长 ${totalDuration} 秒 超过设定值但未超过阈值 ${Math.round((cfg.speedThreshold - 1) * 100)}%，后续将加速处理`);
           }
@@ -1173,7 +1194,7 @@ async function run(ctx, env = process.env) {
       // ── 加速判定 ──
       let needSpeed = false;
       let speedRatio = 1.0;
-      if (totalDuration > cfg.maxTotalDuration && totalDuration <= maxAllowedEstimate) {
+      if (totalDuration > cfg.maxTotalDuration && totalDuration <= ladderAllowed) {
         needSpeed = true;
         speedRatio = totalDuration / cfg.maxTotalDuration;
         if (speedRatio > 2.0) speedRatio = 2.0;

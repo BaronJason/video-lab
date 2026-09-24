@@ -336,7 +336,7 @@ class Api {
   _envBrief(env) {
     const E = env || {};
     const keys = ['REPLICA_TXT', 'REPLICA_OUTPUT_DIR', 'BATCH_COUNT', 'BATCH_GROUP', 'BATCH_SUBMIT_TS',
-      'BATCH_TXT_PREFIX', 'BATCH_SUFFIX_MARK', 'BATCH_PRODUCER', 'BATCH_ONLY_NAMES',
+      'BATCH_TXT_PREFIX', 'BATCH_SUFFIX_MARK', 'BATCH_PRODUCER', 'BATCH_ONLY_NAMES', 'BATCH_ONLY_INDEX',
       'REPLICA_ONLY_NAMES', 'REPLICA_ONLY_NAME', 'REPLICA_SUBMIT_TS',
       'MASK_ONLY_NAMES', 'MASK_RAW_DIRS', 'MASK_THEMES', 'MASK_OUTPUT_DIR'];
     const out = {};
@@ -3395,7 +3395,18 @@ class Api {
         };
         const pushLine = (buf) => {
           const s = decodeLine(buf).replace(/\r$/, '').trim();
-          if (!s || task.status !== 'running') return;
+          if (!s) return;
+          // ★ 引擎诊断通道（过程信息）：不进任务窗口日志（用户视图保持简洁），
+          //   只收集到任务对象；任务失败时随 task.diag 落运行日志（保留 30 天）。
+          //   这样「结论给用户、过程给排查」各得其所。
+          if (s.indexOf('@@VLDIAG@@') === 0) {
+            try {
+              const arr = JSON.parse(s.slice(10));
+              if (Array.isArray(arr)) task._diag = (task._diag || []).concat(arr).slice(-4000);
+            } catch (e) { /* 诊断解析失败不影响任务 */ }
+            return;
+          }
+          if (task.status !== 'running') return;
           // 单成片实时进度：目标时长（分母）+ ffmpeg time（分子）。
           // 必须放在进度行拦截前，否则 ffmpeg 进度行被折叠后 clip/clipTarget 不再更新（进度条失效）
           const durM = s.match(/(?:成片预计时长|当前文件时长):\s*([\d.]+)\s*秒/);
@@ -3474,6 +3485,19 @@ class Api {
               '软暂停生效 · 当前成片已完成，终止引擎让位下一个任务',
               { id: task.id });
           }
+          // 失败成片【序号】（命名前失败，如批量组合凑不出时长）：记入 failedIndices 供续跑按序号补做，
+          // 同时以「第 N 个」形式进 failedVideos，让任务窗口能显示失败项
+          const failIdxM = s.match(/❌ 失败成片序号：(\d+)(?:\|(.*))?$/);
+          if (failIdxM) {
+            const idx = parseInt(failIdxM[1], 10);
+            if (Number.isInteger(idx) && idx > 0) {
+              task.failedIndices = task.failedIndices || [];
+              if (task.failedIndices.indexOf(idx) < 0) task.failedIndices.push(idx);
+              task.failedVideos = task.failedVideos || [];
+              task.failedVideos.push({ name: '第' + idx + '个', reason: String(failIdxM[2] || '').trim() });
+              task.failReason = '存在失败成片，可点击「继续制作」续跑';
+            }
+          }
           const failM = s.match(/❌ 失败成片：(.+)$/);
           if (failM) {
             const parts = String(failM[1]).split('|');
@@ -3549,6 +3573,13 @@ class Api {
                   failReason: task.failReason, why: why,
                   stderrTail: stderrTail, engineTail: tailLog,
                   env: this._envBrief(task.env) });
+              // 过程诊断（引擎 diag 通道）：完整记录每次尝试/候选/排除/档位，
+              // 单独一条落盘（量大，只在失败时写）—— 回答「怎么走到这个结论」
+              if (Array.isArray(task._diag) && task._diag.length) {
+                this._lg('DIAG', 'task.diag',
+                  '任务过程诊断 · ' + task.type + ' · ' + task._diag.length + ' 条（每次尝试 / 候选 / 排除原因 / 参数档位）',
+                  { id: task.id, events: task._diag });
+              }
             } catch (e3) { /* 日志失败不影响主流程 */ }
           }
           // 任务标记统一保留：done 也保留供「清除成片/日志」精确删除（不误伤同目录其他任务的产物）
@@ -4256,7 +4287,15 @@ class Api {
       if (relocated) { src = relocated; env.REPLICA_TXT = relocated; }
       // batch：只重做失败成片对应的「序号」，其余逻辑（命名/分组）仍按原始 BATCH_COUNT/BATCH_GROUP 计算；
       // 提交时刻刻意不刷新 → 成片命名前缀、输出目录、拼接日志均与首次一致（续跑即补做同一批的缺片）
-      env.BATCH_ONLY_NAMES = namesArr.join(';');
+      // 命名前的失败只能按序号补做：优先用 failedIndices（BATCH_ONLY_INDEX），
+      // 没有序号时才退回按成片名过滤（BATCH_ONLY_NAMES）
+      const idxArr = Array.isArray(t.failedIndices) ? t.failedIndices.filter((n) => Number.isInteger(n) && n > 0) : [];
+      if (idxArr.length) {
+        env.BATCH_ONLY_INDEX = idxArr.join(';');
+        delete env.BATCH_ONLY_NAMES;
+      } else {
+        env.BATCH_ONLY_NAMES = namesArr.join(';');
+      }
       task = this._createTask('batch', (t.title || '') + '（续跑）', env, src);
     } else {
       env.REPLICA_ONLY_NAMES = namesArr.join(';');
@@ -4268,7 +4307,7 @@ class Api {
       '续跑已创建 · ' + t.type + ' · 补做 ' + namesArr.length + ' 片'
       + (t.type === 'batch' ? ' · 沿用原提交时刻（命名与输出目录同首次）' : ' · 刷新提交时刻（按当前日期输出）'),
       { from: t.id, to: task.id,
-        onlyVar: t.type === 'batch' ? 'BATCH_ONLY_NAMES' : 'REPLICA_ONLY_NAMES',
+        onlyVar: t.type === 'batch' ? (env.BATCH_ONLY_INDEX ? 'BATCH_ONLY_INDEX' : 'BATCH_ONLY_NAMES') : 'REPLICA_ONLY_NAMES',
         only: namesArr.slice(0, 40),
         env: this._envBrief(env) });
     return { ok: true, taskId: task.id, count: namesArr.length };

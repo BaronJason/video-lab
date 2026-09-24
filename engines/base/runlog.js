@@ -135,7 +135,7 @@ function formatLine(verb, action, summary, data) {
  *  判定口径：动词 ERR / UI，或动作名里带 error/fail/失败/异常。 */
 function isErrorish(verb, action) {
   const v = String(verb == null ? '' : verb).toUpperCase();
-  if (v === 'ERR' || v === 'UI') return true;
+  if (v === 'ERR' || v === 'UI' || v === 'DIAG') return true;
   return /(error|fail|失败|异常|崩溃)/i.test(String(action == null ? '' : action));
 }
 

@@ -113,6 +113,8 @@ function readEnv(env = process.env) {
     suffixMark: s('BATCH_SUFFIX_MARK'),
     // 续跑过滤：失败成片名（分号分隔）。据此反解序号只重做这些，其余按原始 totalOutput/groupCount 计算
     onlyNames: s('BATCH_ONLY_NAMES'),
+    // 续跑「按序号补做」：失败发生在成片命名之前时没有名字可用，只能以序号标识（优先级高于 onlyNames）
+    onlyIndices: list('BATCH_ONLY_INDEX'),
     count: intOrNull('BATCH_COUNT'),
     group: intOrNull('BATCH_GROUP'),
     submitTs: parseInt(s('BATCH_SUBMIT_TS', '0'), 10) || 0,
@@ -925,7 +927,12 @@ async function run(ctx, env = process.env) {
     let indexList = [];
     for (let i = 1; i <= totalOutput; i++) indexList.push(i);
     let resumeMode = false;
-    if (cfg.onlyNames) {
+    if (cfg.onlyIndices.length) {
+      // 按序号补做（失败于命名之前的成片走这条）：直接取序号，无需从成片名反解
+      const idxs = cfg.onlyIndices.map((x) => parseInt(x, 10)).filter((n) => Number.isInteger(n) && n >= 1 && n <= totalOutput);
+      if (!idxs.length) return fail(`续跑过滤未从序号解析出有效值：${cfg.onlyIndices.join(';')}（应为 1..${totalOutput}）`, '续跑过滤');
+      indexList = Array.from(new Set(idxs)).sort((a, b) => a - b);
+    } else if (cfg.onlyNames) {
       const onlyIdx = [];
       for (const nm of String(cfg.onlyNames).split(';').map((x) => x.trim()).filter(Boolean)) {
         const idx = parseOnlyNameIndex(nm);
@@ -1092,6 +1099,11 @@ async function run(ctx, env = process.env) {
           continue; // 首轮失败：静默进入渐进替换
         }
 
+        // 诊断通道：记录每轮「凑出多少 / 允许多少 / 在哪档 / 是否达标」——
+        // 只进内存缓冲，任务失败时随错误一并交给后端（用户视图不受影响）
+        logger.diag('round', { n: outIndex, r: retryCount, step: thrStep + 1,
+          dur: Math.round(totalDuration * 10) / 10, allow: Math.round(ladderAllowed * 10) / 10,
+          ok: totalDuration <= ladderAllowed, exhausted: exhaustedSrcs.size });
         if (totalDuration <= ladderAllowed) {
           if (totalDuration > cfg.maxTotalDuration) {
             logger.warn(`预估时长 ${totalDuration} 秒 超过设定值但未超过阈值 ${Math.round((cfg.speedThreshold - 1) * 100)}%，后续将加速处理`);
@@ -1148,6 +1160,13 @@ async function run(ctx, env = process.env) {
             + ` ｜ 源状态：${srcStat}`
             + ` ｜ 可尝试：${hints.map((h, k) => (k + 1) + ') ' + h).join('；')}`;
         } catch (e3) { /* 诊断失败不影响主流程 */ }
+        // 命名前的失败：同时输出「序号」协议行 —— 后端据此记录 failedIndices，
+        // 续跑时按序号补做（否则名单为空，只能把整批重做）
+        logger.diag('fail', { n: outIndex, rounds: retryCount + 1, step: thrStep + 1,
+          dur: Math.round(totalDuration * 10) / 10, allow: Math.round(ladderAllowed * 10) / 10,
+          limit: cfg.maxTotalDuration, reason: String(failReason || '').slice(0, 200),
+          exhausted: Array.from(exhaustedSrcs).map((i) => i + 1) });
+        logger.failIndex(outIndex, msg);
         logger.error(`第 ${outIndex} 个成片`, msg);
         hasError = true;
         continue;

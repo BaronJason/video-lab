@@ -3485,6 +3485,13 @@ class Api {
               '软暂停生效 · 当前成片已完成，终止引擎让位下一个任务',
               { id: task.id });
           }
+          // 用户指引：引擎错误块里的「如何解决 / 问题归属」—— 供任务窗口直接展示
+          // （前端保持简洁，但要让用户知道怎么修、以及是不是程序的问题）
+          const howM = s.match(/^如何解决[:：]\s*(.+)$/);
+          if (howM) task.solution = howM[1].trim().slice(0, 300);
+          const whoM = s.match(/^问题归属[:：]\s*(.+)$/);
+          if (whoM) task.blame = whoM[1].trim().slice(0, 120);
+
           // 失败成片【序号】（命名前失败，如批量组合凑不出时长）：记入 failedIndices 供续跑按序号补做，
           // 同时以「第 N 个」形式进 failedVideos，让任务窗口能显示失败项
           const failIdxM = s.match(/❌ 失败成片序号：(\d+)(?:\|(.*))?$/);
@@ -3571,6 +3578,7 @@ class Api {
                 + (why ? ' · ' + why : (task.failReason ? ' · ' + String(task.failReason).slice(0, 160) : ' · 无引擎报错信息')),
                 { id: task.id, title: task.title, code: code,
                   failReason: task.failReason, why: why,
+                  solution: task.solution || '', blame: task.blame || '',
                   stderrTail: stderrTail, engineTail: tailLog,
                   env: this._envBrief(task.env) });
               // 过程诊断（引擎 diag 通道）：完整记录每次尝试/候选/排除/档位，

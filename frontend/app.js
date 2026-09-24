@@ -4498,7 +4498,8 @@
             '<span class="mask-raw-group__arrow"></span></div>' +
             '<div class="mask-raw-group__files"' + (gany ? '' : ' style="display:none"') + '>';
           g.files.forEach(function (f) {
-            var full = maskFullPath(rd.path, f.sub, f.name);
+            // 单文件项（用户直接添加的视频）：路径即文件本身，不能再往下拼文件名
+            var full = rd.single ? rd.path : maskFullPath(rd.path, f.sub, f.name);
             var sel = selNames.indexOf(f.rel) >= 0;
             html += '<label class="mask-file-item" data-full="' + escapeHtml(full) + '"><input type="checkbox" data-vid="' + escapeHtml(f.rel) + '" data-dur="' + (f.dur || 0) + '"' + (sel ? ' checked' : '') + '>' +
               '<span class="mask-file-item__box"></span>' +
@@ -4511,7 +4512,7 @@
         // 单时长分组：不显示分组头，所有文件直接平铺列出（和原来一致）
         var g = rawGroups[0];
         g.files.forEach(function (f) {
-          var full = maskFullPath(rd.path, f.sub, f.name);
+          var full = rd.single ? rd.path : maskFullPath(rd.path, f.sub, f.name);
           var selNames = maskState.rawSel[rd.path] || [];
           var sel = selNames.indexOf(f.rel) >= 0;
           html += '<label class="mask-file-item" data-full="' + escapeHtml(full) + '"><input type="checkbox" data-vid="' + escapeHtml(f.rel) + '" data-dur="' + (f.dur || 0) + '"' + (sel ? ' checked' : '') + '>' +
@@ -4666,7 +4667,7 @@
       results.forEach(function (list, i) {
         var t = themeSnap[i];
         (Array.isArray(list) ? list : []).forEach(function (f) {
-          files.push({ full: maskFullPath(t.path, f.sub, f.name), name: f.name, sub: f.sub || '', dur: f.dur || 0 });
+          files.push({ full: t.single ? t.path : maskFullPath(t.path, f.sub, f.name), name: f.name, sub: f.sub || '', dur: f.dur || 0 });
         });
       });
       if (!files.length) { box.innerHTML = '<div class="mask-config__hint mask-config__hint--center">无遮罩文件</div>'; return; }

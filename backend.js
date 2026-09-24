@@ -4298,8 +4298,20 @@ class Api {
     const mode = parseInt(p && p.mode, 10);
     const needMask = mode === 1 || mode === 3;
     const needWm = mode === 1 || mode === 2;
-    const maskDirs = needMask && Array.isArray(p && p.maskDirs) ? p.maskDirs.filter((d) => String(d).trim()) : [];
-    if (needMask && !maskDirs.length) errs.push('遮罩');
+    // 遮罩项可能是目录（扫描其下 .mov），也可能是用户添加的单个 .mov 文件（路径即文件本身）——
+    // 文件项必须归入 MASK_MASKS（遮罩清单），若混进 MASK_MASK_DIRS 会被引擎当目录判「不存在」
+    const maskDirs = [], maskFiles = [];
+    if (needMask && Array.isArray(p && p.maskDirs)) {
+      for (const d of p.maskDirs) {
+        const v = String(d || '').trim();
+        if (!v) continue;
+        const rp = path.resolve(v);
+        let isFile = false;
+        try { isFile = fs.statSync(rp).isFile(); } catch (e) {}
+        (isFile ? maskFiles : maskDirs).push(rp);
+      }
+    }
+    if (needMask && !maskDirs.length && !maskFiles.length) errs.push('遮罩');
     if (needWm && !String((p && p.watermark) || '').trim()) errs.push('水印文件');
     if (errs.length) return { ok: false, error: '遮罩叠加配置缺失：' + errs.join('、') };
     // 勾选视频序列化：完整路径分号分隔（空=该文件夹全部）
@@ -4329,8 +4341,8 @@ class Api {
       MASK_MODE: String(mode || 1),
       MASK_RAW_DIRS: dirs.map((d) => path.resolve(d)).join(';'),
       MASK_VIDEOS: pickVids.join(';'),
-      MASK_MASK_DIRS: maskDirs.map((d) => path.resolve(d)).join(';'),
-      MASK_MASKS: String((p && p.masks) || '').trim(),
+      MASK_MASK_DIRS: maskDirs.join(';'),
+      MASK_MASKS: [String((p && p.masks) || '').trim(), maskFiles.join(';')].filter((x) => x).join(';'),
       MASK_WATERMARK: needWm ? path.resolve(p.watermark) : '',
       MASK_OUTPUT_DIR: path.resolve(p.outputDir),
       MASK_PROJECT_NAME: String((p && p.projectName) || '').trim(),

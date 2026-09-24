@@ -138,15 +138,19 @@ async function run(ctx, env = process.env) {
   if (!cfg.rawDirs.length || !cfg.outputDir.trim()) {
     return fail('缺少原片文件夹或输出目录环境变量', '参数校验');
   }
-  if ((cfg.mode === 1 || cfg.mode === 3) && !cfg.maskDirs.length) {
-    return fail(`缺少遮罩目录（模式 ${cfg.mode} 需要）`, '参数校验');
+  if ((cfg.mode === 1 || cfg.mode === 3) && !cfg.maskDirs.length && !cfg.masks.length) {
+    return fail(`缺少遮罩（模式 ${cfg.mode} 需要：遮罩目录或 .mov 文件）`, '参数校验');
   }
   if ((cfg.mode === 1 || cfg.mode === 2) && !cfg.watermark.trim()) {
     return fail(`缺少水印文件（模式 ${cfg.mode} 需要）`, '参数校验');
   }
   if (cfg.mode !== 2) {
-    const existsCount = cfg.maskDirs.filter((d) => { try { return fs.statSync(d).isDirectory(); } catch (e) { return false; } }).length;
-    if (existsCount === 0) return fail(`遮罩目录均不存在：${cfg.maskDirs.join(';')}`, '遮罩扫描');
+    // 遮罩项可以是目录（扫描其下 .mov），也可以是用户直接添加的单个 .mov 文件 —— 两者都算可用
+    const dirCount = cfg.maskDirs.filter((d) => { try { const st = fs.statSync(d); return st.isDirectory() || st.isFile(); } catch (e) { return false; } }).length;
+    const fileCount = cfg.masks.filter((m) => { try { return fs.statSync(m).isFile(); } catch (e) { return false; } }).length;
+    if (dirCount === 0 && fileCount === 0) {
+      return fail(`遮罩均不存在：${cfg.maskDirs.join(';')}${cfg.masks.length ? ' / ' + cfg.masks.join(';') : ''}`, '遮罩扫描');
+    }
   }
   try { fs.mkdirSync(cfg.outputDir, { recursive: true }); } catch (e) {}
   if (cfg.mode !== 3 && !exists(cfg.watermark)) {
@@ -167,11 +171,17 @@ async function run(ctx, env = process.env) {
   // ── 扫描遮罩 ──
   let allMasks = [];
   if (cfg.mode !== 2) {
-    allMasks = scanByExts(cfg.maskDirs, MASK_EXTS);
-    if (cfg.masks.length) {
-      const pick = new Set(cfg.masks);
-      allMasks = allMasks.filter((m) => pick.has(m));
+    // 目录项 → 扫描其下 .mov；直接给出的文件项 → 作为单个遮罩直接使用
+    const dirItems = [], fileItems = [];
+    for (const d of cfg.maskDirs) {
+      let isFile = false;
+      try { isFile = fs.statSync(d).isFile(); } catch (e) {}
+      (isFile ? fileItems : dirItems).push(d);
     }
+    const extOk = (f) => MASK_EXTS.some((p) => p.slice(1).toLowerCase() === path.extname(f).toLowerCase());
+    allMasks = scanByExts(dirItems, MASK_EXTS).concat(fileItems.filter(extOk));
+    const pick = new Set(cfg.masks.concat(fileItems));
+    if (pick.size) allMasks = allMasks.filter((m) => pick.has(m));
     if (!allMasks.length) return fail(`未找到任何遮罩素材（${cfg.maskDirs.join(';')}）`, '遮罩扫描');
   }
 

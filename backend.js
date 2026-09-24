@@ -3520,6 +3520,32 @@ class Api {
             + (task.failReason ? ' · ' + String(task.failReason).slice(0, 80) : ''),
             { id: task.id, status: status, code: code,
               failed: (task.failedVideos || []).slice(0, 20).map((f) => f && f.name) });
+          // ★ 失败诊断留痕：引擎输出（task.log）与 stderr 尾部一并落盘 ——
+          //   任务窗口的日志会随任务记录被清除，运行日志是事后唯一凭据。
+          //   引擎自己会打印「错误信息 / 出错步骤 / 错误详情」块，这里原样带上，
+          //   排查时只看 error-YYYY-MM-DD.log 即可定位，不必反推代码。
+          if (status === 'error') {
+            try {
+              const tailLog = (task.log || []).slice(-40);
+              const stderrTail = String((err && err.data && err.data.length) ? err.data.toString('utf8') : '').slice(-1500);
+              // 引擎报错块优先：先把「错误信息」那几行提到摘要里，肉眼扫读即可见
+              let why = '';
+              for (const l of (task.log || [])) {
+                const t = String(l || '');
+                if (/出错步骤|错误详情|ERROR|Error|错误/.test(t) && !/^(=|\s*$)/.test(t.trim())) {
+                  why = t.trim().slice(0, 200);
+                  break;
+                }
+              }
+              this._lg('RUN', 'task.error',
+                '任务失败诊断 · ' + task.type + ' · 退出码 ' + code
+                + (why ? ' · ' + why : (task.failReason ? ' · ' + String(task.failReason).slice(0, 160) : ' · 无引擎报错信息')),
+                { id: task.id, title: task.title, code: code,
+                  failReason: task.failReason, why: why,
+                  stderrTail: stderrTail, engineTail: tailLog,
+                  env: this._envBrief(task.env) });
+            } catch (e3) { /* 日志失败不影响主流程 */ }
+          }
           // 任务标记统一保留：done 也保留供「清除成片/日志」精确删除（不误伤同目录其他任务的产物）
           this._emitTasks();
           // 运行任务结束：清空运行位并启动执行队列中的下一个任务（暂停/继续不影响插入后的推进）
@@ -4354,6 +4380,23 @@ class Api {
     Object.assign(env, this._cacheEnvBase());
     const task = this._enqueueTask(this._createTask('mask', title, env, dirs[0]));
     return { ok: true, taskId: task.id };
+  }
+
+  // 前端异常上报：界面上的报错此前只弹 toast，事后无从回溯 —— 落进错误日志（与引擎失败同一份）。
+  // payload: { kind, msg, stack, where, href }
+  reportUiError(p) {
+    try {
+      const o = (p && typeof p === 'object') ? p : {};
+      const kind = String(o.kind || 'exception');
+      const msg = String(o.msg || o.message || '').slice(0, 300);
+      const stack = String(o.stack || '').slice(0, 1500);
+      const where = String(o.where || '').slice(0, 80);
+      const href = String(o.href || '').slice(0, 240);
+      this._lg('UI', kind === 'rejection' ? 'ui.rejection' : 'ui.exception',
+        (msg || '前端异常（无错误消息）') + (where ? ' @ ' + where : ''),
+        { where, href, stack });
+      return { ok: true };
+    } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
   }
 
   // 遮罩水印透明度解析：任务传入值优先，其次设置页配置；留空/非法回退脚本默认 0.3

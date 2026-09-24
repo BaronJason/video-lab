@@ -1610,6 +1610,7 @@ function registerIpc() {
     shell.showItemInFolder(target);
     return { ok: true };
   });
+  ipcMain.handle('report_ui_error', async (e, p) => { try { return api.reportUiError(p) || { ok: true }; } catch (err) { return { ok: false, error: String(err && err.message || err) }; } });
   ipcMain.handle('open_project_dir', async (e, project) => {
     const root = api.getRoot();
     const target = path.resolve(root || '', String(project || ''));

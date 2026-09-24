@@ -37,6 +37,7 @@ function openDirForeground(target) {
 // 纯 backend 类 channel：直接转发到 api.<method>，args 数组展开
 // [channel, apiMethod, argTransform?] argTransform 可选，用于处理布尔/默认值
 const PURE_BACKEND_ROUTES = {
+  report_ui_error: { m: 'reportUiError', a: (args) => [args[0]] },
   list_projects: { m: 'listProjects', a: (args) => [!!args[0]] },
   list_versions: { m: 'listVersions', a: (args) => [args[0], args[1]] },
   read_config: { m: 'readConfig', a: (args) => [args[0]] },

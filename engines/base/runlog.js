@@ -1,4 +1,7 @@
-// 运行日志（面向排查，保留 7 天）：%APPDATA%\Video Lab\log\app-YYYY-MM-DD.log
+// 运行日志（面向排查）：%APPDATA%\Video Lab\log\
+//   app-YYYY-MM-DD.log    全量流水，保留 7 天（扫读 + 检索两用）
+//   error-YYYY-MM-DD.log  仅失败/异常，保留 30 天 —— 排查时只看这个文件即可定位原因
+// 两份都按天切；错误日志保留更久，因为「上周出过一次的问题」往往要回头翻。
 //
 // 存在意义：任务记录、任务标记、成片产物都可能被用户清除或删除，一旦清除，
 // 排查就只剩"反推"。本日志独立于这些数据，任何清除/删除操作都不触碰它 ——
@@ -20,6 +23,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const KEEP_DAYS = 7;
+const ERROR_KEEP_DAYS = 30;   // 错误日志保留更久：排查滞后性很强，7 天不够
 
 let logDir = '';
 
@@ -37,6 +41,7 @@ function stampOf(d) {
     + '.' + pad(d.getMilliseconds(), 3);
 }
 function fileOf(day) { return path.join(logDir, 'app-' + day + '.log'); }
+function errFileOf(day) { return path.join(logDir, 'error-' + day + '.log'); }
 
 /** 敏感值脱敏：令牌 / 口令一律不入日志。两道正则 ——
  *  ① 带引号的键（JSON 形态）："http_token":"abc"  → "http_token":"***"
@@ -75,7 +80,7 @@ function isSilentChannel(ch) { return SILENT_CHANNEL.test(String(ch == null ? ''
 
 // 配置保存类通道只记「变更了的键」：全量配置一次数百字符，改几次皮肤就把日志刷满了。
 // 快照放在本模块，IPC 与 HTTP 共用一份，避免两边互相误报差异。
-const SETTINGS_DELTA_CHANNEL = /^save_settings$/;
+const SETTINGS_DELTA_CHANNEL = /^save_(settings|mask_session)$/;
 let _lastSettingsSnap = '';
 function deltaArgs(channel, args) {
   if (!SETTINGS_DELTA_CHANNEL.test(String(channel == null ? '' : channel))) return args;
@@ -126,6 +131,14 @@ function formatLine(verb, action, summary, data) {
   return head + (s ? '  ' + s : '') + (d ? '  · ' + d : '') + '\n';
 }
 
+/** 是否属于「失败/异常」类事件 —— 这类额外写一份进 error 日志（保留 30 天）。
+ *  判定口径：动词 ERR / UI，或动作名里带 error/fail/失败/异常。 */
+function isErrorish(verb, action) {
+  const v = String(verb == null ? '' : verb).toUpperCase();
+  if (v === 'ERR' || v === 'UI') return true;
+  return /(error|fail|失败|异常|崩溃)/i.test(String(action == null ? '' : action));
+}
+
 /**
  * 写一条事件。刻意用同步追加 —— 本日志是"事后唯一证据"，可靠性优先于性能：
  * 流式写入的缓冲在进程退出（尤其是崩溃）时等不到 flush，最后几条恰好最可能是关键线索。
@@ -138,7 +151,13 @@ function formatLine(verb, action, summary, data) {
 function logEvent(verb, action, summary, data) {
   try {
     if (!logDir) return;
-    fs.appendFileSync(fileOf(dayOf(new Date())), formatLine(verb, action, summary, data), 'utf8');
+    const day = dayOf(new Date());
+    const line = formatLine(verb, action, summary, data);
+    fs.appendFileSync(fileOf(day), line, 'utf8');
+    // 失败/异常再写一份到错误日志：排查时只需看这一个文件
+    if (isErrorish(verb, action)) {
+      try { fs.appendFileSync(errFileOf(day), line, 'utf8'); } catch (e2) {}
+    }
   } catch (e) { /* 静默 */ }
 }
 
@@ -156,6 +175,14 @@ const ipc = (action, summary, data) => logEvent('IPC', action, summary, data);
 function err(action, e, data) {
   const msg = (e && (e.message || e.stack)) ? String(e.message || e.stack) : String(e == null ? '' : e);
   logEvent('ERR', action, msg.split('\n')[0].slice(0, 300), data);
+}
+
+/** 前端异常上报（动词 UI）：界面上的报错此前只弹 toast，事后无从回溯 —— 现在一并落错误日志。
+ *  @param {string} action  点分动作名，如 ui.exception / ui.rejection
+ *  @param {string} msg     错误消息
+ *  @param {object} [data]  { stack, where, href } */
+function ui(action, msg, data) {
+  logEvent('UI', String(action || 'ui.exception'), String(msg || '').slice(0, 300), data);
 }
 
 /** 文件大小可读化：供摘要里写「共 264.1 MB」 */
@@ -186,15 +213,19 @@ function describeFiles(paths, { max = 60 } = {}) {
 }
 
 /** 启动时清理超过 KEEP_DAYS 天的日志。日志属应用自管缓存，直接删除（不进回收站，避免长期堆积）。 */
-function pruneOld(keepDays = KEEP_DAYS) {
+function pruneOld(keepDays = KEEP_DAYS, keepErrorDays = ERROR_KEEP_DAYS) {
   if (!logDir) return { removed: 0 };
   try {
-    const cutoff = Date.now() - keepDays * 24 * 3600 * 1000;
     let removed = 0;
+    const cutoffApp = Date.now() - keepDays * 24 * 3600 * 1000;
+    const cutoffErr = Date.now() - keepErrorDays * 24 * 3600 * 1000;
     for (const f of fs.readdirSync(logDir)) {
-      const m = /^app-(\d{4})-(\d{2})-(\d{2})\.log$/.exec(f);
+      const mA = /^app-(\d{4})-(\d{2})-(\d{2})\.log$/.exec(f);
+      const mE = /^error-(\d{4})-(\d{2})-(\d{2})\.log$/.exec(f);
+      const m = mA || mE;
       if (!m) continue;
       const t = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
+      const cutoff = mA ? cutoffApp : cutoffErr;
       if (t < cutoff) { try { fs.unlinkSync(path.join(logDir, f)); removed++; } catch (e) {} }
     }
     return { removed };
@@ -214,6 +245,23 @@ function listDays() {
   try {
     for (const f of fs.readdirSync(logDir)) {
       const m = /^app-(\d{4}-\d{2}-\d{2})\.log$/.exec(f);
+      if (!m) continue;
+      const full = path.join(logDir, f);
+      let size = 0, mtime = 0;
+      try { const st = fs.statSync(full); size = st.size; mtime = st.mtimeMs; } catch (e) {}
+      out.push({ day: m[1], file: f, size, mtime });
+    }
+  } catch (e) { return []; }
+  return out.sort((a, b) => (a.day < b.day ? 1 : -1));
+}
+
+/** 列出保留期内的错误日志文件（新的在前）—— 排查入口，优先于全量日志 */
+function listErrorDays() {
+  if (!logDir) return [];
+  const out = [];
+  try {
+    for (const f of fs.readdirSync(logDir)) {
+      const m = /^error-(\d{4}-\d{2}-\d{2})\.log$/.exec(f);
       if (!m) continue;
       const full = path.join(logDir, f);
       let size = 0, mtime = 0;
@@ -259,5 +307,5 @@ function readDay(day, opts) {
   return { ok: true, day: d, path: full, exists: true, size, total, lines, text: lines.join('\n') };
 }
 
-module.exports = { init, getDir, listDays, readDay, logEvent, logEventSync, sys, run, del, add, mod, cfg, ipc, err, humanSize, describeFiles,
-  pruneOld, close, scrub, briefArgs, chEvent, isSilentChannel, KEEP_DAYS };
+module.exports = { init, getDir, listDays, listErrorDays, readDay, logEvent, logEventSync, sys, run, del, add, mod, cfg, ipc, err, ui, humanSize, describeFiles,
+  pruneOld, close, scrub, briefArgs, chEvent, isSilentChannel, isErrorish, KEEP_DAYS, ERROR_KEEP_DAYS };

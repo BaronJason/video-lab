@@ -146,6 +146,7 @@ contextBridge.exposeInMainWorld('txapi', {
   on_confirm_discard_config: (cb) => { ipcRenderer.on('confirm_discard_config_request', () => { try { cb(); } catch (err) {} }); },
   respond_discard_config: (a) => { try { ipcRenderer.send('respond_discard_config', a); } catch (e) {} },
   open_path: (p) => invoke('open_path', p),
+  report_ui_error: (p) => invoke('report_ui_error', p),
   open_parent: (p) => invoke('open_parent', p),
   open_project_dir: (p) => invoke('open_project_dir', p),
   external_edit: (p) => invoke('external_edit', p),

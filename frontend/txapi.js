@@ -265,6 +265,7 @@
     on_confirm_discard_config: function (cb) { return onEvent('confirm_discard_config_request', cb); },
     respond_discard_config: function (a) { return invokeArgs('respond_discard_config', a); },
     open_path: function (p) { return invokeArgs('open_path', p); },
+    report_ui_error: function (p) { return invokeArgs('report_ui_error', p); },
     open_parent: function (p) { return invokeArgs('open_parent', p); },
     open_project_dir: function (p) { return invokeArgs('open_project_dir', p); },
     external_edit: function (p) { return invokeArgs('external_edit', p); },

@@ -1595,11 +1595,20 @@ function registerIpc() {
   ipcMain.handle('list_dir', async (e, dir) => api.listDir(dir));   // 工具页目录浏览对话框（preload 已定义，此前漏注册）
   ipcMain.handle('open_path', async (e, p) => { const target = path.resolve(p); if (fs.existsSync(target)) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '路径不存在' }; });
   ipcMain.handle('open_parent', async (e, p) => { const target = path.dirname(path.resolve(p)); if (fs.existsSync(target)) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '路径不存在' }; });
-  // 打开单个文件所在的文件夹并在资源管理器中选中该文件（项目所有「打开文件夹」类操作统一走此逻辑）
+  // 打开「文件夹」类操作的统一入口，按目标类型分流：
+  //   目录 → 在资源管理器中打开该目录（进入，而不是打开父级再选中它）；
+  //   文件 → 打开其所在文件夹并选中该文件（定位）。
   ipcMain.handle('open_folder_select', async (e, p) => {
     const target = path.resolve(String(p || '').replace(/^"|"$/g, ''));
-    if (target && fs.existsSync(target)) { shell.showItemInFolder(target); return { ok: true }; }
-    return { ok: false, error: '路径不存在' };
+    if (!target || !fs.existsSync(target)) return { ok: false, error: '路径不存在' };
+    try {
+      if (fs.statSync(target).isDirectory()) {
+        const err = await shell.openPath(target);
+        return err ? { ok: false, error: err } : { ok: true };
+      }
+    } catch (e2) { /* stat 失败按文件处理：定位到所在目录 */ }
+    shell.showItemInFolder(target);
+    return { ok: true };
   });
   ipcMain.handle('open_project_dir', async (e, project) => {
     const root = api.getRoot();

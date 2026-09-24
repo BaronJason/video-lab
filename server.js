@@ -224,8 +224,13 @@ function startHttpServer(opts) {
     open_folder_select: async (args) => {
       const p = String(args[0] || '').replace(/^"|"$/g, '');
       const target = path.resolve(p);
-      if (target && fs.existsSync(target)) { shell.showItemInFolder(target); return { ok: true }; }
-      return { ok: false, error: '路径不存在' };
+      if (!fs.existsSync(target)) return { ok: false, error: '路径不存在' };
+      // 同 IPC 端：目录 → 打开该目录；文件 → 打开所在文件夹并选中该文件
+      try {
+        if (fs.statSync(target).isDirectory()) return openDirForeground(target);
+      } catch (e) { /* stat 失败按文件处理 */ }
+      shell.showItemInFolder(target);
+      return { ok: true };
     },
     open_project_dir: async (args) => {
       const project = args[0];

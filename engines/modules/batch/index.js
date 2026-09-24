@@ -1103,7 +1103,30 @@ async function run(ctx, env = process.env) {
 
       if (!foundCombination) {
         const rounds = Math.min(retryCount + 1, Math.round(cfg.maxRetry));
-        const msg = failReason || `重试 ${rounds} 轮仍无法找到满足时长的组合（时长上限 ${cfg.maxTotalDuration} 秒）`;
+        let msg = failReason || `重试 ${rounds} 轮仍无法找到满足时长的组合（时长上限 ${cfg.maxTotalDuration} 秒）`;
+        // ★ 可操作诊断（用户定案 2026-09-24）：只给「用尽」这类结论时，人不知道补素材还是调参数、
+        //   程序也无从选择修复方式。这里把「能凑出多少 / 缺口多少 / 哪些源耗尽 / 可调什么」一并写进
+        //   错误详情 —— 人照着提示就能动手，也为后续「分级自动修复」留下决策数据。
+        try {
+          const overPct = Math.round((cfg.speedThreshold - 1) * 100);
+          const isOver = totalDuration > cfg.maxTotalDuration;
+          const gap = isOver ? (totalDuration - cfg.maxTotalDuration) : (cfg.maxTotalDuration - totalDuration);
+          const srcStat = sourceRequests.map((p, i) => {
+            const nm = path.basename(String(p));
+            return i === 0 ? `首段「${nm}」固定不替换` : `${exhaustedSrcs.has(i) ? '已耗尽' : '仍可用'}「${nm}」`;
+          }).join('；');
+          const deadNames = sourceRequests.map((p, i) => i)
+            .filter((i) => i > 0 && exhaustedSrcs.has(i))
+            .map((i) => path.basename(String(sourceRequests[i])));
+          const hints = [];
+          if (deadNames.length) hints.push(`向已耗尽的源补充素材（${deadNames.join('、')}）`);
+          hints.push(`放宽时长上限（当前 ${cfg.maxTotalDuration}s）或允许超出比例（当前 ${overPct}%）`);
+          if (rounds >= Math.round(cfg.maxRetry)) hints.push(`提高重试轮数（当前上限 ${Math.round(cfg.maxRetry)} 轮，本次已用尽）`);
+          msg += ` ｜ 诊断：${isOver ? '最优组合仍超出' : '最优组合距上限还差'} ${gap.toFixed(1)}s`
+            + `（可凑出 ${totalDuration.toFixed(1)}s / 上限 ${cfg.maxTotalDuration}s，允许超出 ${overPct}%，已重试 ${rounds} 轮）`
+            + ` ｜ 源状态：${srcStat}`
+            + ` ｜ 可尝试：${hints.map((h, k) => (k + 1) + ') ' + h).join('；')}`;
+        } catch (e3) { /* 诊断失败不影响主流程 */ }
         logger.error(`第 ${outIndex} 个成片`, msg);
         hasError = true;
         continue;

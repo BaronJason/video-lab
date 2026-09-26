@@ -85,6 +85,27 @@ CREATE TABLE IF NOT EXISTS meta (
   k TEXT PRIMARY KEY,
   v TEXT NOT NULL
 );
+
+-- 通用校验缓存：任何「需要访问磁盘才能确认的事实」都可以把结论存这里，
+-- 启动只读本表（一次查询、零文件 IO），校验交给「用到时」或空闲批处理。
+-- 这是把冷启动从「每次重算」改成「复用 + 懒校验」的关键（用户指示 2026-09-26）。
+CREATE TABLE IF NOT EXISTS verify_cache (
+  key         TEXT PRIMARY KEY,          -- 语义键：'hasoutput:<taskId>' / 'env:ffmpeg' / 'path:<abs>'
+  fp          TEXT NOT NULL DEFAULT '',  -- 指纹：外部依赖变了（如文件 size/mtime）才失效
+  result      TEXT NOT NULL DEFAULT '',  -- 结论（'1' / '0' / JSON）
+  verified_at INTEGER NOT NULL DEFAULT 0,-- 上次校验时刻
+  ttl_ms      INTEGER NOT NULL DEFAULT 0 -- 有效期；过期后仍可读（标 stale），进入待刷新队列
+);
+
+-- 配置 TXT **内容**缓存（用户指示 2026-09-26：「将需要 io 的部分全部缓存化，txt 路径以及里面的全部内容」）。
+-- 打开配置 / 版本预览不再读磁盘：整份原文 + 解析结果都在这里；外部改动由空闲队列校验 fp 并自愈。
+CREATE TABLE IF NOT EXISTS txt_content (
+  path       TEXT PRIMARY KEY,
+  fp         TEXT NOT NULL DEFAULT '',   -- 'mtimeMs:size'：校验时比对这个
+  raw        TEXT NOT NULL DEFAULT '',   -- 文件原文（已去 BOM）
+  parsed     TEXT NOT NULL DEFAULT '',   -- readConfig 的解析结果 JSON（folders/excludes/watermark/name）
+  updated_at INTEGER NOT NULL DEFAULT 0
+);
 `;
 
 const SCHEMA_VERSION = '3';
@@ -94,7 +115,12 @@ const VIDEO_COLUMNS = [
   ['scopes', 'INTEGER NOT NULL DEFAULT 3'],
   ['file_size', 'INTEGER NOT NULL DEFAULT 0'],
   ['missing_since', 'INTEGER NOT NULL DEFAULT 0'],
+  ['verified_at', 'INTEGER NOT NULL DEFAULT 0'],   // 上次核验「文件是否还在」的时刻：GC 只挑过期的验
 ];
+
+// 校验有效期：条目核验过一次后，这段时间内不再重复访问磁盘。
+// 冷启动的 IO 总量因此与「启动次数 × 过期条数」成正比，而不是与库的大小成正比。
+const VERIFY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 // 失效条目保留期：文件消失后条目不立即删除，只记 missing_since。
 // 保留期的意义是「素材被替换/移动的窗口期内条目还在」，使用计数才有机会被新路径认领；
@@ -380,7 +406,19 @@ class CacheStore {
   gcPlan(knownPaths, opts) {
     const now = Number(opts && opts.now) || Date.now();
     const retainMs = (opts && opts.retainMs != null) ? Number(opts.retainMs) : MISSING_RETAIN_MS;
-    const rows = this.open().prepare('SELECT path, missing_since FROM video_cache').all();
+    const verifyTtlMs = (opts && opts.verifyTtlMs != null) ? Number(opts.verifyTtlMs) : VERIFY_TTL_MS;
+    const limit = Number(opts && opts.limit) > 0 ? Number(opts.limit) : 0;
+    // **关键**：只把「超过校验 TTL 未验」的条目列为待核验，并用 SQL 限量取出。
+    // 原来无差别地把全表（本机实测 9985 条）拉进内存逐条核验 —— 冷态在机械盘上要几十秒
+    // （2026-09-26 实测把主进程事件循环冻了 49.5 秒）。
+    let rows = [];
+    try {
+      // missing 的条目**总是**核验（数量少，且「文件被放回 → 复活并保留使用计数」依赖它），
+      // 其余条目只在超过校验 TTL 时才核验 —— 这正是把启动期 IO 摊平的关键。
+      rows = this.open().prepare('SELECT path, missing_since FROM video_cache WHERE (verified_at < ? OR missing_since > 0)'
+        + ' ORDER BY (missing_since > 0) DESC'
+        + (limit > 0 ? ' LIMIT ' + limit : '')).all(now - verifyTtlMs);
+    } catch (e) { rows = []; }
     const verify = [];
     const missing = new Set();
     const expired = new Set();
@@ -393,10 +431,120 @@ class CacheStore {
         verify.push(p);
         continue;
       }
-      if (knownPaths && knownPaths.has(p)) continue;
+      if (knownPaths && knownPaths.has(p)) continue;   // 免 IO：本会话已枚举到的路径无需核验
       verify.push(p);
     }
+    // 「到期回收」的判定必须完整（它决定该删什么），因此不受 limit 影响，单独补全
+    try {
+      for (const r of this.open().prepare('SELECT path FROM video_cache WHERE missing_since > 0 AND missing_since <= ?').all(now - retainMs)) {
+        const p = String(r.path);
+        missing.add(p);
+        expired.add(p);
+      }
+    } catch (e) {}
     return { drop: [], verify, missing, expired };
+  }
+
+  // 待核验条目数（一次 COUNT 查询、零文件 IO）：用于把清理任务分批排入空闲队列，
+  // 而不是启动后一次性核验（旧做法实测冷态冻 49.5 秒）。
+  gcPendingCount(now, verifyTtlMs) {
+    try {
+      const t = Number(now) || Date.now();
+      const ttl = Number(verifyTtlMs) > 0 ? Number(verifyTtlMs) : VERIFY_TTL_MS;
+      return Number(this.open().prepare('SELECT COUNT(*) n FROM video_cache WHERE verified_at < ? OR missing_since > 0').get(t - ttl).n) || 0;
+    } catch (e) { return 0; }
+  }
+
+  // 记录「这批路径刚核验过」：此后 VERIFY_TTL_MS 内不再重复访问磁盘。
+  // 冷启动的 IO 总量因此与「过期条数」成正比，而不是与库的大小成正比 —— 这是摊平的关键一环。
+  markVerified(paths, ts) {
+    if (!paths || !paths.length) return 0;
+    const when = Number(ts) || Date.now();
+    let n = 0;
+    try {
+      const db = this.open();
+      this.transaction(() => {
+        for (const chunk of chunked(Array.from(paths).map(String), 400)) {
+          const ph = chunk.map(() => '?').join(',');
+          n += Number(db.prepare('UPDATE video_cache SET verified_at = ? WHERE path IN (' + ph + ')').run(when, ...chunk).changes) || 0;
+        }
+      });
+    } catch (e) { return 0; }
+    return n;
+  }
+
+  // ── 通用校验缓存（verify_cache）────────────────────────────────────
+  // 「为了确认某事实而遍历磁盘」是冷启动卡顿的总根源。把结论存库，启动只读库（一次查询、零文件 IO），
+  // 校验挪到「用到时」或空闲批处理 —— 能用一次查询换掉的磁盘遍历，就不该留在启动路径上。
+  verifyGetMany(prefix) {
+    const out = new Map();
+    try {
+      const rows = this.open().prepare('SELECT key, fp, result, verified_at, ttl_ms FROM verify_cache WHERE key LIKE ?')
+        .all(String(prefix || '') + '%');
+      for (const r of rows) {
+        out.set(String(r.key), {
+          fp: String(r.fp || ''), result: String(r.result || ''),
+          verifiedAt: Number(r.verified_at) || 0, ttlMs: Number(r.ttl_ms) || 0,
+        });
+      }
+    } catch (e) { return out; }
+    return out;
+  }
+
+  verifyPut(key, fp, result, ttlMs, ts) {
+    try {
+      this.open().prepare(
+        'INSERT INTO verify_cache (key, fp, result, verified_at, ttl_ms) VALUES (?,?,?,?,?) '
+        + 'ON CONFLICT(key) DO UPDATE SET fp=excluded.fp, result=excluded.result, verified_at=excluded.verified_at, ttl_ms=excluded.ttl_ms'
+      ).run(String(key), String(fp || ''), String(result == null ? '' : result), Number(ts) || Date.now(), Number(ttlMs) || 0);
+      return true;
+    } catch (e) { return false; }
+  }
+
+  verifyInvalidate(prefix) {
+    try {
+      return Number(this.open().prepare('DELETE FROM verify_cache WHERE key LIKE ?').run(String(prefix || '') + '%').changes) || 0;
+    } catch (e) { return 0; }
+  }
+
+  // ── 配置 TXT 内容缓存（txt_content）───────────────────────────────
+  // 打开配置 = 一次主键查询（零文件 IO）；外部改动由空闲队列校验 fp 并自愈。
+  txtGet(filePath) {
+    try {
+      const r = this.open().prepare('SELECT path, fp, raw, parsed, updated_at FROM txt_content WHERE path = ?').get(String(filePath));
+      if (!r) return null;
+      return { path: String(r.path), fp: String(r.fp || ''), raw: String(r.raw || ''), parsed: String(r.parsed || ''), updatedAt: Number(r.updated_at) || 0 };
+    } catch (e) { return null; }
+  }
+
+  txtPut(filePath, fp, raw, parsed, ts) {
+    try {
+      this.open().prepare(
+        'INSERT INTO txt_content (path, fp, raw, parsed, updated_at) VALUES (?,?,?,?,?) '
+        + 'ON CONFLICT(path) DO UPDATE SET fp=excluded.fp, raw=excluded.raw, parsed=excluded.parsed, updated_at=excluded.updated_at'
+      ).run(String(filePath), String(fp || ''), String(raw == null ? '' : raw), String(parsed == null ? '' : parsed), Number(ts) || Date.now());
+      return true;
+    } catch (e) { return false; }
+  }
+
+  txtDelete(filePath) {
+    try { return Number(this.open().prepare('DELETE FROM txt_content WHERE path = ?').run(String(filePath)).changes) || 0; }
+    catch (e) { return 0; }
+  }
+
+  // 已缓存的 TXT 清单（路径 + 指纹）：空闲队列据此逐条校验，一次查询、零文件 IO
+  txtList(limit) {
+    const out = [];
+    try {
+      const n = Number(limit) > 0 ? Number(limit) : 0;
+      const rows = this.open().prepare('SELECT path, fp, updated_at FROM txt_content ORDER BY updated_at DESC' + (n ? ' LIMIT ' + n : '')).all();
+      for (const r of rows) out.push({ path: String(r.path), fp: String(r.fp || ''), updatedAt: Number(r.updated_at) || 0 });
+    } catch (e) { return out; }
+    return out;
+  }
+
+  txtCount() {
+    try { return Number(this.open().prepare('SELECT COUNT(*) n FROM txt_content').get().n) || 0; } catch (e) { return 0; }
   }
 
   // 标记「文件已不存在」：只置位 missing_since，不删行。

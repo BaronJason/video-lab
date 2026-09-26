@@ -35,6 +35,37 @@ const FFMPEG_REQUIRED_FILTERS = [
 // 只查滤镜查不到编码器能力（老版本 ffmpeg 没有 av1_nvenc，会"检测合格但选 AV1 就失败"）
 const FFMPEG_REQUIRED_ENCODERS = ['h264_nvenc', 'hevc_nvenc', 'av1_nvenc'];
 
+// 环境探测超时（毫秒）：冷启动首次加载 ffmpeg 时（未签名的大型二进制 + 安全软件扫描 +
+// 机械盘冷读）单次执行可能远超 20 秒。探测本身是异步的、不阻塞事件循环，
+// 所以宁可多等，也不要因为超时把「没探到」误判成「缺滤镜」。
+// 可用 VL_ENV_PROBE_TIMEOUT_MS 覆盖（回归用：设为极小值即可稳定复现「探测失败」）。
+const ENV_PROBE_TIMEOUT_MS = Math.max(1, Number(process.env.VL_ENV_PROBE_TIMEOUT_MS) || 45000);
+
+// 成片存在性判定的内存缓存有效期（毫秒）：启动预热写入后，期内 snapshotTasks 纯内存判定、
+// 不再逐任务碰磁盘；超期回退实时探测（用户在资源管理器手动删掉成片后仍能纠正）。
+const HAS_OUTPUT_MEMO_TTL_MS = 60000;
+
+// 启动保护期：启动后这段时间内空闲队列不消费任务（首屏渲染与首次操作期间零 E 盘竞争）。
+// 20 秒足够覆盖「窗口出现 → 项目列表渲染 → 用户第一眼扫过」，之后后台才开始慢慢校验。
+const IDLE_BOOT_GRACE_MS = 20000;
+
+// 前台活动让路窗口：最近这段时间内有过前台活动（渲染/读取/任务）就让队列再等一会儿 ——
+// 与预检测的「行内优先、后台让路」同一思路。
+const IDLE_FOREGROUND_HOLD_MS = 3000;
+// 成片存在性结论的**持久化**有效期（verify_cache）：命中则连热启动也省掉重复核验。
+// 取 10 分钟：只用来「合并同一批文件的重复校验」，不做长期真相缓存 ——
+// 陈旧信息的窗口必须短，否则用户在资源管理器里删了成片，界面会一直说"还在"。
+const HAS_OUTPUT_PERSIST_TTL_MS = 10 * 60 * 1000;
+
+// ── 不判冷热，用后台队列 + 自适应节流（用户建议 2026-09-26）──────────────
+// 曾经想用「开机时长」或「启动探针」区分冷/热启动，都放弃了：判据脆（开机 3 小时后启动
+// 依然是冷盘；探针样本又必须"启动早期没碰过"），而且判错代价双向 —— 判成热踩几十秒冻卡，
+// 判成冷无谓推迟精度。改为：启动期一律不发起批量文件 IO，校验全部进**空闲队列**，
+// 队列串行单发 + 按实测耗时自适应节流（见 _idleKick），慢盘自动放慢、快盘自动加速。
+// 精准性由「TTL + 持续自愈」保证：校验发现差异即写回 verify_cache 并增量刷新界面。
+
+// 空闲队列每个批次核验的路径数（见 gcVideoCacheIdle：清理任务按批入队，由队列自适应节流执行）
+
 const DEFAULT_CONFIG = {
   skin: 'white_blue',
   ffmpeg_dir: '',             // FFmpeg 自愈下载目录（数据目录 ffmpeg\）；空 = 用系统 PATH 里的
@@ -296,6 +327,25 @@ class Api {
     this.probeConcurrency = 4;
     this._videoCache = null;
     this._videoInfoCache = new Map();
+    // 成片存在性判定的内存结果（taskId → { v, at }）：由 _prewarmHasOutputAsync 分批异步填充，
+    // 使 snapshotTasks / _taskHasOutput 在恢复期后是**纯内存判定**，不再逐任务碰磁盘。
+    this._hasOutputMemo = new Map();
+    // 统一空闲校验队列（见 _idleEnqueue）：启动期不发起批量文件 IO，校验全靠它后台串行完成
+    this._idleJobs = [];
+    this._idleRunning = false;
+    this._idleDelayMs = 50;                                  // 自适应节流间隔（实测反馈驱动）
+    this._idleStats = { done: 0, slow: 0, fast: 0, maxMs: 0 };
+    // 启动保护期（用户指示 2026-09-26：「不要冻结窗口，前端全部用缓存渲染，预检测都能后台检测释放，
+    // 这些地方也可以做到」）——照预检测那套「后台检测不冻前台」的模式：
+    // 队列在启动后这段时间内**不消费任何任务**，保证首屏渲染与用户首次操作期间完全不与前台争 E 盘 IO；
+    // 到期后按自适应节流开工，并在有任务运行/前台刚有活动时继续让路。
+    this._idleStartAt = Date.now() + IDLE_BOOT_GRACE_MS;
+    this._lastForegroundAt = 0;
+    // 启动快速路径（用户指示 2026-09-26：「将需要 io 的部分全部缓存化，txt 路径以及里面的全部内容」）：
+    // 启动后一段时间内**不做目录树指纹校验**（指纹要 stat E 盘），直接用持久化缓存渲染；
+    // 指纹校验与重建排入空闲队列，发现变化再重建并刷新界面（自愈）。60 秒后自动退出该模式。
+    this._bootFast = true;
+    try { setTimeout(() => { this._bootFast = false; }, 60000); } catch (e) {}
     this._videoCacheDirty = false; // 缓存内容是否有未落盘变更：无变更时预检测不再重复写整份缓存
     this._videoCacheDirtyKeys = new Set();   // 待写回的路径（增量 upsert）
     this._videoCacheRemovedKeys = new Set(); // 待删除的路径
@@ -306,8 +356,10 @@ class Api {
     this._lnkCache = new Map();    // .lnk 解析结果缓存（lnk 路径 → { mtimeMs, target }），lnk 未变则免重复解析
     this._lnkParser = undefined;   // .lnk 解析器（惰性取底座引擎实现）
     this._txtTree = null;
-    // 启动后空闲期执行一次 video_cache 失效清理（文件已删除/旧工作目录残留回收）
-    setImmediate(() => { this._gcVideoCacheNow().catch(() => {}); });
+    // ⚠ 这里**不再**排队 video_cache 失效清理：清理是维护性任务，不该占据启动。
+    // 冷启动实测（2026-09-26）：video_cache 7269 条、gcPlan 一次列出 9985 条待核验路径（全在机械盘上），
+    // 构造函数里 setImmediate 全量跑 → 冷态把事件循环冻住 **49.5 秒**（窗口 1.4 秒已画出来，用户点不动）。
+    // 现改为窗口就绪后 15 秒的空闲期增量执行（见 gcVideoCacheIdle：限量 + 细让路 + 批间小睡）。
     this._txtTreeRoot = null;
     this._projectsCache = null;
     this._projectsInflight = null;   // 进行中的 listProjectsAsync（并发合并，避免同一份扫描跑多遍）
@@ -338,11 +390,6 @@ class Api {
     // 计划序号：新建任务入队时递增分配，暂停任务保留、启动任务移除、拖拽/置顶重排后重算。
     // UI 显示与「继续」插队位置都以此为准（暂停任务随队列推进自然前移，成为下一个后停住，新任务可越过）
     this._planSeq = 0;
-    // 启动恢复期抑制标志：为真时 _taskHasOutput 直接给乐观值，绝不做同步磁盘探测。
-    // 起因（2026-09-26 冷态实测）：历史任务的成片目录多在机械盘（115 任务里 66 个在 E 盘），
-    // 冷启动首次访问每个目录约 87ms，snapshotTasks 逐任务同步探测会冻结主进程约 5.7 秒。
-    // 由 restoreTasks 置真、_prewarmHasOutputAsync 预热完成后复位（详见两处注释）。
-    this._bootProbeSuppressed = false;
   }
 
   // ── 库路径：两个库与引导文件同目录（扁平布局），一律由 storageDir 派生，不做重算 ──
@@ -615,9 +662,19 @@ class Api {
   //    新增/删除项目或目录即变化；文件内容变化不改目录 mtime，但日志列表只关心「有哪些文件」，
   //    内容变化不影响本列表（config 归属由路径决定），故无需更细粒度指纹。
   _collectLogFiles(force = false) {
+    // 启动期**只读缓存、绝不扫描**（用户指示 2026-09-26）：缓存没有就返回空列表 + 后台重建。
+    // force（用户主动刷新）不受此限。
+    if (!force && this._bootFast) {
+      const cachedBoot = this._bootCachedLogFiles();
+      if (cachedBoot) return cachedBoot;
+      this._enqueueScanRebuild();
+      return { files: [], fp: '' };
+    }
     if (!force && this._logCache && this._logCacheRoot === this.root) return this._logCache;
     this._loadLogCache();
     if (!force && this._logCache && this._logCacheRoot === this.root && this._logCache.files && this._logCache.files.length) {
+      // 启动快速路径：跳过指纹 stat（校验交空闲队列），直接用持久化缓存
+      if (this._bootFast) { this._enqueueScanVerify(); return this._logCache; }
       const fp = this._logTreeFingerprint();
       if (fp && fp === this._logCache.fp) return this._logCache;   // 缓存有效：免全量遍历
     }
@@ -725,6 +782,13 @@ class Api {
   //    去重（同内容配置保留一份），短暂延后一次不影响列表正确性，且下次任一目录变动即自愈。
   _collectAllTxt() {
     if (this._txtTree && this._txtTreeRoot === this.root) return this._txtTree;
+    // 启动期**绝不扫描**：缓存没有就返回空列表（前端先渲染空，后台重建后刷新）
+    if (this._bootFast) {
+      const cachedFast = this._bootCachedTxtTree();
+      if (cachedFast) return cachedFast;
+      this._enqueueScanRebuild();
+      return [];
+    }
     const fp = this._logTreeFingerprint();
     const cached = this._loadTxtTree(fp);
     if (cached) { this._txtTree = cached; this._txtTreeRoot = this.root; return cached; }
@@ -768,10 +832,50 @@ class Api {
     return out;
   }
 
+  // 配置 TXT 树缓存原文（items + 指纹）：只读库、零 stat。启动快速路径与指纹校验都用它。
+  _txtTreeCacheRaw() {
+    if (!this._useDbCache()) return null;
+    try {
+      const raw = this._cacheStore.getKv('txt_tree:' + this.root);
+      if (!raw) return null;
+      const data = JSON.parse(raw);
+      if (!data || !Array.isArray(data.items)) return null;
+      return { items: data.items, fp: String(data.fp || '') };
+    } catch (e) { return null; }
+  }
+
+  // 把「目录树指纹校验」排入空闲队列（用户建议：后台检测 + 自愈）。
+  // 指纹 = 根 + 各一级目录 mtime（少量 stat），且完全在后台执行，不占用启动路径。
+  _enqueueScanVerify() {
+    if (this._scanVerifyQueued) return;
+    this._scanVerifyQueued = true;
+    this._idleEnqueue('scanverify:' + this.root, async () => {
+      this._scanVerifyQueued = false;
+      const cachedFp = (this._txtTreeCacheRaw() || {}).fp || '';
+      let fp = '';
+      try { fp = await this._logTreeFingerprintAsync(); } catch (e) { fp = ''; }
+      if (!fp || (cachedFp && cachedFp === fp)) return;   // 未变化 → 什么都不做（绝大多数启动走这里）
+      // 变化了 → 临时关闭快速路径，强制重建（异步），完成后刷新界面（自愈）
+      const fastWas = this._bootFast;
+      this._bootFast = false;
+      try {
+        try { await this._collectAllTxtAsync(true); } catch (e) {}
+        try { await this._collectLogFilesAsync(true); } catch (e) {}
+      } finally { this._bootFast = fastWas; }
+      this._projectsCache = null;
+
+      try { this._emitTasks(); } catch (e) {}
+      try {
+        if (this._lg) this._lg('MOD', 'scan.verify', '目录树指纹已变化 → 已后台重建配置/日志索引并刷新界面', { cachedFp: cachedFp.slice(0, 40), fp: fp.slice(0, 40) });
+      } catch (e) {}
+    });
+  }
+
   // 配置 TXT 树持久化（cache_kv，键 txt_tree:<root>）：存 { fp, items }
   // fp 为目录树指纹，与 _collectAllTxt 传入的一致才复用。库不可用时静默跳过（退化为纯内存）。
+  // 启动期不经过这里：走 _bootCachedTxtTree（连指纹都不算），指纹校验交给 _enqueueScanVerify。
   _loadTxtTree(fp) {
-    if (!fp || !this._useDbCache()) return null;
+    if (!this._useDbCache() || !fp) return null;
     try {
       const raw = this._cacheStore.getKv('txt_tree:' + this.root);
       if (!raw) return null;
@@ -788,29 +892,58 @@ class Api {
     } catch (e) {}
   }
 
-  // 扫描缓存是否新鲜（毫秒级）：仅比对目录树指纹，不做任何遍历。
-  // 供 main 判断「启动是否需要弹扫描小窗」——命中则连小窗都不必出现。
-  isScanCacheFresh() {
-    try {
-      if (!this.root) return false;
-      if (!this._useDbCache()) return false;
-      const fp = this._logTreeFingerprint();
-      if (!fp) return false;
-      const rawIdx = this._cacheStore.getKv('log_index:' + this.root);
-      if (!rawIdx) return false;
-      let idx = null;
-      try { idx = JSON.parse(rawIdx); } catch (e) { return false; }
-      if (!Array.isArray(idx) && idx && Array.isArray(idx.files) && idx.fp === fp) return true;
-      const rawTree = this._cacheStore.getKv('txt_tree:' + this.root);
-      if (!rawTree) return false;
-      const t = JSON.parse(rawTree);
-      return !!(t && t.fp === fp && Array.isArray(t.items));
-    } catch (e) { return false; }
+  // ── 启动期只读缓存（用户指示 2026-09-26：「直接用缓存里的内容渲染前端，不要动 E 盘，
+  //    哪怕 E 盘里的内容全没了，也是之后再自愈/重新检测的事」）──
+  // 缓存命中 → 立即返回；**缓存没有 → 返回 null，由调用方按空列表渲染**，绝不回退到扫描。
+  // 扫描一律走空闲队列（后台、串行、节流），完成后刷新界面 —— 不引入任何"等待/静默期"冻结。
+  _bootCachedTxtTree() {
+    if (this._txtTree && this._txtTreeRoot === this.root) return this._txtTree;
+    const raw = this._txtTreeCacheRaw();
+    if (raw) {
+      this._txtTree = raw.items;
+      this._txtTreeRoot = this.root;
+      this._enqueueScanVerify();
+      return raw.items;
+    }
+    return null;
   }
 
-  // 扫描缓存是否新鲜（异步版，启动专用）：判定语义与 isScanCacheFresh 一致，
-  // 但目录树指纹走 fs.promises —— **绝不阻塞主进程事件循环**（同步版曾冻结 117 秒）。
-  // SQLite 读取仍为同步：库在系统盘（SSD）且仅 24MB，实测毫秒级；单独计时便于定位。
+  _bootCachedLogFiles() {
+    if (this._logCache && this._logCacheRoot === this.root) return this._logCache;
+    this._loadLogCache();
+    if (this._logCache && this._logCacheRoot === this.root && this._logCache.files && this._logCache.files.length) {
+      this._enqueueScanVerify();
+      return this._logCache;
+    }
+    return null;
+  }
+
+  // 启动期缓存缺失 → 后台重建（扫描在空闲队列里做，绝不阻塞渲染）
+  _enqueueScanRebuild() {
+    if (this._scanRebuildQueued) return;
+    this._scanRebuildQueued = true;
+    this._idleEnqueue('scanrebuild:' + this.root, async () => {
+      this._scanRebuildQueued = false;
+      const fastWas = this._bootFast;
+      this._bootFast = false;         // 临时放开：允许真正扫描（但仍在本队里串行执行）
+      try {
+        try { await this._collectAllTxtAsync(true); } catch (e) {}
+        try { await this._collectLogFilesAsync(true); } catch (e) {}
+      } finally { this._bootFast = fastWas; }
+      this._projectsCache = null;
+      try { this._emitTasks(); } catch (e) {}
+      try {
+        if (this._lg) this._lg('ADD', 'scan.rebuild', '启动期缓存缺失 → 已后台重建配置树/日志索引并刷新界面', { root: this.root });
+      } catch (e) {}
+    });
+  }
+
+  // 扫描缓存是否新鲜（毫秒级）：仅比对目录树指纹，不做任何遍历。
+  // 供 main 判断「启动是否需要弹扫描小窗」——命中则连小窗都不必出现。
+  // 扫描缓存是否新鲜（异步版，启动专用）：判定缓存是否可直接用。
+  // 启动期走「快速路径」——只读库、**不算目录树指纹**（指纹要 stat 素材盘，冷态就是那几十秒的来源），
+  // 有缓存即视为新鲜，真正的校验排入空闲队列（_enqueueScanVerify）；退出快速路径后才比对指纹。
+  // 目录树指纹走 fs.promises —— **绝不阻塞主进程事件循环**（同步版曾冻结 117 秒）。
   // 分段耗时写入 this._lastFreshTiming（{ db, fp, kv, total } 毫秒），由 main 落进 app.timing。
   async isScanCacheFreshAsync() {
     const timing = { db: 0, fp: 0, kv: 0, total: 0 };
@@ -825,6 +958,18 @@ class Api {
       const useDb = this._useDbCache();
       timing.db = _ms(t0);
       if (!useDb) { reason = 'no-db'; return false; }
+      // 启动快速路径（用户指示 2026-09-26：启动期不要碰 E 盘 IO）：
+      // **不算指纹**（指纹要 stat 根 + 各一级目录，冷态机械盘上就是那几十秒的来源），
+      // 有缓存即视为新鲜 → 主窗口直接显示，扫描小窗不弹；真正的校验交给空闲队列
+      // （_enqueueScanVerify），发现变化再后台重建 + 刷新界面（自愈）。
+      if (this._bootFast) {
+        const rawIdxFast = this._cacheStore.getKv('log_index:' + this.root);
+        const rawTreeFast = this._cacheStore.getKv('txt_tree:' + this.root);
+        timing.kv = _ms(t0);
+        timing.idxLen = rawIdxFast ? rawIdxFast.length : 0;
+        timing.treeLen = rawTreeFast ? rawTreeFast.length : 0;
+        if (rawIdxFast || rawTreeFast) { this._enqueueScanVerify(); reason = 'hit:fastboot'; return true; }
+      }
       t0 = process.hrtime.bigint();
       const fp = await this._logTreeFingerprintAsync();
       timing.fp = _ms(t0);
@@ -865,6 +1010,14 @@ class Api {
   // 缓存未命中（首次启动 / 目录结构变化）时走这里，窗口可先显示、扫描期间 UI 不卡。
   async _collectAllTxtAsync(opts) {
     if (this._txtTree && this._txtTreeRoot === this.root) return this._txtTree;
+    // 启动期**绝不扫描**：缓存没有就返回空列表 + 排入后台重建（前端先渲染空）。
+    // opts.force（用户主动刷新配置）不受此限 —— 那正是用户要求真扫的场景。
+    if (this._bootFast && !(opts && opts.force)) {
+      const cachedFast = this._bootCachedTxtTree();
+      if (cachedFast) return cachedFast;
+      this._enqueueScanRebuild();
+      return [];
+    }
     const fp = await this._logTreeFingerprintAsync();
     const cached = this._loadTxtTree(fp);
     if (cached) { this._txtTree = cached; this._txtTreeRoot = this.root; return cached; }
@@ -931,10 +1084,19 @@ class Api {
 
   // 异步版 listProjects：缓存命中时与同步版等价（毫秒级）；未命中走异步扫描，不阻塞主进程。
   // 返回值与 listProjects 完全一致（供 IPC / HTTP 路由替换）。
+  // 前台活动打点：渲染/读取等前台请求会让空闲队列让路（照预检测的「行内优先、后台让路」）
+  _touchForeground() { this._lastForegroundAt = Date.now(); }
+
   async listProjectsAsync(force = false, opts) {
+    this._touchForeground();
     if (force) {
       this._emitScan('clear');
-      this._invalidateCaches(true);
+      // force = 用户主动「刷新配置」：**必须真扫** —— 关掉启动快速路径。
+      // （修复 2026-09-26：此前 force 先清缓存、快速路径又拦着不让扫 → 列表变空。）
+      this._bootFast = false;
+      // 只清内存缓存，**持久化缓存保留**：异步扫描期间旧数据仍可兜底，天然是增量体验
+      //（扫描完成后覆盖写回；即使扫描中断也不会把列表清空）。
+      this._invalidateCaches(false);
       this._rebuildClipIndexAsync();
       try { setImmediate(() => { this._emitScan('mark'); this._warmWatermarkCache(); }); } catch (e) {}
     }
@@ -963,9 +1125,19 @@ class Api {
 
   // 异步版日志收集：缓存有效则秒回；否则异步遍历
   async _collectLogFilesAsync(opts) {
+    // 启动期**只读缓存、绝不扫描**（用户指示 2026-09-26）：缓存没有就返回空 + 后台重建
+    const forceA = !!(opts && opts.force);
+    if (!forceA && this._bootFast) {
+      const cachedBoot = this._bootCachedLogFiles();
+      if (cachedBoot) return cachedBoot;
+      this._enqueueScanRebuild();
+      return { files: [], fp: '' };
+    }
     if (this._logCache && this._logCacheRoot === this.root) return this._logCache;
     this._loadLogCache();
     if (this._logCache && this._logCacheRoot === this.root && this._logCache.files && this._logCache.files.length) {
+      // 启动快速路径：跳过指纹 stat（校验交空闲队列）
+      if (this._bootFast) { this._enqueueScanVerify(); return this._logCache; }
       const fp = await this._logTreeFingerprintAsync();
       if (fp && fp === this._logCache.fp) return this._logCache;
     }
@@ -1001,7 +1173,9 @@ class Api {
   listProjects(force = false) {
     if (force) {
       this._emitScan('clear');
-      this._invalidateCaches(true);   // force：连持久化缓存一并清，确保真重扫
+      // 同 listProjectsAsync：force 必须真扫（关掉快速路径），且只清内存缓存、保留持久化兜底
+      this._bootFast = false;
+      this._invalidateCaches(false);
       // 重建成片索引：后台分批重建（解析日志+写大缓存），不阻塞本次列表返回；搜索仍走按目录惰性命中
       this._rebuildClipIndexAsync();
       // 刷新配置时预填充水印缓存：缺失项目归属补算，已有条目不动（后台，不阻塞本次列表返回）
@@ -1040,14 +1214,17 @@ class Api {
         let empty = false;
         if (versions.length) {
           try {
-            const cfg = this.readConfig(versions[0].path);
+            const cfg = this.readConfig(versions[0].path, { peek: this._bootFast });
             empty = !(cfg.folders || []).some((f) => String(f && typeof f === 'object' ? f.path : f).trim() !== '');
           } catch (e) {}
         }
         txts.push({ name, latest, count: versions.length, dup: dupNames.has(name), empty });
       }
       let mtime = 0;
-      try { mtime = fs.statSync(pdir).mtimeMs; } catch (e) {}
+      // 启动期：**不 stat 项目目录**（用户指示「不要动 E 盘」）—— 用缓存里各 TXT 的 mtime 聚合代替，
+      // 前端只拿它做排序，语义足够。热/非启动期仍取目录 mtime（更准）。
+      if (this._bootFast) { for (const t of txs) mtime = Math.max(mtime, Number(t.mtimeMs) || 0); }
+      else { try { mtime = fs.statSync(pdir).mtimeMs; } catch (e) {} }
       projects.push({ name: path.basename(pdir), mtime, txts });
     }
     projects.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
@@ -1078,7 +1255,25 @@ class Api {
     return new Set([...counter.entries()].filter(([, c]) => c > 1).map(([n]) => n));
   }
 
+  // 从配置树缓存派生版本列表（零磁盘 IO）：项目列表页本来就是这么取版本的，
+  // 这里让 listVersions 在启动期也走同一条路（用户指示 2026-09-26「前端全部用缓存渲染」）。
+  _versionsFromTreeCache(project, name) {
+    const all = this._bootCachedTxtTree();
+    if (!Array.isArray(all) || !all.length) return null;
+    const pdir = path.join(this.root, project);
+    const txs = all.filter((t) => t.pdir === pdir && t.name === name);
+    if (!txs.length) return null;
+    try { return this._buildVersionsFromList(name, txs); } catch (e) { return null; }
+  }
+
   listVersions(project, name) {
+    // 启动期：**零磁盘访问** —— 从配置树缓存派生；缓存也没有就返回空列表，后台重建后刷新
+    if (this._bootFast) {
+      const fromCache = this._versionsFromTreeCache(project, name);
+      if (fromCache) return fromCache;
+      this._enqueueScanRebuild();
+      return [];
+    }
     const pdir = path.join(this.root, project);
     if (!fs.existsSync(pdir) || !fs.statSync(pdir).isDirectory()) return [];
     const key = this.root + '\u0000' + project + '\u0000' + name;
@@ -1224,10 +1419,28 @@ class Api {
     return { ok: true, pending, deleted };
   }
 
-  readConfig(filePath) {
-    filePath = path.resolve(filePath);
-    const text = readText(filePath);
-    const lines = text.split(/\r?\n/);
+  // 配置内容缓存（用户指示 2026-09-26：「将需要 io 的部分全部缓存化，txt 路径以及里面的全部内容」）：
+  //   打开配置 = 一次主键查询 + **一次 stat 校验**，内容直接取缓存（免读整份文件、免解析）；
+  //   指纹不同才回退读文件并更新缓存。相比原来"每次打开都读全文件 + 解析"，IO 从 O(文件大小) 降到 O(1)。
+  _configFromCacheRow(filePath, row) {
+    const raw = row.raw || '';
+    let parsed = {};
+    try { parsed = JSON.parse(row.parsed || '{}') || {}; } catch (e) { parsed = {}; }
+    return {
+      path: filePath,
+      raw,
+      lines: raw.split(/\r?\n/),
+      folders: parsed.folders || [],
+      excludes: parsed.excludes || [],
+      watermark: parsed.watermark || '',
+      name: parsed.name || path.basename(filePath, path.extname(filePath)),
+      _cached: true,
+    };
+  }
+
+  // 纯解析（无 IO）：从原文得出 folders / excludes / watermark / name
+  _parseConfigText(filePath, text) {
+    const lines = String(text || '').split(/\r?\n/);
     const folders = [];
     const excludes = [];
     let watermark = '';
@@ -1242,7 +1455,41 @@ class Api {
       const last = folders[folders.length - 1];
       if (last.path.toLowerCase().endsWith('.png') && !last.nonround) watermark = stripQuotes(folders.pop().path);
     }
-    return { path: filePath, raw: text, lines, folders, excludes, watermark, name: path.basename(filePath, path.extname(filePath)) };
+    return { folders, excludes, watermark, name: path.basename(filePath, path.extname(filePath)) };
+  }
+
+  _configFingerprint(filePath) {
+    try { const st = fs.statSync(filePath); return String(st.mtimeMs) + ':' + String(st.size); } catch (e) { return ''; }
+  }
+
+  _putConfigCache(filePath, text, parsed) {
+    const store = this._useDbCache() ? this._cacheStore : null;
+    if (!store || typeof store.txtPut !== 'function') return;
+    try { store.txtPut(filePath, this._configFingerprint(filePath), text, JSON.stringify(parsed), Date.now()); } catch (e) {}
+  }
+
+  readConfig(filePath, opts) {
+    this._touchForeground();
+    filePath = path.resolve(filePath);
+    const store = this._useDbCache() ? this._cacheStore : null;
+    const row = (store && typeof store.txtGet === 'function') ? store.txtGet(filePath) : null;
+    if (row && row.parsed) {
+      // 启动期：**直接信缓存，不做 stat**（用户指示 2026-09-26「前端全部用缓存渲染」）；
+      // 一致性由后台空闲队列校验（文件被外部改动会在稍后自愈）。
+      if (this._bootFast) return this._configFromCacheRow(filePath, row);
+      const fp = this._configFingerprint(filePath);
+      if (fp && fp === row.fp) return this._configFromCacheRow(filePath, row);   // 命中：内容取缓存，零文件读取
+    }
+    // peek：调用方只想知道"这份配置是不是空的"（项目列表渲染用），无缓存时**不要读文件**，
+    // 直接给乐观结构 —— 启动期渲染路径上一行磁盘 IO 都不该有。
+    if (opts && opts.peek) {
+      return { path: filePath, raw: '', lines: [], folders: [{ path: '', nonround: false }], excludes: [], watermark: '', name: path.basename(filePath, path.extname(filePath)), _peek: true };
+    }
+    const text = readText(filePath);
+    const parsed = this._parseConfigText(filePath, text);
+    // 文件不存在（stat 失败）时**不落缓存**：否则会把"不存在"缓存成空内容，掩盖之后新建的同名配置
+    if (this._configFingerprint(filePath)) this._putConfigCache(filePath, text, parsed);
+    return Object.assign({ path: filePath }, parsed, { raw: text, lines: text.split(/\r?\n/) });
   }
 
   _rewriteText(folders, excludes, watermark) {
@@ -1263,6 +1510,7 @@ class Api {
     filePath = path.resolve(filePath);
     const text = this._rewriteText(folders, excludes, watermark);
     fs.writeFileSync(filePath, text, 'utf-8');
+    this._putConfigCache(filePath, text, this._parseConfigText(filePath, text));   // 保存即更新内容缓存（下次打开零 IO）
     this._markConfigModified();
     return { ok: true, path: filePath };
   }
@@ -1277,7 +1525,9 @@ class Api {
     let finalName = (configName || name || 'config').trim();
     if (!finalName.toLowerCase().endsWith('.txt')) finalName += '.txt';
     const filePath = path.join(targetDir, finalName);
-    fs.writeFileSync(filePath, this._rewriteText(folders, excludes, watermark), 'utf-8');
+    const text = this._rewriteText(folders, excludes, watermark);
+    fs.writeFileSync(filePath, text, 'utf-8');
+    this._putConfigCache(filePath, text, this._parseConfigText(filePath, text));
     this._markConfigModified();
     return { ok: true, path: filePath };
   }
@@ -1300,7 +1550,9 @@ class Api {
       const filePath = path.join(targetDir, name + '.txt');
       const wm = this.getProjectWatermark(project);
       const watermark = (wm && wm.ok && wm.enabled && wm.main) ? wm.main : '';
-      fs.writeFileSync(filePath, this._rewriteText([], [], watermark), 'utf-8');
+      const text = this._rewriteText([], [], watermark);
+      fs.writeFileSync(filePath, text, 'utf-8');
+      this._putConfigCache(filePath, text, this._parseConfigText(filePath, text));
       this._markConfigModified();
       return { ok: true, path: filePath, name, watermark };
     } catch (e) { return { ok: false, error: String(e) }; }
@@ -1743,25 +1995,46 @@ class Api {
   // 到期仍不存在才真删；文件重新出现则清除置位（复活），计数一并保留。
   // 每 YIELD 条让出一次事件循环：主线程始终能响应 IPC，前端不再出现长时间「检测中…」。
   // 判定分区由持久层给出（库走 gcPlan，纯内存态走 _videoCacheGcPlan），语义一致。
-  async _gcVideoCache(knownPaths) {
+  async _gcVideoCache(knownPaths, opts) {
     if (!this.storageDir) return 0;
+    const limit = Number(opts && opts.limit) > 0 ? Number(opts.limit) : 0;   // 0 = 不限量（手动入口）
     const store = (this._cacheBackendMode === 'db' && this._cacheStore) ? this._cacheStore : null;
     this._loadVideoCache();
     const c = this._videoCache;
     if (!c) return 0;
     let plan;
-    try { plan = store ? store.gcPlan(knownPaths, { now: Date.now() }) : this._videoCacheGcPlan(knownPaths); }
+    try { plan = store ? store.gcPlan(knownPaths, { now: Date.now(), limit: limit || 0 }) : this._videoCacheGcPlan(knownPaths); }
     catch (e) { if (store) return 0; plan = this._videoCacheGcPlan(knownPaths); }
+    const all = plan.verify || [];
+    const list = (limit > 0 && all.length > limit) ? all.slice(0, limit) : all;
+    const _t = Date.now();
     const gone = [], back = [];
-    const YIELD = 256;
-    for (let i = 0; i < plan.verify.length; i++) {
+    // 让路粒度 24（原 256）：冷态下一次让路前最多 24 次随机 IO —— 256 次足以把机械盘队列打满、
+    // 连带主线程一起冻住几十秒（2026-09-26 冷启动实测 49.5 秒）。
+    const YIELD = 24;
+    let yields = 0;
+    for (let i = 0; i < list.length; i++) {
       // 让路期间缓存可能已被重置/重载（取消预检测、切工作目录）→ 放弃本次清理，避免写回陈旧快照
       if (this._videoCache !== c) return 0;
       let missing = false;
-      try { await fs.promises.stat(plan.verify[i]); } catch (e) { missing = true; }
-      if (missing) gone.push(plan.verify[i]);
-      else back.push(plan.verify[i]);
-      if ((i + 1) % YIELD === 0) await new Promise((r) => setImmediate(r));
+      try { await fs.promises.stat(list[i]); } catch (e) { missing = true; }
+      if (missing) gone.push(list[i]);
+      else back.push(list[i]);
+      if ((i + 1) % YIELD === 0) {
+        await new Promise((r) => setImmediate(r));
+        yields++;
+        if (yields % 4 === 0) await new Promise((r) => setTimeout(r, 10));   // 每 4 批让磁盘喘一口
+      }
+    }
+    // 记录「这批刚核验过」→ 有效期内（默认 7 天）不再重复访问磁盘：
+    // 冷启动 IO 总量因此与「过期条数」成正比，而不是与库的大小成正比（本机库内 7269 条）。
+    if (store && store.markVerified && list.length) { try { store.markVerified(list, Date.now()); } catch (e) {} }
+    if (this._lg && (limit > 0 || (opts && opts.idle))) {
+      this._lg('SYS', 'cache.gc',
+        '数据缓存失效清理（空闲' + (limit > 0 ? '增量' : '全量') + '） · 核验 ' + list.length + ' / ' + all.length + ' 条 · 失效 ' + gone.length
+        + ' · ' + (Date.now() - _t) + 'ms · 让路 ' + yields + ' 次'
+        + (limit > 0 ? '（冷启动限量）' : '（热启动全量）'),
+        { verify: list.length, total: all.length, gone: gone.length, ms: Date.now() - _t, yields, limit });
     }
     if (this._videoCache !== c) return 0;
     if (!store) {
@@ -1774,7 +2047,11 @@ class Api {
     }
     const expired = plan.expired || new Set();
     const stillMissing = gone.filter((p) => !expired.has(p));
-    const remove = gone.filter((p) => expired.has(p));
+    // 到期回收**不依赖本次核验**：missing_since 已经把「文件不在了」记在库里，
+    // 到期与否纯看时间，无需再 stat。原实现写成 `gone ∩ expired` 是建立在
+    // 「每次都会重验所有 missing 条目」的前提上 —— TTL 免重验后那个前提不成立，
+    // 结果就是到期条目永远删不掉（verify-gc-perf ④ 抓到的正是这个）。
+    const remove = Array.from(expired);
     let removed = 0;
     try {
       if (stillMissing.length) store.markMissing(stillMissing, Date.now());
@@ -1795,6 +2072,31 @@ class Api {
   async cleanVideoCache() {
     const removed = await this._gcVideoCacheNow();
     return { ok: true, removed: removed || 0 };
+  }
+
+  // 启动后空闲期的失效清理：**入队**（不分冷热），由空闲队列串行 + 自适应节流执行；
+  // 剩下的条目留给后续轮次 —— 清理是维护任务，慢一点没有代价，但绝不能把界面冻住。
+  async gcVideoCacheIdle(perJob) {
+    // **入队**，不再一次性跑 600/全量：队列串行单发 + 自适应节流，慢盘自动放慢、快盘自动加速，
+    // 因此不需要事先判断冷热（用户建议 2026-09-26）。剩余条目留给后续轮次（自愈逐步收敛）。
+    const N = Number(perJob) > 0 ? Number(perJob) : 4;      // 每条 job 核验的路径数
+    const MAX_JOBS = 200;                                    // 每轮最多排入的 job 数（避免队列过长）
+    const store = this._useDbCache() ? this._cacheStore : null;
+    if (!store || typeof store.gcPendingCount !== 'function') return { queued: 0, pending: 0 };
+    let pending = 0;
+    try { pending = store.gcPendingCount(Date.now()); } catch (e) { pending = 0; }
+    if (!pending) return { queued: 0, pending: 0 };
+    const jobs = Math.min(MAX_JOBS, Math.ceil(pending / N));
+    let queued = 0;
+    for (let i = 0; i < jobs; i++) {
+      if (this._idleEnqueue('cachegc:' + i, () => this._gcVideoCache(null, { limit: N, idle: true }))) queued++;
+    }
+    try {
+      if (this._lg) this._lg('SYS', 'cache.gc.queue',
+        '失效清理已排入空闲队列（待核验 ' + pending + ' 条 · 本轮 ' + queued + ' 个批次 × ' + N + ' 条）',
+        { pending, queued, perJob: N });
+    } catch (e) {}
+    return { queued, pending };
   }
 
   _isExcludedPath(target, excludes) {
@@ -2167,16 +2469,80 @@ class Api {
   }
 
   // 收集根目录下所有属于某复刻模式的日志文件（命名形如 MMdd-模式名日志.txt）
+  // 复刻日志清单：**结果缓存化 + 启动期零遍历**（用户指示 2026-09-26：「前端全部用缓存渲染，
+  // 不要动 E 盘」）。此前每调用一次就 walkFiles(this.root) 全量遍历，而 _buildProjectsData 会为
+  // 两种复刻模式各调一次 → 实测启动期 3070 次 readdirSync（审计定位）。
   _replicaLogFiles(modeName) {
     const esc = String(modeName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const pat = new RegExp('^\\d{4}-' + esc + '日志\\.txt$');
+    // ① 内存/持久化缓存（零 IO）
+    const cached = this._replicaLogFilesCached(modeName);
+    if (cached) return cached;
+    // ② 启动期**绝不遍历**：返回空列表，后台重建后刷新
+    if (this._bootFast) { this._enqueueReplicaLogRebuild(); return []; }
     const out = [];
     if (!this.root || !fs.existsSync(this.root)) return out;
     for (const full of walkFiles(this.root)) {
       if (!path.basename(full).toLowerCase().endsWith('.txt')) continue;
       if (pat.test(path.basename(full))) out.push(full);
     }
-    return out.sort();
+    out.sort();
+    this._replicaLogCache = { root: this.root, byMode: Object.assign({}, (this._replicaLogCache || {}).byMode, { [modeName]: out }) };
+    this._saveReplicaLogCache();
+    return out;
+  }
+
+  // 复刻日志清单缓存：一次遍历把「所有复刻模式的日志」都算出来存库，之后启动零遍历
+  _replicaLogFilesCached(modeName) {
+    const key = String(modeName || '');
+    const mem = this._replicaLogCache;
+    if (mem && mem.root === this.root && mem.byMode && mem.byMode[key]) return mem.byMode[key];
+    if (!this._useDbCache()) return null;
+    try {
+      const raw = this._cacheStore.getKv('replica_logs:' + this.root);
+      if (!raw) return null;
+      const data = JSON.parse(raw);
+      if (!data || !data.byMode) return null;
+      this._replicaLogCache = { root: this.root, byMode: data.byMode, fp: String(data.fp || '') };
+      this._enqueueScanVerify();
+      return Array.isArray(data.byMode[key]) ? data.byMode[key] : null;
+    } catch (e) { return null; }
+  }
+
+  _saveReplicaLogCache() {
+    if (!this._useDbCache() || !this._replicaLogCache) return;
+    try {
+      this._cacheStore.setKv('replica_logs:' + this.root,
+        JSON.stringify({ fp: this._replicaLogCache.fp || '', byMode: this._replicaLogCache.byMode || {} }));
+    } catch (e) {}
+  }
+
+  // 启动期缓存缺失 → 后台一次性遍历，把所有复刻模式的日志清单都建好并落库
+  _enqueueReplicaLogRebuild() {
+    if (this._replicaRebuildQueued) return;
+    this._replicaRebuildQueued = true;
+    this._idleEnqueue('repbuild:' + this.root, async () => {
+      this._replicaRebuildQueued = false;
+      const byMode = {};
+      let modes = [];
+      try { modes = REPLICA_MODES.slice(); } catch (e) { modes = []; }
+      let fp = '';
+      try { fp = await this._logTreeFingerprintAsync(); } catch (e) {}
+      if (this.root && fs.existsSync(this.root)) {
+        const all = [];
+        try { for (const full of walkFiles(this.root)) { if (path.basename(full).toLowerCase().endsWith('.txt')) all.push(full); } } catch (e) {}
+        for (const m of modes) {
+          const esc = String(m || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const pat = new RegExp('^\\d{4}-' + esc + '日志\\.txt$');
+          byMode[m] = all.filter((f) => pat.test(path.basename(f))).sort();
+        }
+      }
+      this._replicaLogCache = { root: this.root, byMode, fp };
+      this._saveReplicaLogCache();
+      this._projectsCache = null;
+      try { this._emitTasks(); } catch (e) {}
+      try { if (this._lg) this._lg('ADD', 'replica.logs.rebuild', '复刻日志清单已后台重建并落库', { modes: Object.keys(byMode).length }); } catch (e) {}
+    });
   }
 
   _replicaLogs(modeName) {
@@ -2762,25 +3128,16 @@ class Api {
   }
   _taskHasOutput(t) {
     if (!t) return true;
-    // 启动恢复期（含紧随的异步预热窗口）：返回乐观值，**绝不做同步磁盘探测**。
-    // 冷态下这些目录在机械盘上，逐任务同步访问会冻结主进程数秒（实测 5.7 秒），
-    // 而窗口此时已经画出来了 —— 用户观感就是「窗口出来但点不动」。
-    // 真实值由 _prewarmHasOutputAsync 预热完成后的一次 _emitTasks 给出（判定逻辑不变）。
-    if (this._bootProbeSuppressed) return true;
+    // 纯内存判定（零 IO）：结论来自 verify_cache（启动只读库）+ 空闲队列的后台校验。
+    // 无结论 / 已过期 → 乐观返回 true，该任务已在队列里（见 _prewarmHasOutputAsync），
+    // 校验完成后写回库并增量刷新界面（自愈）。**任何情况下都不做同步磁盘探测** ——
+    // 同步 stat/readdir 是历次冷启动冻结的源头（实测 5.7s ~ 49.5s），已彻底移除。
+    const memo = this._hasOutputMemo && this._hasOutputMemo.get(t.id);
+    const ttl = (memo && memo.ttl) || HAS_OUTPUT_MEMO_TTL_MS;
+    if (memo && (Date.now() - memo.at) < ttl) return memo.v;
     const probes = this._taskOutputProbes(t);
     if (!probes) return true;
-    // 现存证据：任一记录的文件仍在，或批量输出目录内仍有成片
-    for (const p of probes.files) {
-      try { if (fs.existsSync(p)) return true; } catch (e) {}
-    }
-    const dir = probes.dir;
-    if (dir) {
-      try {
-        if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()
-          && fs.readdirSync(dir).some((f) => path.extname(f).toLowerCase() === '.mp4')) return true;
-      } catch (e) {}
-    }
-    return false;
+    return true;
   }
 
   snapshotTasks() {
@@ -2938,10 +3295,8 @@ class Api {
       const _t2 = Date.now();
       const planSeq = parseInt(store.getKv('plan_seq') || '0', 10) || 0;
       if (planSeq > this._planSeq) this._planSeq = planSeq;
-      // 恢复期抑制 hasOutput 的同步磁盘探测（详见 _taskHasOutput / _prewarmHasOutputAsync）：
-      // 这次 emit 会走一遍任务快照，冷态下会对机械盘逐目录同步访问 → 冻结主进程数秒。
-      // 抑制一直持续到异步预热完成（由 _prewarmHasOutputAsync 复位）。
-      if (this.tasks.size) { this._bootProbeSuppressed = true; this._emitTasks(); }
+      // 任务快照 emit：_taskHasOutput 为纯内存判定（零 IO，见该方法注释），可安全立即 emit
+      if (this.tasks.size) this._emitTasks();
       this._gcOrphanMarkers(); // 任务恢复完成后回收孤儿标记（任务不存在的残留）
       const _t3 = Date.now();
       // 分段留痕：冷启动卡顿定位依据（读库 / 主循环 / GC 三段，另记待异步校验的输出目录数）
@@ -2949,10 +3304,15 @@ class Api {
         '任务恢复完成（同步段 ' + (_t3 - _t0) + 'ms · 读库 ' + (_t1 - _t0) + ' / 主循环 ' + (_t2 - _t1) + ' / GC ' + (_t3 - _t2) + ' · 任务 ' + rows.length + ' 条 · 待异步校验输出目录 ' + pendingOut.length + ' 条）',
         { dbMs: _t1 - _t0, loopMs: _t2 - _t1, gcMs: _t3 - _t2, tasks: rows.length, pendingOut: pendingOut.length });
     } catch (e) {}
-    // 输出目录校验放到恢复完成后异步执行（不阻塞启动；见 _verifyBatchOutDirs）
-    if (pendingOut.length) this._verifyBatchOutDirs(pendingOut);
-    // 处于抑制期（说明已 emit 过任务）则启动异步预热，完成后复位抑制并刷新前端
-    if (this._bootProbeSuppressed) this._prewarmHasOutputAsync();
+    // 输出目录校验：启动期入队（异步、串行、节流），不在启动窗口内打素材盘 IO
+    if (pendingOut.length) {
+      if (this._bootFast) this._idleEnqueue('outdirverify:' + this.root, () => this._verifyBatchOutDirs(pendingOut));
+      else this._verifyBatchOutDirs(pendingOut);
+    }
+    // 启动只读库：把已持久化的成片存在性结论载入内存（一次查询、零文件 IO），
+    // 其余待校验项**只入队**（空闲队列串行执行，见 _prewarmHasOutputAsync / _idleKick）
+    try { this._loadHasOutputFromStore(); } catch (e) {}
+    try { this._prewarmHasOutputAsync(); } catch (e) {}
   }
   // 启动后异步预热「成片是否仍在磁盘」判定所需的目录/文件元数据（restoreTasks 的延后部分）。
   // 为什么需要：_taskHasOutput 是**同步**判定（被 snapshotTasks 逐任务调用），而历史任务的成片
@@ -2961,25 +3321,161 @@ class Api {
   // 之后同步判定即落在缓存上（同一批任务实测 13ms）。判定逻辑与语义**完全不变**，
   // 只是把「冷读」从启动关键路径挪到异步阶段。完成后复位抑制标志并再 emit 一次，
   // 让界面从乐观值切到真实值（缺失成片的提示因此最多晚 1~2 秒出现）。
-  _prewarmHasOutputAsync() {
-    const targets = [];
-    this.tasks.forEach((t) => { const p = this._taskOutputProbes(t); if (p) targets.push(p); });
-    if (!targets.length) { this._bootProbeSuppressed = false; return; }
-    const fsp = fs.promises;
-    const _t = Date.now();
-    const jobs = [];
-    for (const p of targets) {
-      for (const f of p.files) jobs.push(fsp.access(f).catch(() => {}));
-      if (p.dir) jobs.push(fsp.stat(p.dir).then((s) => (s.isDirectory() ? fsp.readdir(p.dir) : null)).catch(() => {}));
+  // ── 统一空闲校验队列（用户建议 2026-09-26）─────────────────────────
+  // 用户原话：「不区分冷热写判定，利用后台检测/自愈机制保证效率和精准性」。
+  // 这比"判冷热"更稳：判据本身很脆（开机时长被证伪；探针样本也依赖"启动早期没碰过该目录"），
+  // 而且判错是双向代价 —— 判成热会踩几十秒冻卡，判成冷会无谓推迟精度。
+  // 改为**用反馈代替预判**：
+  //   · 启动期一律不发起批量文件 IO（不分冷热），只把待校验项**入队**；
+  //   · 队列**串行单发**（一次只飞一个 IO）+ **按实测耗时自适应节流**：
+  //     单次校验慢 → 间隔翻倍（保护系统），连续快 → 间隔减半（尽快收敛）；
+  //   · **任务运行/排队时自动暂停**，空闲再续（绝不与出片抢 IO）；
+  //   · 校验结果写回 verify_cache 并**增量刷新界面**（自愈：发现成片没了/回来了就更新标记）。
+  _idleEnqueue(key, run) {
+    if (!key || typeof run !== 'function') return false;
+    if (!this._idleJobs) this._idleJobs = [];
+    if (this._idleJobs.some((j) => j.key === key)) return false;   // 去重：同一项不重复排队
+    this._idleJobs.push({ key, run });
+    this._idleKick();
+    return true;
+  }
+
+  _idleKick() {
+    if (this._idleRunning || !this._idleJobs || !this._idleJobs.length) return;
+    // 启动保护期：到点前不消费（首屏渲染期间绝不与前台争 IO）
+    const waitBoot = Math.max(0, (this._idleStartAt || 0) - Date.now());
+    if (waitBoot > 0) { setTimeout(() => this._idleKick(), Math.min(waitBoot, 5000)); return; }
+    this._idleRunning = true;
+    const step = async () => {
+      if (!this._idleJobs.length) { this._idleRunning = false; return; }
+      // 与出片抢 IO 是绝对不能接受的：有任务在跑/排队 → 让路，稍后再续
+      let busy = false;
+      try { busy = !!(this.hasRunningTask() || this.hasQueuedTask()); } catch (e) { busy = false; }
+      // 前台刚有活动（渲染/读取）也让路 —— 照预检测的「行内优先、后台让路」
+      const fgRecent = this._lastForegroundAt && (Date.now() - this._lastForegroundAt) < IDLE_FOREGROUND_HOLD_MS;
+      if (busy || fgRecent) { this._idleRunning = false; setTimeout(() => this._idleKick(), 5000); return; }
+      const job = this._idleJobs.shift();
+      const t0 = Date.now();
+      try { await job.run(); } catch (e) {}
+      const dt = Date.now() - t0;
+      this._idleStats.done++;
+      this._idleStats.maxMs = Math.max(this._idleStats.maxMs, dt);
+      // ★ 自适应节流：这就是"后台检测"的核心 —— 用实测耗时决定节奏，不需要事先知道盘冷不冷
+      if (dt > 150) { this._idleDelayMs = Math.min(2000, this._idleDelayMs * 2); this._idleStats.slow++; }
+      else if (dt < 20) { this._idleDelayMs = Math.max(10, Math.round(this._idleDelayMs / 2)); this._idleStats.fast++; }
+      setTimeout(step, this._idleDelayMs);
+    };
+    setTimeout(step, this._idleDelayMs);
+  }
+
+  // 队列状态（埋点/排查用）
+  idleQueueState() {
+    return {
+      pending: (this._idleJobs || []).length, running: !!this._idleRunning,
+      delayMs: this._idleDelayMs, done: this._idleStats.done,
+      slow: this._idleStats.slow, fast: this._idleStats.fast, maxMs: this._idleStats.maxMs,
+    };
+  }
+
+  // 把队列跑空（回归/手动排查用；正常使用不需要）
+  async drainIdleQueue(timeoutMs) {
+    const deadline = Date.now() + (Number(timeoutMs) || 30000);
+    while ((this._idleJobs && this._idleJobs.length) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10));
     }
-    Promise.all(jobs).then(() => {
-      this._lg('SYS', 'task.restore.hasoutput',
-        '成片存在性元数据预热完成（' + (Date.now() - _t) + 'ms · 探测 ' + jobs.length + ' 项 / 任务 ' + targets.length + ' 条）',
-        { probes: jobs.length, tasks: targets.length, ms: Date.now() - _t });
-    }).catch(() => {}).then(() => {
-      this._bootProbeSuppressed = false;      // 解除抑制：此后同步判定走系统缓存
-      if (this.tasks.size) this._emitTasks(); // 由乐观值切到真实判定
+    return this.idleQueueState();
+  }
+
+  // ── 成片存在性：结论持久化 + 懒校验（用户指示 2026-09-26）────────────────
+  // 既然已经 sqlite 化，就用一次查询换掉「每次启动核验 262 项目录」：
+  //   启动：只读 verify_cache（零文件 IO）→ 有新鲜结论就直接用；
+  //   校验：只对「无结论 / 过期」的任务做，结果写回库；
+  //   失效：产物变动时按 key 精确失效，而不是定期全量重算。
+  _hasOutputKey(id) { return 'hasoutput:' + String(id || ''); }
+
+  _loadHasOutputFromStore() {
+    const store = this._useDbCache() ? this._cacheStore : null;
+    if (!store || typeof store.verifyGetMany !== 'function') return 0;
+    let map;
+    try { map = store.verifyGetMany('hasoutput:'); } catch (e) { return 0; }
+    let n = 0;
+    for (const [k, v] of map) {
+      const id = k.slice('hasoutput:'.length);
+      if (!id) continue;
+      this._hasOutputMemo.set(id, { v: v.result === '1', at: v.verifiedAt, ttl: v.ttlMs || HAS_OUTPUT_PERSIST_TTL_MS });
+      n++;
+    }
+    return n;
+  }
+
+  _putHasOutput(t, ok) {
+    if (!t || !t.id) return;
+    const at = Date.now();
+    this._hasOutputMemo.set(t.id, { v: !!ok, at, ttl: HAS_OUTPUT_PERSIST_TTL_MS });
+    const store = this._useDbCache() ? this._cacheStore : null;
+    if (store && typeof store.verifyPut === 'function') {
+      try { store.verifyPut(this._hasOutputKey(t.id), '', ok ? '1' : '0', HAS_OUTPUT_PERSIST_TTL_MS, at); } catch (e) {}
+    }
+  }
+
+  // 产物变动 → 精确失效该任务的结论（下次启动或下次空闲校验时才重新探测）
+  _invalidateHasOutput(id) {
+    if (!id) return;
+    if (this._hasOutputMemo) this._hasOutputMemo.delete(id);
+    const store = this._useDbCache() ? this._cacheStore : null;
+    if (store && typeof store.verifyInvalidate === 'function') {
+      try { store.verifyInvalidate(this._hasOutputKey(id)); } catch (e) {}
+    }
+  }
+
+  _prewarmHasOutputAsync() {
+    // 启动期**只入队**，不发起任何批量文件 IO（不分冷热）—— 用户 2026-09-26 建议的
+    // 「后台检测 + 自愈」：启动只读 SQLite；校验交给空闲队列（串行 + 自适应节流 + 有任务时让路）。
+    const now = Date.now();
+    let queued = 0;
+    this.tasks.forEach((t) => {
+      // 库里已有新鲜结论 → 连队都不排（这是「启动只读 SQLite」的核心收益）
+      const memo = this._hasOutputMemo && this._hasOutputMemo.get(t.id);
+      const ttl = (memo && memo.ttl) || HAS_OUTPUT_PERSIST_TTL_MS;
+      if (memo && (now - memo.at) < ttl) return;
+      const p = this._taskOutputProbes(t);
+      if (!p) return;
+      if (this._idleEnqueue('hasoutput:' + t.id, () => this._probeTaskOutput(t, p))) queued++;
     });
+    try {
+      if (this._lg) this._lg('SYS', 'task.restore.hasoutput',
+        '成片存在性核验已排入空闲队列（' + queued + ' 条 · 串行 + 自适应节流 · 有任务运行时自动让路）',
+        { queued, pending: (this._idleJobs || []).length });
+    } catch (e) {}
+  }
+
+  // 单个任务的成片存在性校验（在空闲队列里执行）：**先目录后文件、命中即停**，
+  // 结果写回 verify_cache；结论变化时**增量刷新界面**（自愈 —— 不必重启就能看到标记被纠正）。
+  async _probeTaskOutput(t, p) {
+    const fsp = fs.promises;
+    let ok = false;
+    const dir = p.dir;
+    if (dir) {
+      try {
+        const st = await fsp.stat(dir);
+        if (st.isDirectory()) {
+          const names = await fsp.readdir(dir);
+          if (names.some((f) => path.extname(f).toLowerCase() === '.mp4')) ok = true;
+        }
+      } catch (e) { /* 目录不可用：继续看文件清单 */ }
+    }
+    if (!ok) {
+      const FILES_CHUNK = 4;   // 小批并发即可；队列本身已是串行单发 + 间隔，不会再打满磁盘
+      for (let i = 0; i < p.files.length && !ok; i += FILES_CHUNK) {
+        const slice = p.files.slice(i, i + FILES_CHUNK);
+        const hits = await Promise.all(slice.map((f) => fsp.access(f).then(() => true, () => false)));
+        if (hits.some(Boolean)) ok = true;
+      }
+    }
+    const prev = this._hasOutputMemo && this._hasOutputMemo.get(t.id);
+    this._putHasOutput(t, ok);
+    if (!prev || prev.v !== ok) { try { this._emitTasks(); } catch (e) {} }
+    return ok;
   }
   // 批量任务输出目录的异步校验（restoreTasks 的延后部分）。
   // 语义与原先的同步版完全一致：记录指向有效目录则保留；失效时仅按「提交时刻 + 配置名」
@@ -3365,6 +3861,8 @@ class Api {
   //    （目录内确有日志列出的成片文件）。推算目录在同日同名任务间会撞车，
   //    无归属证据时一律不动：找不到就是找不到，不猜。
   _removeTaskArtifacts(task) {
+    // 产物即将被移除 → 让成片存在性结论立即失效（内存 + verify_cache；否则界面仍按旧结论显示）
+    this._invalidateHasOutput(task && task.id);
     // 一律移入回收站（可还原），不做永久删除
     const rm = (p) => { try { if (p && fs.existsSync(p)) this._recycleFile(p); } catch (e2) {} };
     // 1) 日志中列出的成片
@@ -3509,7 +4007,7 @@ class Api {
           })) });
     }
     // 先清任务列表（连带任务标记）
-    for (const { t } of marked) { this.tasks.delete(t.id); this._removeMarker(t, { silent: true }); }
+    for (const { t } of marked) { this.tasks.delete(t.id); this._invalidateHasOutput(t.id); this._removeMarker(t, { silent: true }); }
     const errors = [];
     if (scope && scope !== 'list') {
       const { shell } = require('electron');
@@ -3974,6 +4472,9 @@ class Api {
           }
           task.status = status;
           task.paused = false;
+          // 任务结束 → 成片存在性结论失效：本次可能刚产出成片（旧结论是"无"），
+          // 精确失效后由下次启动/空闲校验重新判定，避免界面显示"成片已删除"却其实还在
+          try { this._invalidateHasOutput(task.id); } catch (e) {}
           if (task.status === 'error' && !task.failReason) task.failReason = this._deriveFailReason(task);
           this._lg('RUN', 'task.end',
             '任务结束 · ' + status + ' · ' + task.type + ' · 退出码 ' + code
@@ -5546,7 +6047,9 @@ let themes = [];
         const r = require('child_process').spawnSync('where', [name], { windowsHide: true, encoding: 'utf8' });
         if (r.status === 0) {
           const first = String(r.stdout || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean)[0];
-          if (first) return first;
+          // 解析到符号链接 shim（如 WinGet Links\ffmpeg.exe）时取真实目标：
+          // 少一层重解析，也避免 Links 目录被安全策略拦下而"路径在、跑不起来"
+          if (first) { try { return fs.realpathSync(first); } catch (e2) { return first; } }
         }
       } catch (e) {}
       return '';
@@ -5569,50 +6072,87 @@ let themes = [];
   // 环境检测（异步）：与 checkEnv 同语义，但滤镜/编码器探测走异步 execFile，
   // **不阻塞主进程事件循环**。启动路径必须用这个 —— 同步版在冷启动（首次加载 200MB+ ffmpeg、
   // 安全软件扫描未签名二进制）时会阻塞十几秒到数十秒，直接把窗口显示推迟到分钟级。
+  //
+  // ⚠ 「探测失败」必须与「确实缺滤镜」分开表达：
+  //   探测失败（冷态超时、被杀软拦下、spawn 失败）只说明**这次没探到**，不代表环境不合格。
+  //   早先两者混在一起 —— 超时 → outF 为空 → 把所有必需滤镜都记成 missing → downloadNeeded=true
+  //   → 冷启动**必然**弹出「FFmpeg 组件不完整」下载横幅，而热态重跑却一切正常。
   checkEnvAsync() {
     const { cfgDir, ffmpegPath, ffprobePath } = this._resolveFfmpegBin();
-    const finish = (missing, missingEncoders) => {
-      const filtersOk = !!ffmpegPath && missing.length === 0;
-      const encodersOk = !!ffmpegPath && missingEncoders.length === 0;
+    const finish = (missing, missingEncoders, probeFailed, probeReason) => {
+      const realMissing = missing.length > 0 || missingEncoders.length > 0;
       return {
         ffmpeg: !!ffmpegPath,
         ffprobe: !!ffprobePath,
         engine: !!this._engineRunnerPath(),
-        ffmpegPath, ffprobePath, filtersOk, encodersOk, missing, missingEncoders,
-        downloadNeeded: !ffmpegPath || !ffprobePath || !filtersOk || !encodersOk,
+        ffmpegPath, ffprobePath,
+        filtersOk: !!ffmpegPath && !probeFailed && missing.length === 0,
+        encodersOk: !!ffmpegPath && !probeFailed && missingEncoders.length === 0,
+        missing, missingEncoders,
+        probeFailed: !!probeFailed,
+        probeReason: probeReason || '',
+        // 只有「确证缺失」才建议下载：路径不存在，或探测**成功**却确实缺项
+        downloadNeeded: !ffmpegPath || !ffprobePath || realMissing,
         ffmpegDir: cfgDir,
       };
     };
-    if (!ffmpegPath) return Promise.resolve(finish([], []));
+    if (!ffmpegPath) return Promise.resolve(finish([], [], false, ''));
     const fp = this._envProbeFingerprint(ffmpegPath);
     if (this._envProbeCache && this._envProbeCache.fp === fp) {
-      return Promise.resolve(finish(this._envProbeCache.missing.slice(), this._envProbeCache.missingEncoders.slice()));
+      const c = this._envProbeCache;
+      return Promise.resolve(finish(c.missing.slice(), c.missingEncoders.slice(), false, ''));
     }
     if (this._envProbeInflight) return this._envProbeInflight;   // 并发合并：同时多处调用只跑一轮
+    const startedAt = Date.now();
     const run = (args) => new Promise((resolve) => {
       let done = false;
       const settle = (v) => { if (!done) { done = true; resolve(v); } };
       try {
         const p = require('child_process').execFile(ffmpegPath, args,
-          { windowsHide: true, timeout: 20000, maxBuffer: 16 * 1024 * 1024 },
-          (err, stdout) => { settle(err ? '' : String(stdout || '')); });
-        p.on('error', () => settle(''));
-      } catch (e) { settle(''); }
+          { windowsHide: true, timeout: ENV_PROBE_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 },
+          (err, stdout) => {
+            if (err) settle({ ok: false, reason: err.killed ? 'timeout' : 'error' });
+            else settle({ ok: true, out: String(stdout || '') });
+          });
+        p.on('error', () => settle({ ok: false, reason: 'spawn' }));
+      } catch (e) { settle({ ok: false, reason: 'spawn' }); }
     });
     this._envProbeInflight = (async () => {
       // 两个探测可并行：互不依赖，串行只会让耗时翻倍
-      const [outF, outE] = await Promise.all([run(['-hide_banner', '-filters']), run(['-hide_banner', '-encoders'])]);
+      const [rf, re] = await Promise.all([run(['-hide_banner', '-filters']), run(['-hide_banner', '-encoders'])]);
       const missing = [];
       const missingEncoders = [];
-      if (!outF) missing.push(...FFMPEG_REQUIRED_FILTERS);
-      else for (const f of FFMPEG_REQUIRED_FILTERS) if (!outF.includes(' ' + f + ' ')) missing.push(f);
-      if (!outE) missingEncoders.push(...FFMPEG_REQUIRED_ENCODERS);
-      else for (const e3 of FFMPEG_REQUIRED_ENCODERS) if (!outE.includes(' ' + e3 + ' ')) missingEncoders.push(e3);
-      this._envProbeCache = { fp, missing: missing.slice(), missingEncoders: missingEncoders.slice(), at: Date.now() };
+      // 探测成功才逐项比对；失败时不塞 missing（那是"没探到"，不是"缺失"）
+      if (rf.ok) for (const f of FFMPEG_REQUIRED_FILTERS) if (!rf.out.includes(' ' + f + ' ')) missing.push(f);
+      if (re.ok) for (const e3 of FFMPEG_REQUIRED_ENCODERS) if (!re.out.includes(' ' + e3 + ' ')) missingEncoders.push(e3);
+      const probeFailed = !rf.ok || !re.ok;
+      const probeReason = !rf.ok ? rf.reason : (!re.ok ? re.reason : '');
+      // 失败结果**不写缓存**：下次调用（前端 check_env / 启动期延迟重试）会再探一次 ——
+      // 冷态超时通常几秒后就转热，缓存失败结论等于把误判钉死到进程重启。
+      this._envProbeCache = probeFailed
+        ? null
+        : { fp, missing: missing.slice(), missingEncoders: missingEncoders.slice(), at: Date.now() };
       this._envProbeInflight = null;
-      return finish(missing, missingEncoders);
+      const r = finish(missing, missingEncoders, probeFailed, probeReason);
+      this._logEnvProbe(r, Date.now() - startedAt);
+      return r;
     })();
     return this._envProbeInflight;
+  }
+
+  // 环境探测留痕：冷启动是否超时、超时多久、路径是什么 —— 事后唯一可回溯的证据
+  // （进程重启后内存缓存即失效，只靠"弹窗出现过"无法判断是缺组件还是冷态没探到）
+  _logEnvProbe(r, ms) {
+    try {
+      this._lg(r.probeFailed ? 'ERR' : 'SYS', 'env.probe',
+        'FFmpeg 环境探测 · ' + (r.probeFailed ? '失败（' + r.probeReason + '）' : '完成')
+        + ' · ' + ms + 'ms · ffmpeg=' + (r.ffmpeg ? '有' : '无') + ' ffprobe=' + (r.ffprobe ? '有' : '无')
+        + ' · 缺滤镜 ' + r.missing.length + ' 项 / 缺编码器 ' + r.missingEncoders.length + ' 项'
+        + ' · 需下载=' + (r.downloadNeeded ? '是' : '否'),
+        { ms, probeFailed: r.probeFailed, probeReason: r.probeReason, path: r.ffmpegPath || '',
+          missing: r.missing.slice(0, 12), missingEncoders: r.missingEncoders.slice(0, 6),
+          downloadNeeded: r.downloadNeeded });
+    } catch (e) {}
   }
 
   checkEnv() {
@@ -5620,35 +6160,43 @@ let themes = [];
     // 滤镜链完整性：-filters 实跑比对
     const missing = [];
     const missingEncoders = [];
+    let probeFailed = false;
+    let probeReason = '';
     if (ffmpegPath) {
       const { spawnSync } = require('child_process');
       try {
         const r = spawnSync(ffmpegPath, ['-hide_banner', '-filters'],
-          { windowsHide: true, encoding: 'utf8', timeout: 20000, maxBuffer: 16 * 1024 * 1024 });
+          { windowsHide: true, encoding: 'utf8', timeout: ENV_PROBE_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 });
         if (r.status === 0) {
           const out = String(r.stdout || '');
           for (const f of FFMPEG_REQUIRED_FILTERS) if (!out.includes(' ' + f + ' ')) missing.push(f);
-        } else missing.push(...FFMPEG_REQUIRED_FILTERS);
-      } catch (e2) { missing.push(...FFMPEG_REQUIRED_FILTERS); }
+        } else probeFailed = true;
+      } catch (e2) { probeFailed = true; }
       // 硬件编码器同样实跑比对（滤镜可用 ≠ 编码器可用）
       try {
         const r2 = spawnSync(ffmpegPath, ['-hide_banner', '-encoders'],
-          { windowsHide: true, encoding: 'utf8', timeout: 20000, maxBuffer: 16 * 1024 * 1024 });
+          { windowsHide: true, encoding: 'utf8', timeout: ENV_PROBE_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 });
         if (r2.status === 0) {
           const out2 = String(r2.stdout || '');
           for (const e3 of FFMPEG_REQUIRED_ENCODERS) if (!out2.includes(' ' + e3 + ' ')) missingEncoders.push(e3);
-        } else missingEncoders.push(...FFMPEG_REQUIRED_ENCODERS);
-      } catch (e4) { missingEncoders.push(...FFMPEG_REQUIRED_ENCODERS); }
+        } else probeFailed = true;
+      } catch (e4) { probeFailed = true; }
+      if (probeFailed && !probeReason) probeReason = 'probe-failed';
     }
-    const filtersOk = !!ffmpegPath && missing.length === 0;
-    const encodersOk = !!ffmpegPath && missingEncoders.length === 0;
+    const realMissing = missing.length > 0 || missingEncoders.length > 0;
     return {
       ffmpeg: !!ffmpegPath,
       ffprobe: !!ffprobePath,
       // 引擎入口是否就绪；false 即任务无法执行（前端据此提示重装）
       engine: !!this._engineRunnerPath(),
-      ffmpegPath, ffprobePath, filtersOk, encodersOk, missing, missingEncoders,
-      downloadNeeded: !ffmpegPath || !ffprobePath || !filtersOk || !encodersOk,
+      ffmpegPath, ffprobePath,
+      filtersOk: !!ffmpegPath && !probeFailed && missing.length === 0,
+      encodersOk: !!ffmpegPath && !probeFailed && missingEncoders.length === 0,
+      missing, missingEncoders,
+      probeFailed,
+      probeReason,
+      // 与异步版同语义：只有「确证缺失」才建议下载（探测失败 ≠ 缺失）
+      downloadNeeded: !ffmpegPath || !ffprobePath || realMissing,
       ffmpegDir: cfgDir,
     };
   }

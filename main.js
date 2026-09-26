@@ -2021,16 +2021,23 @@ function registerIpc() {
     if (r.ok) saveConfig(config);   // backend 写入的 this.config.ffmpeg_dir 与这里是同一引用
     return r;
   });
-  // 启动检测 FFmpeg 环境：不完整才弹下载提示（滤镜链实跑比对，见 backend.checkEnvAsync）
+  // 启动检测 FFmpeg 环境：**确证缺失**才弹下载提示（滤镜链实跑比对，见 backend.checkEnvAsync）
   // ⚠ 用异步版（不阻塞事件循环）；且延迟到窗口就绪之后再跑，避免与首帧竞争
+  // ⚠ 冷启动首次加载 ffmpeg 可能超时 → probeFailed：此时**不弹窗**，延后 10 秒重探一次 ——
+  //   早先把「超时」当成「缺滤镜」，害得冷启动必然误报「FFmpeg 组件不完整」（热态重跑却正常）
   runAfterWindowLoad(() => {
-    setTimeout(() => {
+    const probe = (allowRetry) => {
       api.checkEnvAsync().then((env) => {
+        if (env.probeFailed) {
+          if (allowRetry) setTimeout(() => probe(false), 10000);
+          return;
+        }
         if (!env.downloadNeeded) return;
         sendToMain('env_fix_available', { missing: env.missing || [], hasFfmpeg: env.ffmpeg });
         sendToSettings('env_fix_available', { missing: env.missing || [], hasFfmpeg: env.ffmpeg });
       }).catch(() => {});
-    }, 500);
+    };
+    setTimeout(() => probe(true), 500);
   });
   ipcMain.handle('list_dir', async (e, dir) => api.listDir(dir));   // 工具页目录浏览对话框（preload 已定义，此前漏注册）
   ipcMain.handle('open_path', async (e, p) => { const target = path.resolve(p); if (fs.existsSync(target)) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '路径不存在' }; });
@@ -2170,15 +2177,30 @@ function handleMainWindowClose() {
 function createWindow() {
   mainWin = new BrowserWindow({ title: 'Video Lab', width: 1360, height: 860, minWidth: 1120, minHeight: 700, frame: false, show: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
   mainWin.loadFile(path.join(__dirname, 'frontend', 'index.html'));
+  // 页面加载完成即放行「窗口加载后」初始化。注册必须紧跟 loadFile：
+  // 此前是在第一次 runAfterWindowLoad 调用时才注册，而那时页面往往已经加载完，
+  // 监听永不触发 → 只能等 3 秒兜底 → 托盘 / HTTP 就绪被无谓推迟约 2.7 秒。
+  try {
+    mainWin.webContents.once('did-finish-load', () => {
+      logTiming('主窗口 did-finish-load');
+      setImmediate(() => flushAfterWindowLoad('did-finish-load'));
+    });
+  } catch (e) {}
   // 普通启动：页面就绪后显示；开机自启（--autostart）保持隐藏，仅托盘常驻
   // ⚠ 若启动时需要全量扫描（缓存未命中），则**推迟到扫描完成后再显示**：
   //    否则窗口先出现、内容区长时间空白（列表要等扫描完才有），体感更差。
   //    扫描期间由独立的扫描小窗承担反馈（见 openScanWindow）。
   mainWin.once('ready-to-show', () => {
     logTiming('主窗口 ready-to-show（首帧可显示）');
+    // 冷启动定位用：把「回调返回」与 show() 各自夹出来。冷态曾出现 ready-to-show 之后
+    // 事件循环被冻 24 秒（3 秒兜底定时器被推迟到 25.3 秒才跑），此处三条埋点可一次判定
+    // 卡点究竟在 show() 之内、还是其后的初始化里。
+    setImmediate(() => logTiming('ready-to-show 回调后 setImmediate'));
     if (IS_AUTOSTART) return;
     if (global.__vlWaitScanToShow) { global.__vlMainReadyToShow = true; return; }
+    logTiming('即将 show()');
     mainWin.show();
+    logTiming('show() 返回');
   });
   mainWin.on('close', (e) => {
     if (!isQuitting) { e.preventDefault(); handleMainWindowClose(); }
@@ -2210,18 +2232,20 @@ function logTiming(label) {
 // 另加 3 秒兜底：页面加载异常时也不能把后续初始化永久挂住。
 let _afterLoadDone = false;
 const _afterLoadQueue = [];
+// 放行「窗口加载后」初始化。触发源有两处：
+//   ① did-finish-load（在 createWindow 里紧跟 loadFile 注册 —— 见那里的注释）
+//   ② 3 秒兜底：页面加载异常时也不能把后续初始化永久挂住
+function flushAfterWindowLoad(reason) {
+  if (_afterLoadDone) return;
+  _afterLoadDone = true;
+  logTiming('runAfterWindowLoad flush（' + reason + '，队列 ' + _afterLoadQueue.length + ' 项）');
+  for (const f of _afterLoadQueue.splice(0)) { try { f(); } catch (e) {} }
+}
 function runAfterWindowLoad(fn) {
   if (_afterLoadDone) { setTimeout(fn, 0); return; }
   _afterLoadQueue.push(fn);
   if (_afterLoadQueue.length > 1) return;
-  const flush = () => {
-    if (_afterLoadDone) return;
-    _afterLoadDone = true;
-    for (const f of _afterLoadQueue.splice(0)) { try { f(); } catch (e) {} }
-  };
-  const wc = mainWin && !mainWin.isDestroyed() ? mainWin.webContents : null;
-  if (wc) wc.once('did-finish-load', () => setImmediate(flush));
-  setTimeout(flush, 3000);   // 兜底
+  setTimeout(() => flushAfterWindowLoad('兜底超时'), 3000);   // 兜底
 }
 
 // 首次引导窗口：工作路径缺失时打开（仿设置页样式），用户主动点按钮才弹资源管理器；
@@ -2351,6 +2375,10 @@ app.whenReady().then(async () => {
     restartHttpServer();              // 内嵌 HTTP 服务器：浏览器访问 http://localhost:<port>
     if (IS_AUTOSTART && mainWin && !mainWin.isDestroyed()) mainWin.hide();
     logTiming('窗口加载后：托盘 / HTTP 就绪');
+    // 数据缓存失效清理：**窗口就绪后 15 秒**的空闲期增量执行（限量 600 条 + 细让路 + 批间小睡）。
+    // 绝不放在启动关键路径：冷态全量核验近万条机械盘路径曾把事件循环冻住 49.5 秒（2026-09-26 实测，
+    // 窗口 1.4 秒已画出来、用户却点不动近一分钟）。清理是维护任务，摊到多次启动完成即可。
+    setTimeout(() => { try { api.gcVideoCacheIdle().catch(() => {}); } catch (e) {} }, 15000);
     // 启动自动检查更新（仅检查；UPDATE_ENABLED=false 时便携版静默停用）
     if (UPDATE_ENABLED && mainWin && !mainWin.isDestroyed()) {
       if (config.auto_check_update !== false) setTimeout(() => checkForUpdate({ silent: true }), 3000);

@@ -1274,9 +1274,18 @@
     if (api.on_task_update) api.on_task_update(renderTasks);
     // 1 秒轮询兜底刷新：解决 IPC 推送偶发丢失导致"有任务却显示暂无任务"，
     // 并保证控制台日志/状态每 1 秒刷新一次，而非仅在成片生成时才更新。
+    // ⚠ 窗口不可见时（最小化到托盘/被其他窗口完全遮挡）必须停：list_tasks 返回的是全部任务的
+    // 完整快照（任务多时可达数百 KB），主进程序列化 + IPC 传输 + 渲染层反序列化每秒都要跑一遍，
+    // 隐藏期间白白占用两个进程，用户再点托盘唤出时 show() 要排在积压的工作后面 → 表现为"要等很久"。
     setInterval(function () {
+      if (document.hidden) return;   // 隐藏期间不轮询；重新可见时由 visibilitychange 立即补一次
       if (api.list_tasks) api.list_tasks().then(renderTasks).catch(function () {});
     }, 1000);
+    // 恢复到可见的那一刻立刻拉一次，避免"刚唤出时还显示着隐藏前的旧内容"
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) return;
+      if (api.list_tasks) api.list_tasks().then(renderTasks).catch(function () {});
+    });
   }
   document.addEventListener('DOMContentLoaded', init);
 })();

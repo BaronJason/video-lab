@@ -2,13 +2,22 @@
 // Video Lab — Electron 主进程
 'use strict';
 
+// ── 启动阶段计时 ──
+// 冷启动慢的排查长期缺少数据：日志只记了「什么时候启动」，没记「各阶段花了多久」，
+// 导致每次优化都靠猜。这里从进程第一行起就开始计时，whenReady → 窗口可见 → 后端就绪
+// 各阶段耗时统一落到运行日志的 app.timing 事件，下次再有人说慢可以直接看数。
+const _BOOT_T0 = process.hrtime.bigint();
+function bootMs() { return Number(process.hrtime.bigint() - _BOOT_T0) / 1e6; }
+
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu, Tray, nativeImage, net, screen } = require('electron');
+const _bootReqElectron = bootMs();
 const { Api, DEFAULT_CONFIG } = require('./backend');
 const { startHttpServer } = require('./server');
+const _bootReqBackend = bootMs();
 // 内嵌 HTTP 服务器：浏览器访问 http://localhost:<port> 获得与本体等价的功能
 let httpServerInfo = null; // { ok, port, token, url, broadcastAll, close }
 // 浏览器访问地址：优先取内存运行态；服务器已停/未启动时回退到 config.json 的 http_token 重建链接
@@ -142,10 +151,13 @@ const storageDir = () => path.dirname(configFilePath());
 const runLog = require(path.join(resolveEnginesDir(), 'base', 'runlog.js'));
 runLog.init(path.join(storageDir(), 'log'));
 const _pruned = runLog.pruneOld();
+const _bootLogReady = bootMs();
 runLog.sys('app.start',
   '启动 · 版本 ' + app.getVersion() + ' · ' + (app.isPackaged ? (IS_PORTABLE ? '便携形态' : '安装形态') : '源码形态')
   + (_pruned.removed ? ' · 已清理 ' + _pruned.removed + ' 个过期日志' : ''),
   { version: app.getVersion(), packaged: app.isPackaged, portable: IS_PORTABLE, storageDir: storageDir(), enginesDir: resolveEnginesDir(), keepDays: runLog.KEEP_DAYS });
+runLog.sys('app.timing', '启动阶段 · 日志就绪',
+  { electronReq: Math.round(_bootReqElectron), backendReq: Math.round(_bootReqBackend), logReady: Math.round(_bootLogReady) });
 
 // ── IPC 统一留痕：一处覆盖全部通道 ──
 // 回答"用户到底点了什么"——任务窗口与主窗口的写操作都会经过这里，
@@ -369,9 +381,19 @@ function trayIcon() {
   return img.isEmpty() ? nativeImage.createEmpty() : img;
 }
 function showMainWindow() {
-  if (!mainWin || mainWin.isDestroyed()) createWindow();
+  // 托盘唤出计时：用户反馈「点托盘要等很久」，这里记录从点击到窗口真正显示的耗时，
+  // 区分「窗口需重建（重 loadFile，慢）」与「窗口仅被隐藏（应 <100ms）」两种情况
+  const _t = process.hrtime.bigint();
+  const needRebuild = !mainWin || mainWin.isDestroyed();
+  if (needRebuild) createWindow();
   mainWin.show();
   mainWin.focus();
+  const ms = Number(process.hrtime.bigint() - _t) / 1e6;
+  try {
+    runLog.sys('app.timing', '托盘唤出主窗口'
+      + (needRebuild ? '（窗口已销毁 → 重建）' : '（窗口仅隐藏 → 直接显示）'),
+      { costMs: Math.round(ms), rebuilt: needRebuild });
+  } catch (e) {}
 }
 function createTray() {
   if (!tray) {
@@ -1761,11 +1783,40 @@ function createWindow() {
   mainWin = new BrowserWindow({ title: 'Video Lab', width: 1360, height: 860, minWidth: 1120, minHeight: 700, frame: false, show: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
   mainWin.loadFile(path.join(__dirname, 'frontend', 'index.html'));
   // 普通启动：页面就绪后显示；开机自启（--autostart）保持隐藏，仅托盘常驻
-  mainWin.once('ready-to-show', () => { if (!IS_AUTOSTART) mainWin.show(); });
+  mainWin.once('ready-to-show', () => {
+    logTiming('主窗口 ready-to-show（首帧可显示）');
+    if (!IS_AUTOSTART) mainWin.show();
+  });
   mainWin.on('close', (e) => {
     if (!isQuitting) { e.preventDefault(); handleMainWindowClose(); }
   });
   mainWin.on('closed', () => { mainWin = null; });
+}
+
+// 启动阶段计时落日志（app.timing）：冷启动排查的唯一数据来源，避免今后只能靠体感猜
+function logTiming(label) {
+  try { runLog.sys('app.timing', '启动阶段 · ' + label, { sinceProcessStart: Math.round(bootMs()) }); } catch (e) {}
+}
+
+// 窗口渲染完成后再执行后台初始化：把重活（读任务日志、起 HTTP、建托盘）排到窗口可见之后，
+// 使其不再叠加到「点了图标迟迟不出窗口」的体感上。
+// ⚠ 不能用 ready-to-show 作为唯一触发：开机自启场景窗口从不 show，"首帧显示"语义不成立；
+// 用 did-finish-load（页面加载完成，与窗口是否可见无关）保证两种启动方式都能及时触发。
+// 另加 3 秒兜底：页面加载异常时也不能把后续初始化永久挂住。
+let _afterLoadDone = false;
+const _afterLoadQueue = [];
+function runAfterWindowLoad(fn) {
+  if (_afterLoadDone) { setTimeout(fn, 0); return; }
+  _afterLoadQueue.push(fn);
+  if (_afterLoadQueue.length > 1) return;
+  const flush = () => {
+    if (_afterLoadDone) return;
+    _afterLoadDone = true;
+    for (const f of _afterLoadQueue.splice(0)) { try { f(); } catch (e) {} }
+  };
+  const wc = mainWin && !mainWin.isDestroyed() ? mainWin.webContents : null;
+  if (wc) wc.once('did-finish-load', () => setImmediate(flush));
+  setTimeout(flush, 3000);   // 兜底
 }
 
 // 首次引导窗口：工作路径缺失时打开（仿设置页样式），用户主动点按钮才弹资源管理器；
@@ -1796,24 +1847,32 @@ app.whenReady().then(async () => {
   try { app.setAppUserModelId('com.videolab.manager'); } catch (e) {}
   Menu.setApplicationMenu(null);
   registerIpc();
-  await ensureConfig();
-  createTray();
+  logTiming('whenReady 后 注册 IPC 完成');
+  // ── 启动顺序原则：**能在窗口显示后做的，绝不放在窗口显示前** ──
+  // 早期实现把 ensureConfig / createTray / createWindow / HTTP / restoreTasks 全串在这里，
+  // 任一环节慢都会直接叠加到「点了图标迟迟不出窗口」的体感上（而 restoreTasks 要读上百条任务日志）。
+  // 现在只保留「窗口必须先有的最小集」，其余一律在首帧之后再跑。
   createWindow();
-  // 启动内嵌 HTTP 服务器：浏览器访问 http://localhost:<port> 获得与本体等价的功能
-  // （含首次固定 token 生成与持久化；save_settings 变更端口/令牌后调用同一函数重启生效）
-  restartHttpServer();
-  // 开机自启（--autostart）：窗口已通过 show:false + ready-to-show 保持隐藏，进程静默常驻托盘
-  if (IS_AUTOSTART && mainWin && !mainWin.isDestroyed()) {
-    mainWin.hide();
-  }
-  // 启动自动检查更新（仅检查；UPDATE_ENABLED=false 时便携版静默停用）
-  if (UPDATE_ENABLED && mainWin && !mainWin.isDestroyed()) {
-    mainWin.webContents.once('did-finish-load', () => {
-      if (config.auto_check_update !== false) checkForUpdate({ silent: true });
+  logTiming('主窗口已创建（loadFile 已发起）');
+  // 开机自启（--autostart）：进程静默常驻托盘，窗口保持隐藏
+  runAfterWindowLoad(() => {
+    ensureConfig().catch(() => {});   // 首次引导窗口（配置缺失时）：必须在窗口加载后，避免阻塞启动
+    try { createTray(); } catch (e) {}
+    restartHttpServer();              // 内嵌 HTTP 服务器：浏览器访问 http://localhost:<port>
+    if (IS_AUTOSTART && mainWin && !mainWin.isDestroyed()) mainWin.hide();
+    logTiming('窗口加载后：托盘 / HTTP 就绪');
+    // 启动自动检查更新（仅检查；UPDATE_ENABLED=false 时便携版静默停用）
+    if (UPDATE_ENABLED && mainWin && !mainWin.isDestroyed()) {
+      if (config.auto_check_update !== false) setTimeout(() => checkForUpdate({ silent: true }), 3000);
       scheduleDailyUpdateCheck();
-    });
-  }
-  api.restoreTasks(); // 恢复上次会话的任务列表（退出时已做中断/暂停转换）
+    }
+    // 任务列表恢复：读上百条任务日志，是最重的一步 —— 放到窗口加载后且让出一轮事件循环，
+    // 保证窗口已经画出来再占用主进程（原先它排在 createWindow 之前，直接拖慢每次冷启动）
+    setTimeout(() => {
+      try { api.restoreTasks(); } catch (e) {}
+      logTiming('窗口加载后：任务列表已恢复');
+    }, 0);
+  });
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on('before-quit', (e) => {

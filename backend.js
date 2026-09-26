@@ -111,14 +111,35 @@ const DEFAULT_CONFIG = {
   },
 };
 
+// ── 文本内容缓存后端（由 Api 在缓存库可用后注入）──────────────────────
+// 用户指示（2026-09-26）：「把需要 io 的部分全部缓存化，txt 路径以及里面的全部内容」。
+// 把缓存能力**下沉到 readText 本身**，而不是逐处调用点打补丁 ——
+// 于是配置、日志、索引等**所有** TXT 读取自动获得「指纹一致即零文件读取」的能力。
+const TEXT_CACHE_MAX_BYTES = 1024 * 1024;   // 超过 1MB 的文本不缓存（避免库体积失控）
+let _textCacheBackend = null;               // { get(path, fp) -> string|null, put(path, fp, text) }
+
 function readText(filePath, fallback = 'utf-8') {
+  const full = filePath == null ? '' : String(filePath);
+  const be = _textCacheBackend;
+  let fp = '';
+  if (be && full) {
+    try {
+      const st = fs.statSync(full);
+      if (st.isFile() && st.size <= TEXT_CACHE_MAX_BYTES) fp = String(st.mtimeMs) + ':' + String(st.size);
+    } catch (e) { fp = ''; }
+    if (fp) {
+      try { const hit = be.get(full, fp); if (hit != null) return hit; } catch (e) {}   // ★ 命中：零文件读取
+    }
+  }
   let buf;
-  try { buf = fs.readFileSync(filePath); } catch (e) { return ''; }
+  try { buf = fs.readFileSync(full); } catch (e) { return ''; }
   const encodings = [fallback, 'utf-8', 'gbk', 'utf-16le'];
   for (const enc of encodings) {
     try {
       const s = new TextDecoder(enc, { fatal: true }).decode(buf);
-      return s.replace(/^\uFEFF/, '');
+      const text = s.replace(/^\uFEFF/, '');
+      if (fp && be) { try { be.put(full, fp, text); } catch (e) {} }                     // 读后写回（含解析结果保留）
+      return text;
     } catch (e) { continue; }
   }
   return '';
@@ -321,7 +342,8 @@ class Api {
     this.onScanProgress = null;   // 各扫描/重建环节进度回调（main 注入，推送主窗口渲染实时状态）
     this._precheckToken = 0;      // 预检测取消令牌：token 变化即中断旧探测（重置/换路径/手动取消）
     this._inlineProbing = 0;      // 行内预检测进行中计数：后台大探测遇其让路，保证用户操作优先
-    this._cleanupStaleLocks();    // 启动时清掉历史残留的过期锁（异常退出留下的，否则一直累积）
+    // 过期锁清理移入空闲队列（见 restoreTasks 末尾）：启动期不做同步扫盘。
+    // 锁残留只是历史垃圾，不影响功能 —— 晚清理无妨，但绝不该占用启动路径。
     this._loadAppSettings();      // 应用级设置：settings.db 为主（config 只作兼容回退）
     // ffprobe 探测并发上限：保持低值，避免占用过多 CPU/IO 拖慢整机
     this.probeConcurrency = 4;
@@ -578,10 +600,51 @@ class Api {
     }
   }
 
-  // 配置文件写操作统一收口：清缓存 + 广播，前端据此即时自愈版本/日期分支/侧栏徽章
-  _markConfigModified() {
+  // 配置文件写操作统一收口：清缓存 + 广播，前端据此即时自愈版本/日期分支/侧栏徽章。
+  // ⚠ 关键（2026-09-26 修复「刚存的配置前端没更新」）：
+  //   ① 关闭启动快速路径 —— 用户已在交互，此后必须按真实语义读取，不能继续吃启动期读入的缓存；
+  //   ② 传入具体文件路径时**就地并入**配置树缓存（新增/修改/删除都能立刻反映，且无需全量重扫）；
+  //   ③ 未传路径（删除分支 / 重命名 / 水印批量替换等）→ **清掉持久化配置树**，
+  //      下次读取必然重扫，宁可慢一点也不能显示陈旧内容
+  //      （注意：这类操作常发生在二级/三级目录，**不会改变一级目录 mtime**，靠指纹发现不了）。
+  _markConfigModified(...paths) {
+    this._bootFast = false;
+    const list = paths.filter(Boolean);
+    let merged = 0;
+    for (const p of list) { try { if (this._upsertTxtTreeEntry(p)) merged++; } catch (e) {} }
+    if (!list.length || merged < list.length) {
+      // 有未并入的变更（或批量变更）→ 丢弃持久化配置树，保证下次读取是真扫结果
+      try { if (this._useDbCache()) this._cacheStore.removeKv('txt_tree:' + this.root); } catch (e) {}
+    }
     this._invalidateCaches();
     if (typeof this.onVersionsChanged === 'function') { try { this.onVersionsChanged(); } catch (e) {} }
+  }
+
+  // 配置写操作后把该文件**就地并入**配置树缓存（增量刷新）：
+  // 列表与版本立刻反映新/改/删的配置，无需等下一次全量扫描。返回是否已并入。
+  _upsertTxtTreeEntry(filePath) {
+    if (!Array.isArray(this._txtTree) || this._txtTreeRoot !== this.root) return false;
+    const full = path.resolve(String(filePath || ''));
+    const rel = path.relative(this.root, full);
+    if (!rel || rel.startsWith('..')) return false;
+    const segs = rel.split(path.sep);
+    if (segs.length < 2) return false;                        // 必须位于一级项目目录下才算配置
+    const pdir = path.join(this.root, segs[0]);
+    const name = path.basename(full, path.extname(full));
+    const parts = segs.slice(1, -1);
+    const idx = this._txtTree.findIndex((t) => t && t.full === full);
+    let st = null;
+    try { st = fs.statSync(full); } catch (e) { st = null; }
+    if (!st) {                                                // 文件已不在 → 从缓存移除
+      if (idx < 0) return false;
+      this._txtTree.splice(idx, 1);
+    } else {
+      const entry = { pdir, name, full, parts, mtimeMs: st.mtimeMs, size: st.size, hash: this._hashFor(full, st.mtimeMs, st.size) };
+      if (idx >= 0) this._txtTree[idx] = entry; else this._txtTree.push(entry);
+    }
+    this._saveTxtTree(this._txtTree, this._txtTreeFp || '');
+    this._projectsCache = null;                               // 项目列表缓存作废，下次重建即含新项
+    return true;
   }
 
   // ── 扫描指纹缓存（scan_cache 表）：文件 (mtime,size) 未变则复用已算的 hash，变了才重读 ──
@@ -1511,7 +1574,7 @@ class Api {
     const text = this._rewriteText(folders, excludes, watermark);
     fs.writeFileSync(filePath, text, 'utf-8');
     this._putConfigCache(filePath, text, this._parseConfigText(filePath, text));   // 保存即更新内容缓存（下次打开零 IO）
-    this._markConfigModified();
+    this._markConfigModified(filePath);   // 传入路径 → 就地并入配置树，列表/版本立刻可见（无需重扫）
     return { ok: true, path: filePath };
   }
 
@@ -1528,7 +1591,7 @@ class Api {
     const text = this._rewriteText(folders, excludes, watermark);
     fs.writeFileSync(filePath, text, 'utf-8');
     this._putConfigCache(filePath, text, this._parseConfigText(filePath, text));
-    this._markConfigModified();
+    this._markConfigModified(filePath);
     return { ok: true, path: filePath };
   }
 
@@ -1553,7 +1616,7 @@ class Api {
       const text = this._rewriteText([], [], watermark);
       fs.writeFileSync(filePath, text, 'utf-8');
       this._putConfigCache(filePath, text, this._parseConfigText(filePath, text));
-      this._markConfigModified();
+      this._markConfigModified(filePath);
       return { ok: true, path: filePath, name, watermark };
     } catch (e) { return { ok: false, error: String(e) }; }
   }
@@ -1655,6 +1718,21 @@ class Api {
     this._cacheStore = store;
     this._cacheBackendMode = store ? 'db' : 'mem';
     if (!store) console.error('[cache] 缓存库不可用，本次会话退化为纯内存（出片不受影响）');
+    // 注入文本内容缓存后端：此后所有 readText（配置/日志/索引）命中即零文件读取。
+    // 与 readConfig 共用 txt_content 表：写回时**保留已有的解析结果**（指纹一致才保留），互不破坏。
+    if (store) {
+      _textCacheBackend = {
+        get: (p, fp) => {
+          const row = store.txtGet(p);
+          return (row && row.fp === fp && row.raw) ? row.raw : null;
+        },
+        put: (p, fp, text) => {
+          const prev = store.txtGet(p);
+          const parsed = (prev && prev.fp === fp) ? (prev.parsed || '') : '';
+          store.txtPut(p, fp, text, parsed, Date.now());
+        },
+      };
+    }
     return !!store;
   }
 
@@ -3313,6 +3391,8 @@ class Api {
     // 其余待校验项**只入队**（空闲队列串行执行，见 _prewarmHasOutputAsync / _idleKick）
     try { this._loadHasOutputFromStore(); } catch (e) {}
     try { this._prewarmHasOutputAsync(); } catch (e) {}
+    // 维护性任务统一入队（启动期不做任何同步扫盘）：过期锁清理等
+    try { this._idleEnqueue('cleanlocks:' + this.root, () => this._cleanupStaleLocks()); } catch (e) {}
   }
   // 启动后异步预热「成片是否仍在磁盘」判定所需的目录/文件元数据（restoreTasks 的延后部分）。
   // 为什么需要：_taskHasOutput 是**同步**判定（被 snapshotTasks 逐任务调用），而历史任务的成片
@@ -6102,6 +6182,24 @@ let themes = [];
       const c = this._envProbeCache;
       return Promise.resolve(finish(c.missing.slice(), c.missingEncoders.slice(), false, ''));
     }
+    // 持久化命中（verify_cache 的 env:ffmpeg，按 ffmpeg 路径 + size/mtime 指纹）：
+    // 启动期直接复用上次结论 —— **不再起 ffmpeg 进程**（实测省 347ms，且彻底消除冷态超时误报）。
+    if (fp && this._useDbCache() && this._cacheStore && typeof this._cacheStore.verifyGetMany === 'function') {
+      try {
+        const row = this._cacheStore.verifyGetMany('env:ffmpeg').get('env:ffmpeg');
+        if (row && row.fp === fp && row.result) {
+          const c = JSON.parse(row.result) || {};
+          const missing = Array.isArray(c.missing) ? c.missing : [];
+          const missingEncoders = Array.isArray(c.missingEncoders) ? c.missingEncoders : [];
+          this._envProbeCache = { fp, missing: missing.slice(), missingEncoders: missingEncoders.slice(), at: Date.now() };
+          const r = finish(missing, missingEncoders, false, '');
+          try {
+            if (this._lg) this._lg('SYS', 'env.probe', 'FFmpeg 环境探测 · 命中缓存（未启动 ffmpeg 进程）· 缺滤镜 ' + missing.length + ' 项 / 缺编码器 ' + missingEncoders.length + ' 项', { cached: true });
+          } catch (e) {}
+          return Promise.resolve(r);
+        }
+      } catch (e) {}
+    }
     if (this._envProbeInflight) return this._envProbeInflight;   // 并发合并：同时多处调用只跑一轮
     const startedAt = Date.now();
     const run = (args) => new Promise((resolve) => {
@@ -6132,6 +6230,13 @@ let themes = [];
       this._envProbeCache = probeFailed
         ? null
         : { fp, missing: missing.slice(), missingEncoders: missingEncoders.slice(), at: Date.now() };
+      // 成功结论**持久化**（按 ffmpeg 路径 + size/mtime 指纹）：下次启动直接复用，不再起 ffmpeg 进程。
+      // 失败仍不写（见上），避免把冷态误判钉死。
+      if (!probeFailed && fp && this._useDbCache() && this._cacheStore && typeof this._cacheStore.verifyPut === 'function') {
+        try {
+          this._cacheStore.verifyPut('env:ffmpeg', fp, JSON.stringify({ missing: missing.slice(), missingEncoders: missingEncoders.slice() }), 0, Date.now());
+        } catch (e) {}
+      }
       this._envProbeInflight = null;
       const r = finish(missing, missingEncoders, probeFailed, probeReason);
       this._logEnvProbe(r, Date.now() - startedAt);

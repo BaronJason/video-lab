@@ -571,6 +571,28 @@ const GITEE_API_URL = 'https://gitee.com/api/v5/repos/' + GITEE_REPO + '/release
 function currentUpdateSource() {
   return (loadConfig().update_source === 'github') ? 'github' : 'gitee';
 }
+// 更新源/更新方式即时落盘：设置页「检查更新」按界面当前选中值执行，
+// 避免「切了仓库没保存就检查」时静默沿用旧值（用户看到的与实际的必须一致）。
+// 仅接受合法值，非法/缺省不改动 —— 只覆盖这两个字段，其余设置保持原样。
+function applyUpdatePref(pref) {
+  const cfg = loadConfig();
+  let changed = false;
+  if (pref && typeof pref === 'object') {
+    if (pref.update_source === 'github' || pref.update_source === 'gitee') {
+      if (cfg.update_source !== pref.update_source) { cfg.update_source = pref.update_source; changed = true; }
+    }
+    if (pref.update_mode === 'auto' || pref.update_mode === 'notify') {
+      if (cfg.update_mode !== pref.update_mode) { cfg.update_mode = pref.update_mode; changed = true; }
+    }
+  }
+  if (changed) {
+    saveConfig(cfg);
+    Object.assign(config, cfg);
+    scheduleDailyUpdateCheck();   // 与 save_settings 保持一致：更新方式变化后重排定时检查
+    writeUpdateLog('更新偏好即时生效：source=' + currentUpdateSource() + ' mode=' + (cfg.update_mode === 'auto' ? 'auto' : 'notify'));
+  }
+  return { ok: true, changed, update_source: currentUpdateSource(), update_mode: cfg.update_mode === 'auto' ? 'auto' : 'notify' };
+}
 // 根据更新源生成检查地址：码云直连不打加速前缀，GitHub 走原加速链
 function updateCheckUrls() {
   if (currentUpdateSource() === 'github') return accelUrls(UPDATE_API_URL);
@@ -738,19 +760,23 @@ async function checkForUpdate(opts) {
     lastUpdateInfo = info;
     writeUpdateLog('检查成功：current=' + APP_VERSION + ' latest=v' + tag + ' hasUpdate=' + hasUpdate + ' (' + (Date.now() - t0) + 'ms)');
     if (hasUpdate) {
-      if (!silent) sendToSettings('check_update_result', info);
       if (asset || parts.length) {
         // 更新方式=自动检查并下载：发现新版本立即自动下载，不弹「发现新版本」提示条；
         // 进度直接走主窗口状态栏，下载完成后再弹「更新并重启」操作条；启动/定时/手动检查均生效
         if (loadConfig().update_mode === 'auto') {
           info.autoDownload = true;
+          // 回执要先于自动下载发出：否则设置页一直停在「正在检查更新…」等下载完成
+          if (!silent) sendToSettings('check_update_result', info);
           writeUpdateLog('更新方式=自动下载，发现 v' + tag + ' 开始自动下载');
           startUpdate().catch((e) => writeUpdateLog('自动下载异常：' + ((e && e.message) || e)));
           return info;
         }
+        if (!silent) sendToSettings('check_update_result', info);
         if (notifyMain) sendToMain('update_available', info);
-      } else if (!silent && notifyMain) {
-        sendToMain('update_none', Object.assign({}, info, { message: '发现新版本，但 Release 缺少便携包' }));
+      } else {
+        // 发现新版本但资产不全：同样要回执，否则设置页状态停在「正在检查更新…」不收敛
+        if (!silent) sendToSettings('check_update_result', Object.assign({}, info, { noAsset: true }));
+        if (!silent && notifyMain) sendToMain('update_none', Object.assign({}, info, { message: '发现新版本，但 Release 缺少便携包' }));
       }
     } else {
       if (!silent) sendToSettings('check_update_result', info);
@@ -1211,6 +1237,8 @@ function buildHttpExtraRoutes() {
       const silent = !!args[0];
       return checkForUpdate({ silent: silent, notifyMain: true });
     },
+    // 浏览器侧同样支持「检查更新前先让更新源/方式即时生效」（与 IPC 路径共用同一处理函数）
+    apply_update_pref: (args) => applyUpdatePref(args[0]),
     respond_discard_config: (args) => {
       // 浏览器侧响应未保存确认：简化处理（浏览器侧无关闭流程，直接返回成功）
       return { ok: true };
@@ -1511,6 +1539,8 @@ function registerIpc() {
     const fromSettings = !!(settingsWin && !settingsWin.isDestroyed() && e.sender === settingsWin.webContents);
     return checkForUpdate({ silent: !!silent, notifyMain: !fromSettings });
   });
+  // 设置页：更新源/更新方式即时落盘（检查更新前调用，使界面当前选中值立刻生效）
+  ipcMain.handle('apply_update_pref', (e, pref) => applyUpdatePref(pref));
   // 主窗口状态栏：当前应用版本号（左下角常驻显示）
   ipcMain.handle('get_app_version', () => APP_VERSION);
   // 开机自启动开关（独立读写，设置页「通用设置」可用；openAtLogin + --autostart 静默托盘启动）

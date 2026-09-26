@@ -113,6 +113,7 @@ contextBridge.exposeInMainWorld('txapi', {
   clean_duplicate_star: (commit) => invoke('clean_duplicate_star', commit),
   open_external: (url) => invoke('open_external', url),
   check_update: (silent) => invoke('check_update', !!silent),
+  apply_update_pref: (pref) => invoke('apply_update_pref', pref),
   get_runtime: () => invoke('get_runtime'),
   get_app_version: () => invoke('get_app_version'),
   get_browser_url: () => invoke('get_browser_url'),

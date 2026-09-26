@@ -643,17 +643,30 @@
     }
     function hideUpdateConfirm() { var m = $('updateConfirmMask'); if (m) m.style.display = 'none'; }
     if (cu) cu.addEventListener('click', function () {
+      // 检查更新按界面当前选中值执行：先让「仓库选择 / 更新方式」即时落盘，
+      // 否则切了仓库没保存就点这里，后端仍按旧配置检查，用户看到的与实际的会不一致。
+      var srcNow = document.querySelector('input[name="updateSource"]:checked');
+      var modeNow = document.querySelector('input[name="updateMode"]:checked');
+      var pref = {
+        update_source: srcNow ? srcNow.value : 'gitee',
+        update_mode: modeNow ? modeNow.value : 'notify'
+      };
+      var srcLabel = pref.update_source === 'github' ? 'GitHub' : '码云（Gitee）';
       setStatus('正在检查更新…', true);
-      api.check_update(false).then(function (info) {
-        if (!info) { setStatus('检查更新失败', false); return; }
-        if (info.busy) { setStatus('已有更新操作进行中，请稍候', true); return; }
-        if (info.hasUpdate) {
-          if (info.autoDownload) setStatus('发现新版本 v' + info.latest + '，已自动开始下载，进度见主窗口状态栏', true);
-          else showUpdateConfirm(info);
-        }
-        else if (info.ok) setStatus('已是最新版本 v' + info.current, true);
-        else setStatus('检查更新失败：' + (info.error || '未知错误'), false);
-      }).catch(function () { setStatus('检查更新失败', false); });
+      var applyPref = (api && api.apply_update_pref) ? api.apply_update_pref(pref) : Promise.resolve(null);
+      applyPref.catch(function () { return null; }).then(function () {
+        api.check_update(false).then(function (info) {
+          if (!info) { setStatus('检查更新失败', false); return; }
+          if (info.busy) { setStatus('已有更新操作进行中，请稍候', true); return; }
+          if (info.hasUpdate) {
+            if (info.noAsset) { setStatus('发现新版本 v' + info.latest + '，但发布缺少便携包，请改用' + (pref.update_source === 'github' ? '码云（Gitee）' : 'GitHub') + '源再试', false); return; }
+            if (info.autoDownload) setStatus('发现新版本 v' + info.latest + '，已自动开始下载，进度见主窗口状态栏', true);
+            else showUpdateConfirm(info);
+          }
+          else if (info.ok) setStatus('已是最新版本 v' + info.current + '（' + srcLabel + '源）', true);
+          else setStatus('检查更新失败：' + (info.error || '未知错误'), false);
+        }).catch(function () { setStatus('检查更新失败', false); });
+      });
     });
     var mCancel = $('updateConfirmCancel');
     if (mCancel) mCancel.addEventListener('click', function () { hideUpdateConfirm(); setStatus('已取消更新', true); });

@@ -233,6 +233,7 @@
     clean_duplicate_star: function (commit) { return invokeArgs('clean_duplicate_star', commit); },
     open_external: function (url) { return invokeArgs('open_external', url); },
     check_update: function (silent) { return invokeArgs('check_update', !!silent); },
+    apply_update_pref: function (pref) { return invokeArgs('apply_update_pref', pref); },
     get_runtime: function () { return invoke('get_runtime', []); },
     get_app_version: function () { return invoke('get_app_version', []); },
     start_update: function () { return invoke('start_update', []); },

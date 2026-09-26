@@ -62,25 +62,15 @@
     <section class="settings-view is-active" id="view-general">
       <h2 class="settings-view__title">通用设置</h2>
 
-            <div class="settings-group"><span class="settings-group__title">界面</span></div>
+      <div class="settings-group"><span class="settings-group__title">界面</span></div>
       <div class="form-group">
-        <label class="form-group__label">主题外观</label>
+        <label class="form-group__label">主题</label>
         <div class="theme-row" id="themeRow"></div>
       </div>
 
-            <div class="settings-group"><span class="settings-group__title">路径与数据</span></div>
+      <div class="settings-group"><span class="settings-group__title">路径与数据</span></div>
       <div class="form-group">
-        <label class="form-group__label">工作路径<small>存放各项目文件夹及 TXT 配置</small></label>
-        <div class="dir-row">
-          <input class="form-input" id="cfgRoot" type="text" placeholder="">
-          <button class="btn btn-ghost" data-dir="cfgRoot">选择目录</button>
-        </div>
-      </div>
-
-
-
-      <div class="form-group">
-        <label class="form-group__label">配置和数据保存位置<small>保存后立即生效，配置与缓存库将一并迁移</small></label>
+        <div class="form-group__desc">保存后立即生效，配置与缓存库将一并迁移</div>
         <div class="opt-row">
           <button type="button" class="btn btn-ghost" id="btnOpenCfgDir">打开文件夹</button>
           <span class="opt-path" id="cfgDirPath"></span>
@@ -103,7 +93,7 @@
 
       <div class="settings-group"><span class="settings-group__title">任务通知</span></div>
       <div class="form-group">
-        <label class="form-group__label">任务通知<small>任务失败、或本轮任务全部跑完时，弹 Windows 系统通知提醒</small></label>
+        <div class="form-group__desc">任务失败、或本轮任务全部跑完时，弹 Windows 系统通知提醒</div>
         <div class="opt-row">
           <label class="opt-check">
             <input type="checkbox" id="notifyTaskEnd">
@@ -194,9 +184,9 @@
           <button class="btn" id="btnCheckUpdate" title="立即检查所选更新源（码云/GitHub）是否有新版本">检查更新</button>
         </div>
       </div>
-            <div class="settings-group"><span class="settings-group__title">浏览器访问</span></div>
+      <div class="settings-group"><span class="settings-group__title">浏览器访问</span></div>
 <div class="form-group form-group--http">
-        <label class="form-group__label">浏览器访问<small>本地 HTTP 端口与访问令牌；可自行修改令牌或随机生成，保存后生效</small></label>
+        <div class="form-group__desc">本地 HTTP 端口与访问令牌；可自行修改令牌或随机生成，保存后生效</div>
         <div class="dir-row">
           <span class="form-label-inline">端口</span>
           <input class="form-input form-input--port" id="httpPort" type="number" min="1" max="65535" placeholder="9527" title="浏览器访问端口（1-65535，默认 9527）">
@@ -215,6 +205,15 @@
     <!-- ═══ 批量拼接 ═══ -->
     <section class="settings-view" id="view-batch">
       <h2 class="settings-view__title">批量拼接</h2>
+
+      <div class="settings-group"><span class="settings-group__title">路径</span></div>
+      <div class="form-group">
+        <div class="form-group__desc">批量拼接的工作目录，存放各项目文件夹及 TXT 配置</div>
+        <div class="dir-row">
+          <input class="form-input" id="cfgRoot" type="text" placeholder="">
+          <button class="btn btn-ghost" data-dir="cfgRoot">选择目录</button>
+        </div>
+      </div>
 
             <div class="settings-group"><span class="settings-group__title">命名</span></div>
       <div class="form-group">
@@ -309,9 +308,9 @@
     <section class="settings-view" id="view-mask">
       <h2 class="settings-view__title">遮罩叠加设置</h2>
 
-            <div class="settings-group"><span class="settings-group__title">路径</span></div>
+      <div class="settings-group"><span class="settings-group__title">路径</span></div>
       <div class="form-group">
-        <label class="form-group__label">工作路径<small>存放遮罩的路径，以文件夹区分项目</small></label>
+        <div class="form-group__desc">存放遮罩的路径，以文件夹区分项目</div>
         <div class="dir-row">
           <input class="form-input" id="maskRoot" type="text" placeholder="必填，选择遮罩叠加工作路径">
           <button class="btn btn-ghost" data-dir="maskRoot">选择目录</button>
@@ -371,17 +370,17 @@
     <section class="settings-view" id="view-maintenance" style="display:none">
       <h2 class="settings-view__title">维护</h2>
 
-            <div class="settings-group"><span class="settings-group__title">缓存</span></div>
+      <div class="settings-group"><span class="settings-group__title">缓存</span></div>
       <div class="form-group">
-        <label class="form-group__label">重建预检测缓存<small>清空并重新检测全部素材，视频较多时较耗时。日常无需使用：主窗口侧栏「刷新预缓存」已能更新变化的视频并清理失效缓存，仅当缓存异常或数据不一致时才需要重建。</small></label>
+        <div class="form-group__desc">清空并重新检测全部素材，视频较多时较耗时。日常无需使用：主窗口侧栏「刷新预缓存」已能更新变化的视频并清理失效缓存，仅当缓存异常或数据不一致时才需要重建。</div>
         <div class="opt-row">
           <button class="btn btn-ghost" id="btnRebuildPrecheck">重建</button>
         </div>
       </div>
 
-            <div class="settings-group"><span class="settings-group__title">日志</span></div>
+      <div class="settings-group"><span class="settings-group__title">日志</span></div>
       <div class="form-group">
-        <label class="form-group__label">运行日志<small>逐条记录启动退出、任务执行、删除与配置变更，保留最近 7 天。任务记录和成片都可能被清除，这份日志不会 —— 排查「某次成片去哪了」时从这里查证。</small></label>
+        <div class="form-group__desc">逐条记录启动退出、任务执行、删除与配置变更，保留最近 7 天。任务记录和成片都可能被清除，这份日志不会 —— 排查「某次成片去哪了」时从这里查证。</div>
         <div class="opt-row">
           <button type="button" class="btn btn-ghost" id="btnOpenLogDir">打开文件夹</button>
           <span class="opt-path" id="logDirPath"></span>

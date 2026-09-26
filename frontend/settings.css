@@ -140,6 +140,15 @@ body {
   color: var(--text-tertiary);
   margin-top: 2px;
 }
+/* 无标题设置项的说明行：分组头已经说明了这组是什么，设置项就不必再起一个同义标题
+   （如分组「任务通知」下的设置项再写一遍「任务通知」纯属重复）。
+   此时说明文字直接作为该项的第一行，样式与 label 内的小字保持一致。 */
+.form-group__desc {
+  display: block;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-bottom: 6px;
+}
 .form-input {
   width: 100%;
   box-sizing: border-box;

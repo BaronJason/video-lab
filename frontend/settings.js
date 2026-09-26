@@ -17,7 +17,7 @@
     { id: 'Maid_Atelier', label: '深海女仆', bg: '#0e1d49', theme: '#c5a468' }
   ];
   var state = {
-    batch: { max_duration: '', max_retry: '', speed_limit: '', txt_prefix: [], producer: '', suffix_mark: '' },
+    batch: { root: '', max_duration: '', max_retry: '', speed_limit: '', txt_prefix: [], producer: '', suffix_mark: '' },
     replica: { max_duration: '', speed_limit: '', dedup_ratio: '', dedup_ratio_max: '', dedup_ratio_on: true, dedup_ratio_max_on: true },
     mask: { root: '', watermark_mov: '', watermark_alpha: '' }
   };
@@ -335,7 +335,8 @@
     api.get_settings().then(function (s) {
       if (!s) return;
       setSkin(s.skin);
-      $('cfgRoot').value = s.root || '';
+      // 工作路径属批量拼接（batch.root）：随该页的表单项一起读写
+      $('cfgRoot').value = (s.batch && s.batch.root) || '';
       var chk = $('autoCheckUpdate');
       if (chk) chk.checked = s.auto_check_update !== false;
       var cd = $('checkUpdateDaily');
@@ -567,6 +568,7 @@
 
   function bindSave() {
     $('btnSave').addEventListener('click', function () {
+      state.batch.root = $('cfgRoot').value.trim();
       state.batch.max_duration = $('batchMaxDuration').value.trim();
       state.batch.max_retry = $('batchMaxRetry').value.trim();
       state.batch.speed_limit = $('batchSpeedLimit').value.trim();
@@ -603,7 +605,6 @@
       var cbEl = document.querySelector('input[name="closeBehavior"]:checked');
       api.save_settings({
         skin: skin,
-        root: $('cfgRoot').value.trim(),
         auto_check_update: !!$('autoCheckUpdate').checked,
         check_update_daily: !!$('checkUpdateDaily').checked,
         check_update_hour: parseInt($('checkUpdateHour').value, 10) || 9,

@@ -3177,33 +3177,12 @@
       // 第一步：先扫描配置（force 重扫新路径下的配置列表）
       setStatus('工作路径已切换：' + r.root + '，正在扫描配置…');
       refreshData(true, '正在重新扫描工作路径…', function () {
-        // 第二步：根据新路径下的配置重置预检测（清缓存全量探测，带进度条，参照「重置预检测」）
-        resetPrecheckForPath();
+        // 第二步：**增量**刷新预缓存（不删缓存、只更新变化/缺失的视频并顺带清理失效缓存）。
+        // 全量重建（清空后重新检测全部素材）属低频兜底操作，只在 设置-维护 提供「重建预检测缓存」——
+        // 切换工作路径不该顺带做全量重建（用户定案 2026-09-26）。
+        refreshPrecacheFlow();
       }, false);
     }).catch(function (e) { hideBusy(); setStatus('选择路径失败：' + e.message); });
-  }
-  // 选择路径后的第二步：根据已扫描的配置重置预检测（遮罩进度条实时回报 x/y）
-  function resetPrecheckForPath() {
-    var dismiss = null;
-    var api = getApi();
-    if (api && typeof api.on_reset_progress === 'function') {
-      try { dismiss = api.on_reset_progress(onResetProgress); } catch (e) { dismiss = null; }
-    }
-    var cleanup = function () { state._probeActive = false; if (dismiss) { try { dismiss(); } catch (e) {} dismiss = null; } };
-    state._probeActive = true;
-    state.precheckBackground = false;
-    showBusyProgress('正在根据新路径重置预检测…');
-    call('reset_precheck').then(function (r) {
-      if (state.precheckBackground) hideProbeMini(); else hideBusy();
-      cleanup();
-      setStatusDone('重新检测完成：共检测 ' + ((r && r.total) || 0) + ' 个视频，合规 ' + ((r && r.valid) || 0) + ' 个' + ((r && r.cancelled) ? '（已中断）' : ''));
-      if (state.activeTxt && state.activeVersion) runPrecheck();
-    }).catch(function (e) {
-      hideBusy();
-      cleanup();
-      hideProbeMini();
-      setStatus('重置预检测失败：' + e.message);
-    });
   }
   function flashNeedSelect() { setStatus('请先选择一个 TXT 和日期分支'); }
   // 关闭主窗口行为引导：弹窗选择 退出软件 / 最小化至系统托盘，左下角「不再提醒」复选框持久化
@@ -3857,7 +3836,6 @@
       setStatusDone('列表已刷新');
     }).catch(function () { setStatus('刷新失败'); });
   }
-  // 左下角菜单「重建缓存」：清空本项目持久化缓存并全量重建扫描（已选状态重置）
   // 删除/操作结果告知：轻量 toast 呈现（失败为红、其余为绿），不再开窗打断
   function maskTellResult(title, msg) {
     var t = String(title || '');
@@ -5397,7 +5375,6 @@
       maskRescanCurrent();
       refreshMaskProjects();
     });
-    // 遮罩模式菜单「重建缓存」：清空持久化缓存并全量重建
     // 遮罩模式自愈：低频对比项目列表签名，外部增删主题/项目时自动刷新（对应批量配置自愈轮询）
     setInterval(function () { if (maskOn()) pollMaskSelfHeal(); }, 6000);
   }

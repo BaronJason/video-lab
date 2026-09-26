@@ -52,6 +52,10 @@ const DEFAULT_CONFIG = {
   http_port: 9527,            // 浏览器访问端口（0-65535，默认 9527）
   // video_batch.ps1 顶部全局参数（文件内同名常量被顶部读环境变量 BATCH_* 覆盖）
   batch: {
+    // 工作路径：批量拼接模式自己的工作目录（存放各项目文件夹及 TXT 配置）。
+    // 2026-09-26 从顶层 root 迁移至此 —— 它本就是批量模式的工作目录，放进 batch 与遮罩的
+    // mask.root 对称；各模式的工作目录由各模式自己承接。（旧顶层 root 由 main 启动时一次性迁移）
+    root: '',
     max_duration: 179,   // MaxTotalDurationSec 最大成片时长(秒)
     max_retry: 45,       // MaxRetry 重试次数
     speed_limit: 1.2,    // SpeedThreshold 倍速阈值
@@ -167,6 +171,37 @@ function walkFiles(dir) {
   return out;
 }
 
+// 异步遍历（启动路径专用）：用 fs.promises 读目录，每处理 yieldEvery 个条目让出一轮事件循环，
+// 使主进程在扫描期间仍能响应 IPC / 重绘（同步版会整段占死，表现为窗口无响应、进度条不动）。
+// onTick(processed) 用于上报进度，返回 false 可中断遍历（取消语义）。
+async function walkFilesAsync(dir, opts) {
+  const yieldEvery = (opts && opts.yieldEvery) || 60;
+  const onTick = (opts && opts.onTick) || null;
+  const shouldStop = (opts && opts.shouldStop) || null;
+  const out = [];
+  const stack = [dir];
+  let since = 0;
+  while (stack.length) {
+    if (shouldStop && shouldStop()) return out;
+    const cur = stack.pop();
+    let entries;
+    try { entries = await fs.promises.readdir(cur, { withFileTypes: true }); } catch (e) { continue; }
+    for (const ent of entries) {
+      const full = path.join(cur, ent.name);
+      if (ent.isDirectory()) stack.push(full);
+      else if (ent.isFile()) out.push(full);
+      if (++since >= yieldEvery) {
+        since = 0;
+        if (onTick) onTick(out.length);
+        await new Promise((r) => setImmediate(r));   // 让位：主进程可处理其他事件
+        if (shouldStop && shouldStop()) return out;
+      }
+    }
+  }
+  if (onTick) onTick(out.length);
+  return out;
+}
+
 // 按内容 hash 去重（保留排序后的第一个），用于同类别（成片内/成片外）配置 txt 合并
 function dedupeByHash(list) {
   const seen = new Set();
@@ -275,6 +310,9 @@ class Api {
     setImmediate(() => { this._gcVideoCacheNow().catch(() => {}); });
     this._txtTreeRoot = null;
     this._projectsCache = null;
+    this._projectsInflight = null;   // 进行中的 listProjectsAsync（并发合并，避免同一份扫描跑多遍）
+    this._projectsSeq = 0;           // 刷新代际：force 后令在跑的旧任务结果作废
+    this._lastFreshTiming = null;    // isScanCacheFreshAsync 的分段耗时，供启动日志定位瓶颈
     this._versionsCache = new Map();
     this._versionsFp = new Map(); // 各配置版本列表的「目录级指纹」，list_versions 入口核对自动失效
     this._scanCache = new Map();
@@ -300,6 +338,11 @@ class Api {
     // 计划序号：新建任务入队时递增分配，暂停任务保留、启动任务移除、拖拽/置顶重排后重算。
     // UI 显示与「继续」插队位置都以此为准（暂停任务随队列推进自然前移，成为下一个后停住，新任务可越过）
     this._planSeq = 0;
+    // 启动恢复期抑制标志：为真时 _taskHasOutput 直接给乐观值，绝不做同步磁盘探测。
+    // 起因（2026-09-26 冷态实测）：历史任务的成片目录多在机械盘（115 任务里 66 个在 E 盘），
+    // 冷启动首次访问每个目录约 87ms，snapshotTasks 逐任务同步探测会冻结主进程约 5.7 秒。
+    // 由 restoreTasks 置真、_prewarmHasOutputAsync 预热完成后复位（详见两处注释）。
+    this._bootProbeSuppressed = false;
   }
 
   // ── 库路径：两个库与引导文件同目录（扁平布局），一律由 storageDir 派生，不做重算 ──
@@ -469,14 +512,23 @@ class Api {
   }
 
   // 清理项目/TXT 相关内存缓存（保存配置、重建列表时调用；不清持久化指纹缓存）
-  _invalidateCaches() {
+  // 清理项目/TXT 相关内存缓存（保存配置、重建列表时调用；不清持久化指纹缓存）
+  // dropPersist=true 时连持久化条目一并删除 —— 供「强制重扫」（force）使用：
+  //   否则内存清了、持久化指纹仍在，重扫会直接读回旧缓存，force 语义失效。
+  _invalidateCaches(dropPersist = false) {
     this._txtTree = null;
     this._txtTreeRoot = null;
     this._projectsCache = null;
+    this._projectsInflight = null;
+    this._projectsSeq = (this._projectsSeq || 0) + 1;   // 在跑的旧任务结果作废
     this._versionsCache.clear();
     this._versionsFp.clear();
     this._logCache = null;
     this._logCacheRoot = '';
+    if (dropPersist && this._useDbCache()) {
+      try { this._cacheStore.removeKv('log_index:' + this.root); } catch (e) {}
+      try { this._cacheStore.removeKv('txt_tree:' + this.root); } catch (e) {}
+    }
   }
 
   // 配置文件写操作统一收口：清缓存 + 广播，前端据此即时自愈版本/日期分支/侧栏徽章
@@ -495,7 +547,7 @@ class Api {
     this._scanRemovedKeys.clear();
     if (!this._useDbCache()) return;
     try {
-      for (const row of this._cacheStore.listScans(this.root + '\u0000')) {
+      for (const row of this._cacheStore.listScans(this.root + '\n')) {
         let extra = {};
         try { extra = JSON.parse(row.payload || '{}') || {}; } catch (e) { extra = {}; }
         this._scanCache.set(row.key, Object.assign({ mtimeMs: 0, size: 0 }, extra, { hash: row.fingerprint }));
@@ -523,31 +575,52 @@ class Api {
   }
 
   // ── 日志 txt 缓存（cache_kv，键 log_index:<root>）：刷新配置时一并收集 ──
+  // 存 { files, fp }：fp = 目录树指纹，用于启动时判断能否直接复用（见 _collectLogFiles）。
+  // 兼容旧格式（纯数组）——读到数组时视为无指纹，回退一次全量扫描后自动升级。
   _loadLogCache() {
     if (this._logCacheRoot === this.root) return;
     this._logCacheRoot = this.root;
-    this._logCache = { files: [] };
+    this._logCache = { files: [], fp: '' };
     if (!this._useDbCache()) return;
     try {
       const raw = this._cacheStore.getKv('log_index:' + this.root);
       if (!raw) return;
-      const files = JSON.parse(raw);
-      if (Array.isArray(files)) this._logCache.files = files;
+      const data = JSON.parse(raw);
+      if (Array.isArray(data)) this._logCache.files = data;                       // 旧格式
+      else if (data && Array.isArray(data.files)) {                               // 新格式
+        this._logCache.files = data.files;
+        this._logCache.fp = String(data.fp || '');
+      }
     } catch (e) {}
   }
 
   _saveLogCache() {
     if (!this._useDbCache()) return;
-    try { this._cacheStore.setKv('log_index:' + this.root, JSON.stringify(this._logCache.files || [])); } catch (e) {}
+    try {
+      const payload = { files: this._logCache.files || [], fp: this._logCache.fp || '' };
+      this._cacheStore.setKv('log_index:' + this.root, JSON.stringify(payload));
+    } catch (e) {}
   }
 
   // 一次性收集根目录下所有非复刻日志 txt（刷新时写入日志缓存）
   // 返回 { files:[{ project, name, path, date, config }] }
   // 归属规则：date 取文件路径中「最近的 4 位 MMdd 目录」（日志绝不会存在于别的日期文件夹），
   //           project 取路径第一级目录（即左侧项目名）。配置与日志都按此规则归一后匹配。
+  //
+  // ⚡ 启动性能（关键）：命中持久化缓存（log_index:<root>）且「根目录树指纹」未变时，
+  //    直接复用缓存返回，**跳过 walkFiles 全量遍历 + 每文件 statSync**。
+  //    原实现虽然 _loadLogCache() 读回了缓存，但紧接着 `const files = []` 丢弃、无条件重扫，
+  //    使持久化缓存形同虚设（冷启动白扫约 6600 个文件、耗时秒级）。
+  //    失效判定用「根目录 + 各一级项目目录的 mtimeMs 摘要」：目录 mtime 对增删子项敏感，
+  //    新增/删除项目或目录即变化；文件内容变化不改目录 mtime，但日志列表只关心「有哪些文件」，
+  //    内容变化不影响本列表（config 归属由路径决定），故无需更细粒度指纹。
   _collectLogFiles(force = false) {
     if (!force && this._logCache && this._logCacheRoot === this.root) return this._logCache;
     this._loadLogCache();
+    if (!force && this._logCache && this._logCacheRoot === this.root && this._logCache.files && this._logCache.files.length) {
+      const fp = this._logTreeFingerprint();
+      if (fp && fp === this._logCache.fp) return this._logCache;   // 缓存有效：免全量遍历
+    }
     const files = [];
     if (this.root && fs.existsSync(this.root)) {
       const skip = new Set(EXCLUDED_TOP_DIRS);
@@ -562,10 +635,51 @@ class Api {
         files.push({ project: rel[0], name: base, path: full, date: this._dateBranchOf(full), config });
       }
     }
-    this._logCache = { files };
+    this._logCache = { files, fp: this._logTreeFingerprint() };
     this._logCacheRoot = this.root;
     this._saveLogCache();
     return this._logCache;
+  }
+
+  // 日志树指纹：根目录 + 各一级目录（排除项除外）的 mtimeMs 摘要。
+  // 目录增删子项会更新父目录 mtime —— 够用且只读少量目录（非全量 walkFiles）。
+  _logTreeFingerprint() {
+    try {
+      const parts = [];
+      const st = fs.statSync(this.root);
+      parts.push(String(st.mtimeMs));
+      const skip = new Set(EXCLUDED_TOP_DIRS);
+      for (const ent of fs.readdirSync(this.root, { withFileTypes: true })) {
+        if (!ent.isDirectory()) continue;
+        if (ent.name.startsWith('.') || ent.name.startsWith('_') || skip.has(ent.name)) continue;
+        let m = '';
+        try { m = String(fs.statSync(path.join(this.root, ent.name)).mtimeMs); } catch (e) { m = '?'; }
+        parts.push(ent.name + ':' + m);
+      }
+      return parts.join('|');
+    } catch (e) { return ''; }
+  }
+
+  // 日志树指纹（异步版）：语义与 _logTreeFingerprint 完全一致，供异步路径使用。
+  // ⚠ 启动路径必须用这个：工作目录在机械盘时，系统重启后首次同步访问该盘可冻结主进程
+  //   达 117 秒（2026-09-26 实测 gapMs=117531：窗口、托盘全都出不来），异步版只让出等待、不阻塞。
+  async _logTreeFingerprintAsync() {
+    try {
+      const parts = [];
+      const st = await fs.promises.stat(this.root);
+      parts.push(String(st.mtimeMs));
+      const skip = new Set(EXCLUDED_TOP_DIRS);
+      let ents = [];
+      try { ents = await fs.promises.readdir(this.root, { withFileTypes: true }); } catch (e) { ents = []; }
+      for (const ent of ents) {
+        if (!ent.isDirectory()) continue;
+        if (ent.name.startsWith('.') || ent.name.startsWith('_') || skip.has(ent.name)) continue;
+        let m = '';
+        try { m = String((await fs.promises.stat(path.join(this.root, ent.name))).mtimeMs); } catch (e) { m = '?'; }
+        parts.push(ent.name + ':' + m);
+      }
+      return parts.join('|');
+    } catch (e) { return ''; }
   }
 
   // 文件所属日期分支：取相对根目录各路径段中「最近的 4 位 MMdd 目录」，否则返回空串
@@ -582,7 +696,10 @@ class Api {
     catch (e) { return ''; }
   }
 
-  _scanKey(full) { return this.root + '\u0000' + full; }
+  // ⚠ 键分隔符禁用 \u0000：SQLite 的 TEXT 在 NUL 处截断，会把所有文件指的纹键
+  //   压成同一个「根目录」字符串（既互相覆盖、又读不回来），导致指纹缓存全量失效。
+  //   改用 \n —— Windows 路径非法字符，路径中不可能出现，语义等价且可安全持久化。
+  _scanKey(full) { return this.root + '\n' + full; }
 
   _hashFor(full, mtimeMs, size) {
     this._loadScanCache();
@@ -597,8 +714,20 @@ class Api {
   }
 
   // 一次性收集根目录下所有项目的配置 TXT（每项目仅递归扫描一次）
+  //
+  // ⚡ 启动性能（关键）：加「持久化指纹复用」。原实现是纯内存缓存（this._txtTree），
+  //    跨启动必然失效 → 每次冷启动都要重新 walkFiles(6600 文件) + 对 1055 个 txt
+  //    逐个 statSync + contentHash（readFileSync 读全内容），实测约 31 秒。
+  //    现改为把结果按「目录树指纹」持久化（cache_kv 的 txt_tree:<root>）：
+  //    指纹未变则直接复用，跳过全部遍历与读文件。
+  //    指纹 = 各一级项目目录的 mtimeMs 摘要 —— 目录增删子项会更新其 mtime，
+  //    足以发现「新增/删除配置或目录」；文件内容变更不改目录 mtime，但内容只用于
+  //    去重（同内容配置保留一份），短暂延后一次不影响列表正确性，且下次任一目录变动即自愈。
   _collectAllTxt() {
     if (this._txtTree && this._txtTreeRoot === this.root) return this._txtTree;
+    const fp = this._logTreeFingerprint();
+    const cached = this._loadTxtTree(fp);
+    if (cached) { this._txtTree = cached; this._txtTreeRoot = this.root; return cached; }
     this._loadScanCache();
     const out = [];
     const active = new Set();
@@ -628,14 +757,239 @@ class Api {
     this._txtTree = out;
     this._txtTreeRoot = this.root;
     if (this._scanDirty) {
-      const prefix = this.root + '\u0000';
+      const prefix = this.root + '\n';
       for (const k of [...this._scanCache.keys()]) {
         if (k.startsWith(prefix) && !active.has(k)) { this._scanCache.delete(k); this._scanRemovedKeys.add(k); }
       }
       this._scanDirty = false;
       this._saveScanCache();
     }
+    this._saveTxtTree(out, fp);
     return out;
+  }
+
+  // 配置 TXT 树持久化（cache_kv，键 txt_tree:<root>）：存 { fp, items }
+  // fp 为目录树指纹，与 _collectAllTxt 传入的一致才复用。库不可用时静默跳过（退化为纯内存）。
+  _loadTxtTree(fp) {
+    if (!fp || !this._useDbCache()) return null;
+    try {
+      const raw = this._cacheStore.getKv('txt_tree:' + this.root);
+      if (!raw) return null;
+      const data = JSON.parse(raw);
+      if (!data || data.fp !== fp || !Array.isArray(data.items)) return null;
+      return data.items;
+    } catch (e) { return null; }
+  }
+
+  _saveTxtTree(items, fp) {
+    if (!this._useDbCache()) return;
+    try {
+      this._cacheStore.setKv('txt_tree:' + this.root, JSON.stringify({ fp: fp || '', items: items || [] }));
+    } catch (e) {}
+  }
+
+  // 扫描缓存是否新鲜（毫秒级）：仅比对目录树指纹，不做任何遍历。
+  // 供 main 判断「启动是否需要弹扫描小窗」——命中则连小窗都不必出现。
+  isScanCacheFresh() {
+    try {
+      if (!this.root) return false;
+      if (!this._useDbCache()) return false;
+      const fp = this._logTreeFingerprint();
+      if (!fp) return false;
+      const rawIdx = this._cacheStore.getKv('log_index:' + this.root);
+      if (!rawIdx) return false;
+      let idx = null;
+      try { idx = JSON.parse(rawIdx); } catch (e) { return false; }
+      if (!Array.isArray(idx) && idx && Array.isArray(idx.files) && idx.fp === fp) return true;
+      const rawTree = this._cacheStore.getKv('txt_tree:' + this.root);
+      if (!rawTree) return false;
+      const t = JSON.parse(rawTree);
+      return !!(t && t.fp === fp && Array.isArray(t.items));
+    } catch (e) { return false; }
+  }
+
+  // 扫描缓存是否新鲜（异步版，启动专用）：判定语义与 isScanCacheFresh 一致，
+  // 但目录树指纹走 fs.promises —— **绝不阻塞主进程事件循环**（同步版曾冻结 117 秒）。
+  // SQLite 读取仍为同步：库在系统盘（SSD）且仅 24MB，实测毫秒级；单独计时便于定位。
+  // 分段耗时写入 this._lastFreshTiming（{ db, fp, kv, total } 毫秒），由 main 落进 app.timing。
+  async isScanCacheFreshAsync() {
+    const timing = { db: 0, fp: 0, kv: 0, total: 0 };
+    const _all = process.hrtime.bigint();
+    const _ms = (t0) => Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
+    // 判定结果落进 _lastFreshTiming.reason：缓存命中（hit:idx / hit:tree）或未命中的具体分支。
+    // 未命中时把关键量（fp 长度、缓存 fp、kv 长度）一并带上，便于一次冷启动就定位到根因。
+    let reason = '';
+    try {
+      if (!this.root) { reason = 'no-root'; return false; }
+      let t0 = process.hrtime.bigint();
+      const useDb = this._useDbCache();
+      timing.db = _ms(t0);
+      if (!useDb) { reason = 'no-db'; return false; }
+      t0 = process.hrtime.bigint();
+      const fp = await this._logTreeFingerprintAsync();
+      timing.fp = _ms(t0);
+      if (!fp) { reason = 'no-fp'; return false; }
+      t0 = process.hrtime.bigint();
+      const rawIdx = this._cacheStore.getKv('log_index:' + this.root);
+      const rawTree = this._cacheStore.getKv('txt_tree:' + this.root);
+      timing.kv = _ms(t0);
+      timing.idxLen = rawIdx ? rawIdx.length : 0;
+      timing.treeLen = rawTree ? rawTree.length : 0;
+      timing.fpLen = fp.length;
+      if (!rawIdx) { reason = 'no-idx'; return false; }
+      let idx = null;
+      try { idx = JSON.parse(rawIdx); } catch (e) { reason = 'idx-bad-json'; return false; }
+      if (!Array.isArray(idx) && idx && Array.isArray(idx.files) && idx.fp === fp) { reason = 'hit:idx'; return true; }
+      timing.idxFpLen = idx && idx.fp ? String(idx.fp).length : 0;
+      if (!rawTree) { reason = 'no-tree'; return false; }
+      const t = JSON.parse(rawTree);
+      if (t && t.fp === fp && Array.isArray(t.items)) { reason = 'hit:tree'; return true; }
+      timing.treeFpLen = t && t.fp ? String(t.fp).length : 0;
+      reason = 'miss-both';
+      return false;
+    } catch (e) {
+      reason = 'throw:' + ((e && e.message) || e);
+      return false;
+    } finally {
+      timing.total = _ms(_all);
+      timing.reason = reason;
+      this._lastFreshTiming = timing;
+    }
+  }
+
+  // 是否已有完整的项目列表结果（供 main 判断「唤起时是否还需要扫描」）
+  get hasProjectsCache() { return !!this._projectsCache; }
+
+  // ── 异步扫描路径（启动专用）──
+  // 与同步版同语义，但全程用 fs.promises + 分片让位，不阻塞主进程事件循环。
+  // 缓存未命中（首次启动 / 目录结构变化）时走这里，窗口可先显示、扫描期间 UI 不卡。
+  async _collectAllTxtAsync(opts) {
+    if (this._txtTree && this._txtTreeRoot === this.root) return this._txtTree;
+    const fp = await this._logTreeFingerprintAsync();
+    const cached = this._loadTxtTree(fp);
+    if (cached) { this._txtTree = cached; this._txtTreeRoot = this.root; return cached; }
+    this._loadScanCache();
+    const out = [];
+    const active = new Set();
+    const onTick = (opts && opts.onTick) || null;
+    const shouldStop = (opts && opts.shouldStop) || null;
+    let rootOk = false;
+    try { const st = await fs.promises.stat(this.root); rootOk = st.isDirectory(); } catch (e) { rootOk = false; }
+    if (rootOk) {
+      let entries = [];
+      try { entries = await fs.promises.readdir(this.root); } catch (e) { entries = []; }
+      for (const name of entries) {
+        if (shouldStop && shouldStop()) break;
+        if (name.startsWith('.') || name.startsWith('_')) continue;
+        if (EXCLUDED_TOP_DIRS.has(name)) continue;
+        const pdir = path.join(this.root, name);
+        let isDir = false;
+        try { isDir = (await fs.promises.stat(pdir)).isDirectory(); } catch (e) { isDir = false; }
+        if (!isDir) continue;
+        const files = await walkFilesAsync(pdir, { onTick, shouldStop });
+        for (const full of files) {
+          if (!path.basename(full).toLowerCase().endsWith('.txt')) continue;
+          if (LOG_NAME_RE.test(path.basename(full))) continue;
+          let st2;
+          try { st2 = await fs.promises.stat(full); } catch (e) { continue; }
+          const mtimeMs = st2.mtimeMs, size = st2.size;
+          const hash = await this._hashForAsync(full, mtimeMs, size);
+          active.add(this._scanKey(full));
+          const rel = path.relative(pdir, path.dirname(full));
+          const parts = rel === '' ? [] : rel.split(path.sep);
+          out.push({ pdir, name: path.basename(full, path.extname(full)), full, parts, mtimeMs, size, hash });
+        }
+      }
+    }
+    this._txtTree = out;
+    this._txtTreeRoot = this.root;
+    if (this._scanDirty) {
+      const prefix = this.root + '\n';
+      for (const k of [...this._scanCache.keys()]) {
+        if (k.startsWith(prefix) && !active.has(k)) { this._scanCache.delete(k); this._scanRemovedKeys.add(k); }
+      }
+      this._scanDirty = false;
+      this._saveScanCache();
+    }
+    this._saveTxtTree(out, fp);
+    return out;
+  }
+
+  // 异步指纹：命中 (mtime,size) 直接复用；未命中才读文件内容算 hash，并周期性让位
+  async _hashForAsync(full, mtimeMs, size) {
+    this._loadScanCache();
+    const key = this._scanKey(full);
+    const cached = this._scanCache.get(key);
+    if (cached && cached.mtimeMs === mtimeMs && cached.size === size) return cached.hash;
+    let h = null;
+    try { h = crypto.createHash('md5').update(await fs.promises.readFile(full)).digest('hex'); } catch (e) { h = null; }
+    this._scanCache.set(key, { mtimeMs, size, hash: h });
+    this._scanDirty = true;
+    this._scanDirtyKeys.add(key);
+    return h;
+  }
+
+  // 异步版 listProjects：缓存命中时与同步版等价（毫秒级）；未命中走异步扫描，不阻塞主进程。
+  // 返回值与 listProjects 完全一致（供 IPC / HTTP 路由替换）。
+  async listProjectsAsync(force = false, opts) {
+    if (force) {
+      this._emitScan('clear');
+      this._invalidateCaches(true);
+      this._rebuildClipIndexAsync();
+      try { setImmediate(() => { this._emitScan('mark'); this._warmWatermarkCache(); }); } catch (e) {}
+    }
+    if (!force && this._projectsCache) return this._projectsCache;
+    // 并发合并：启动预热、托盘唤起、前端 IPC / HTTP 首次加载几乎同时调用，
+    // 不合并则同一份扫描并发跑多遍（各自遍历工作目录 + 读文件），冷态下代价成倍放大。
+    if (!force && this._projectsInflight) return this._projectsInflight;
+    const seq = this._projectsSeq || 0;
+    const run = (async () => {
+      this._emitScan('walk');
+      await this._collectLogFilesAsync(opts);
+      this._emitScan('log');
+      await this._collectAllTxtAsync(opts);
+      this._emitScan('list');
+      const data = this._buildProjectsData();
+      if (seq === (this._projectsSeq || 0)) this._projectsCache = data;   // 期间被 force 刷新过则丢弃本次结果
+      return data;
+    })();
+    if (!force) {
+      this._projectsInflight = run;
+      const clear = () => { if (this._projectsInflight === run) this._projectsInflight = null; };
+      run.then(clear, clear);
+    }
+    return run;
+  }
+
+  // 异步版日志收集：缓存有效则秒回；否则异步遍历
+  async _collectLogFilesAsync(opts) {
+    if (this._logCache && this._logCacheRoot === this.root) return this._logCache;
+    this._loadLogCache();
+    if (this._logCache && this._logCacheRoot === this.root && this._logCache.files && this._logCache.files.length) {
+      const fp = await this._logTreeFingerprintAsync();
+      if (fp && fp === this._logCache.fp) return this._logCache;
+    }
+    const files = [];
+    let rootOk = false;
+    try { rootOk = (await fs.promises.stat(this.root)).isDirectory(); } catch (e) { rootOk = false; }
+    if (rootOk) {
+      const skip = new Set(EXCLUDED_TOP_DIRS);
+      const all = await walkFilesAsync(this.root, opts);
+      for (const full of all) {
+        const base = path.basename(full);
+        if (!base.toLowerCase().endsWith('.txt')) continue;
+        if (!LOG_NAME_RE.test(base)) continue;
+        const config = this._configNameFromLog(full);
+        if (!config) continue;
+        const rel = path.relative(this.root, full).split(path.sep);
+        if (skip.has(rel[0])) continue;
+        files.push({ project: rel[0], name: base, path: full, date: this._dateBranchOf(full), config });
+      }
+    }
+    this._logCache = { files, fp: await this._logTreeFingerprintAsync() };
+    this._logCacheRoot = this.root;
+    this._saveLogCache();
+    return this._logCache;
   }
 
   // 扫描/重建环节状态上报：phase ∈ clear/walk/log/clip/mark/list/done，前端按阶段映射中文提示
@@ -647,7 +1001,7 @@ class Api {
   listProjects(force = false) {
     if (force) {
       this._emitScan('clear');
-      this._invalidateCaches();
+      this._invalidateCaches(true);   // force：连持久化缓存一并清，确保真重扫
       // 重建成片索引：后台分批重建（解析日志+写大缓存），不阻塞本次列表返回；搜索仍走按目录惰性命中
       this._rebuildClipIndexAsync();
       // 刷新配置时预填充水印缓存：缺失项目归属补算，已有条目不动（后台，不阻塞本次列表返回）
@@ -2386,10 +2740,13 @@ class Api {
   // 任务的成片是否还在磁盘上：仅对「曾经产出过」的已结束任务判定。
   // 用途是列表提示（成片消失时标题置灰），任务行本身始终保留；
   // 从未产出的任务（未开始即失败等）不参与判定，避免把正常状态显示为异常。
-  _taskHasOutput(t) {
-    if (!t) return true;
+  // 成片「产出证据」探测目标（纯内存解析，无磁盘 IO）：供同步判定与异步预热共用，
+  // 保证两处探测的路径完全一致（否则预热读的不是判定要读的，等于白读）。
+  // 返回 null 表示该任务无需探测（非终态 / 无任何产出证据）。
+  _taskOutputProbes(t) {
+    if (!t) return null;
     const st = String(t.status || '');
-    if (st !== 'done' && st !== 'stopped' && st !== 'error' && st !== 'interrupted') return true;
+    if (st !== 'done' && st !== 'stopped' && st !== 'error' && st !== 'interrupted') return null;
     // 产出证据：标记清单 / 日志中的「成片完成」/ 批量任务的真实输出目录记录
     const marker = this._loadMarker(t);
     const marked = (marker && Array.isArray(marker.videos)) ? marker.videos.filter(Boolean) : [];
@@ -2400,12 +2757,23 @@ class Api {
     }
     const outDirAuth = this._taskOutDirFromLog(t);
     const hadOutput = marked.length > 0 || logged.length > 0 || (t.type === 'batch' && !!outDirAuth);
-    if (!hadOutput) return true;
+    if (!hadOutput) return null;
+    return { files: marked.concat(logged).filter(Boolean), dir: outDirAuth || t.outDir || '' };
+  }
+  _taskHasOutput(t) {
+    if (!t) return true;
+    // 启动恢复期（含紧随的异步预热窗口）：返回乐观值，**绝不做同步磁盘探测**。
+    // 冷态下这些目录在机械盘上，逐任务同步访问会冻结主进程数秒（实测 5.7 秒），
+    // 而窗口此时已经画出来了 —— 用户观感就是「窗口出来但点不动」。
+    // 真实值由 _prewarmHasOutputAsync 预热完成后的一次 _emitTasks 给出（判定逻辑不变）。
+    if (this._bootProbeSuppressed) return true;
+    const probes = this._taskOutputProbes(t);
+    if (!probes) return true;
     // 现存证据：任一记录的文件仍在，或批量输出目录内仍有成片
-    for (const p of marked.concat(logged)) {
-      try { if (p && fs.existsSync(p)) return true; } catch (e) {}
+    for (const p of probes.files) {
+      try { if (fs.existsSync(p)) return true; } catch (e) {}
     }
-    const dir = outDirAuth || t.outDir || '';
+    const dir = probes.dir;
     if (dir) {
       try {
         if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()
@@ -2525,10 +2893,16 @@ class Api {
   }
   // 启动时恢复上次会话的任务列表（退出前已做 running→interrupted、queued→paused 转换）
   restoreTasks() {
+    // 待异步校验输出目录的批量任务（见 _verifyBatchOutDirs）：声明在 try 外，
+    // 保证同步段即使异常，已收集的目录校验仍会继续（校验本身失败也被吞掉，不影响任务恢复）
+    const pendingOut = [];
     try {
       if (!this._useDbCache()) return;
       const store = this._cacheStore;
-      for (const row of store.listTasks()) {
+      const _t0 = Date.now();
+      const rows = store.listTasks();
+      const _t1 = Date.now();
+      for (const row of rows) {
         let t = null;
         try { t = JSON.parse(row.payload); } catch (e) { continue; }
         if (!t || typeof t.id !== 'string') continue;
@@ -2550,17 +2924,10 @@ class Api {
         // 批量任务缺归属日时按提交/创建时刻补算（凌晨0-4点归前一天）
         if (restored.type === 'batch' && typeof restored.groupDate !== 'string') restored.groupDate = this._taskGroupDate(restored.type, restored.env, restored.createdAt);
         // 批量任务的成片文件夹：记录指向有效目录（含人工迁移/手工修正后）则保留；
-        // 失效时仅按本任务提交时刻+配置名确定性推算规范路径，绝不跨日搜索猜替代品（见下方）
-        if (restored.type === 'batch') {
-          const live = restored.outDir && fs.existsSync(restored.outDir);
-          if (!live) {
-            // 原 outDir 失效时：仅按「本任务提交时刻 + 配置名」确定性推算规范输出路径（脚本本就会创建的目录），
-            // 绝不跨当天/前一天做目录搜索猜一个替代品 —— 找不到就是找不到，交给 hasOutput 置灰提示，
-            // 避免无产出的停止/失败任务被推断到同日同名任务的目录上（清除时会误删对方成片）。
-            const detail = restored.status === 'done' ? this._batchTaskOutDetail(restored, false) : null;
-            if (detail && detail.outDir) restored.outDir = detail.outDir;
-          }
-        }
+        // 失效时仅按本任务提交时刻+配置名确定性推算规范路径，绝不跨日搜索猜替代品（见 _verifyBatchOutDirs）。
+        // ⚠ 校验必须**异步**：此处位于启动关键路径，同步 existsSync 会逐任务冷访问磁盘
+        //   （实测 49 个历史任务的输出目录在机械盘上 → 冷启动冻结主进程约 9 秒）。故只登记待校验项。
+        if (restored.type === 'batch') pendingOut.push(restored);
         restored._savedLogLen = restored.log.length; // 已与库一致，避免下次持久化重复重写
         this.tasks.set(restored.id, restored);
         // 历史脏 ID 的数字部分曾被推到天文数字（科学计数法形态）：超出安全整数一律不采纳，
@@ -2568,11 +2935,75 @@ class Api {
         const n = parseInt(String(t.id).replace(/\D/g, ''), 10);
         if (Number.isSafeInteger(n) && n > this.taskSeq) this.taskSeq = n;
       }
+      const _t2 = Date.now();
       const planSeq = parseInt(store.getKv('plan_seq') || '0', 10) || 0;
       if (planSeq > this._planSeq) this._planSeq = planSeq;
-      if (this.tasks.size) this._emitTasks();
+      // 恢复期抑制 hasOutput 的同步磁盘探测（详见 _taskHasOutput / _prewarmHasOutputAsync）：
+      // 这次 emit 会走一遍任务快照，冷态下会对机械盘逐目录同步访问 → 冻结主进程数秒。
+      // 抑制一直持续到异步预热完成（由 _prewarmHasOutputAsync 复位）。
+      if (this.tasks.size) { this._bootProbeSuppressed = true; this._emitTasks(); }
       this._gcOrphanMarkers(); // 任务恢复完成后回收孤儿标记（任务不存在的残留）
+      const _t3 = Date.now();
+      // 分段留痕：冷启动卡顿定位依据（读库 / 主循环 / GC 三段，另记待异步校验的输出目录数）
+      this._lg('SYS', 'task.restore',
+        '任务恢复完成（同步段 ' + (_t3 - _t0) + 'ms · 读库 ' + (_t1 - _t0) + ' / 主循环 ' + (_t2 - _t1) + ' / GC ' + (_t3 - _t2) + ' · 任务 ' + rows.length + ' 条 · 待异步校验输出目录 ' + pendingOut.length + ' 条）',
+        { dbMs: _t1 - _t0, loopMs: _t2 - _t1, gcMs: _t3 - _t2, tasks: rows.length, pendingOut: pendingOut.length });
     } catch (e) {}
+    // 输出目录校验放到恢复完成后异步执行（不阻塞启动；见 _verifyBatchOutDirs）
+    if (pendingOut.length) this._verifyBatchOutDirs(pendingOut);
+    // 处于抑制期（说明已 emit 过任务）则启动异步预热，完成后复位抑制并刷新前端
+    if (this._bootProbeSuppressed) this._prewarmHasOutputAsync();
+  }
+  // 启动后异步预热「成片是否仍在磁盘」判定所需的目录/文件元数据（restoreTasks 的延后部分）。
+  // 为什么需要：_taskHasOutput 是**同步**判定（被 snapshotTasks 逐任务调用），而历史任务的成片
+  // 目录多在机械盘 —— 冷启动首次访问每个目录约 87ms，66 个就是 5.7 秒（2026-09-26 冷态实测 GC 段）。
+  // 本方法用 fs.promises 并发把**同一批路径**（_taskOutputProbes 与判定同源）的元数据读进系统缓存，
+  // 之后同步判定即落在缓存上（同一批任务实测 13ms）。判定逻辑与语义**完全不变**，
+  // 只是把「冷读」从启动关键路径挪到异步阶段。完成后复位抑制标志并再 emit 一次，
+  // 让界面从乐观值切到真实值（缺失成片的提示因此最多晚 1~2 秒出现）。
+  _prewarmHasOutputAsync() {
+    const targets = [];
+    this.tasks.forEach((t) => { const p = this._taskOutputProbes(t); if (p) targets.push(p); });
+    if (!targets.length) { this._bootProbeSuppressed = false; return; }
+    const fsp = fs.promises;
+    const _t = Date.now();
+    const jobs = [];
+    for (const p of targets) {
+      for (const f of p.files) jobs.push(fsp.access(f).catch(() => {}));
+      if (p.dir) jobs.push(fsp.stat(p.dir).then((s) => (s.isDirectory() ? fsp.readdir(p.dir) : null)).catch(() => {}));
+    }
+    Promise.all(jobs).then(() => {
+      this._lg('SYS', 'task.restore.hasoutput',
+        '成片存在性元数据预热完成（' + (Date.now() - _t) + 'ms · 探测 ' + jobs.length + ' 项 / 任务 ' + targets.length + ' 条）',
+        { probes: jobs.length, tasks: targets.length, ms: Date.now() - _t });
+    }).catch(() => {}).then(() => {
+      this._bootProbeSuppressed = false;      // 解除抑制：此后同步判定走系统缓存
+      if (this.tasks.size) this._emitTasks(); // 由乐观值切到真实判定
+    });
+  }
+  // 批量任务输出目录的异步校验（restoreTasks 的延后部分）。
+  // 语义与原先的同步版完全一致：记录指向有效目录则保留；失效时仅按「提交时刻 + 配置名」
+  // 确定性推算规范输出路径（脚本本就会创建的目录），绝不跨日/跨盘搜索猜替代品。
+  // 与同步版的唯一差异：修正发生在任务恢复之后（首次 emitTasks 用的是记录值），
+  // 有修正时会再发一次 emitTasks 让界面刷新 —— 换来的是启动关键路径不再被磁盘 IO 冻住。
+  _verifyBatchOutDirs(tasks) {
+    const fsp = fs.promises;
+    const _t = Date.now();
+    let changed = 0;
+    return Promise.all(tasks.map((t) => {
+      const od = t.outDir;
+      const check = od ? fsp.access(od).then(() => true, () => false) : Promise.resolve(false);
+      return check.then((live) => {
+        if (live) return;
+        const detail = t.status === 'done' ? this._batchTaskOutDetail(t, false) : null;
+        if (detail && detail.outDir && detail.outDir !== od) { t.outDir = detail.outDir; changed++; }
+      }).catch(() => {});
+    })).then(() => {
+      this._lg('SYS', 'task.restore.outdir',
+        '任务输出目录异步校验完成（' + (Date.now() - _t) + 'ms · 校验 ' + tasks.length + ' 条 · 修正 ' + changed + ' 条）',
+        { checked: tasks.length, changed: changed });
+      if (changed) this._emitTasks();
+    }).catch(() => {});
   }
   // 退出前收尾：运行中→已中断，排队→暂停（后由 persistTasks 落盘）
   shutdownTasks() {
@@ -3674,13 +4105,22 @@ class Api {
     return missing;
   }
 
-  // 设置页保存后同步 Api 持有的配置副本；root 变化时重设根目录
+  // 设置页保存后同步 Api 持有的配置副本；批量工作目录（batch.root）变化时重设根目录
   updateSettings(s) {
     const cfg = s || {};
-    if (typeof cfg.root === 'string' && cfg.root && cfg.root !== this.root) this.setRoot(cfg.root);
+    // 工作路径从顶层 root 迁到 batch.root（2026-09-26）：此处改读 batch.root
+    const br = (cfg.batch && typeof cfg.batch === 'object' && typeof cfg.batch.root === 'string')
+      ? cfg.batch.root.trim() : '';
+    if (br && br !== this.root) this.setRoot(br);
     if (cfg.batch && typeof cfg.batch === 'object') this.config.batch = Object.assign({}, this.config.batch, cfg.batch);
     if (cfg.replica && typeof cfg.replica === 'object') this.config.replica = Object.assign({}, this.config.replica, cfg.replica);
     if (cfg.mask && typeof cfg.mask === 'object') this.config.mask = Object.assign({}, this.config.mask, cfg.mask);
+    // 应用级设置（通知开关 / 备份项等）：backend 侧 _notify 等直接读 this.config，
+    // 运行时改动必须同步，否则「关了通知仍在弹」直到下次重启。
+    for (const k of Api.APP_SETTING_KEYS) {
+      if (cfg[k] !== undefined) this.config[k] = cfg[k];
+    }
+    if (cfg.ffmpeg_dir !== undefined) this.config.ffmpeg_dir = cfg.ffmpeg_dir;
   }
 
   // 水印归属校验：以本项目「主流水印」为基准做一致性判定；仅在用户启用判定时参与判断。
@@ -5096,14 +5536,14 @@ let themes = [];
   // 检测应用运行所需的外部环境是否可用（ffmpeg / ffprobe / 内置引擎）
   // 项目实际依赖的滤镜清单（三模块 + 视频处理工具的 -filter_complex 全量收集）
   // 精简版/第三方便携构建常缺 colorchannelmixer、signalstats 等 —— 只查存在性拦不住
-  checkEnv() {
-    const { spawnSync } = require('child_process');
+  // 解析 ffmpeg / ffprobe 实际生效路径：配置目录（自愈下载）优先，回退系统 PATH。
+  // 纯同步、极快（existsSync + where），可安全用于启动路径。
+  _resolveFfmpegBin() {
     const cfgDir = String((this.config && this.config.ffmpeg_dir) || '').trim();
-    // 解析实际生效的可执行文件：配置目录（自愈下载）优先，回退系统 PATH
     const resolveBin = (name, configured) => {
       if (configured) { try { if (fs.existsSync(configured)) return configured; } catch (e0) {} }
       try {
-        const r = spawnSync('where', [name], { windowsHide: true, encoding: 'utf8' });
+        const r = require('child_process').spawnSync('where', [name], { windowsHide: true, encoding: 'utf8' });
         if (r.status === 0) {
           const first = String(r.stdout || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean)[0];
           if (first) return first;
@@ -5111,12 +5551,77 @@ let themes = [];
       } catch (e) {}
       return '';
     };
-    const ffmpegPath = resolveBin('ffmpeg', cfgDir ? path.join(cfgDir, 'ffmpeg.exe') : '');
-    const ffprobePath = resolveBin('ffprobe', cfgDir ? path.join(cfgDir, 'ffprobe.exe') : '');
+    return {
+      cfgDir,
+      ffmpegPath: resolveBin('ffmpeg', cfgDir ? path.join(cfgDir, 'ffmpeg.exe') : ''),
+      ffprobePath: resolveBin('ffprobe', cfgDir ? path.join(cfgDir, 'ffprobe.exe') : ''),
+    };
+  }
+
+  // 探测缓存：ffmpeg 路径 + 文件 大小/mtime 作指纹，命中即复用，避免每次启动重跑两个 ffmpeg 进程。
+  // ⚠ 指纹必须含文件本身的 stat —— 仅用路径会让「重装/升级 ffmpeg 后仍用旧结论」。
+  _envProbeFingerprint(ffmpegPath) {
+    if (!ffmpegPath) return '';
+    try { const st = fs.statSync(ffmpegPath, { bigint: true }); return ffmpegPath + '|' + String(st.size) + '|' + String(st.mtimeMs); }
+    catch (e) { return ffmpegPath + '|?'; }
+  }
+
+  // 环境检测（异步）：与 checkEnv 同语义，但滤镜/编码器探测走异步 execFile，
+  // **不阻塞主进程事件循环**。启动路径必须用这个 —— 同步版在冷启动（首次加载 200MB+ ffmpeg、
+  // 安全软件扫描未签名二进制）时会阻塞十几秒到数十秒，直接把窗口显示推迟到分钟级。
+  checkEnvAsync() {
+    const { cfgDir, ffmpegPath, ffprobePath } = this._resolveFfmpegBin();
+    const finish = (missing, missingEncoders) => {
+      const filtersOk = !!ffmpegPath && missing.length === 0;
+      const encodersOk = !!ffmpegPath && missingEncoders.length === 0;
+      return {
+        ffmpeg: !!ffmpegPath,
+        ffprobe: !!ffprobePath,
+        engine: !!this._engineRunnerPath(),
+        ffmpegPath, ffprobePath, filtersOk, encodersOk, missing, missingEncoders,
+        downloadNeeded: !ffmpegPath || !ffprobePath || !filtersOk || !encodersOk,
+        ffmpegDir: cfgDir,
+      };
+    };
+    if (!ffmpegPath) return Promise.resolve(finish([], []));
+    const fp = this._envProbeFingerprint(ffmpegPath);
+    if (this._envProbeCache && this._envProbeCache.fp === fp) {
+      return Promise.resolve(finish(this._envProbeCache.missing.slice(), this._envProbeCache.missingEncoders.slice()));
+    }
+    if (this._envProbeInflight) return this._envProbeInflight;   // 并发合并：同时多处调用只跑一轮
+    const run = (args) => new Promise((resolve) => {
+      let done = false;
+      const settle = (v) => { if (!done) { done = true; resolve(v); } };
+      try {
+        const p = require('child_process').execFile(ffmpegPath, args,
+          { windowsHide: true, timeout: 20000, maxBuffer: 16 * 1024 * 1024 },
+          (err, stdout) => { settle(err ? '' : String(stdout || '')); });
+        p.on('error', () => settle(''));
+      } catch (e) { settle(''); }
+    });
+    this._envProbeInflight = (async () => {
+      // 两个探测可并行：互不依赖，串行只会让耗时翻倍
+      const [outF, outE] = await Promise.all([run(['-hide_banner', '-filters']), run(['-hide_banner', '-encoders'])]);
+      const missing = [];
+      const missingEncoders = [];
+      if (!outF) missing.push(...FFMPEG_REQUIRED_FILTERS);
+      else for (const f of FFMPEG_REQUIRED_FILTERS) if (!outF.includes(' ' + f + ' ')) missing.push(f);
+      if (!outE) missingEncoders.push(...FFMPEG_REQUIRED_ENCODERS);
+      else for (const e3 of FFMPEG_REQUIRED_ENCODERS) if (!outE.includes(' ' + e3 + ' ')) missingEncoders.push(e3);
+      this._envProbeCache = { fp, missing: missing.slice(), missingEncoders: missingEncoders.slice(), at: Date.now() };
+      this._envProbeInflight = null;
+      return finish(missing, missingEncoders);
+    })();
+    return this._envProbeInflight;
+  }
+
+  checkEnv() {
+    const { cfgDir, ffmpegPath, ffprobePath } = this._resolveFfmpegBin();
     // 滤镜链完整性：-filters 实跑比对
     const missing = [];
     const missingEncoders = [];
     if (ffmpegPath) {
+      const { spawnSync } = require('child_process');
       try {
         const r = spawnSync(ffmpegPath, ['-hide_banner', '-filters'],
           { windowsHide: true, encoding: 'utf8', timeout: 20000, maxBuffer: 16 * 1024 * 1024 });
@@ -5203,24 +5708,30 @@ let themes = [];
     } catch (e) {}
   }
 
-  // ── 应用级设置双写（settings.db scope='app'）──
-  // 用户定案：设置项能进 settings 就进 settings，config 会越来越长、未来某个版本要做破坏性简化。
-  // 因此本版本起新增的设置项「双写」：读取以 settings 为准（config 仅作旧版兼容回退），保存两边都写。
-  // 未来简化 config 时，去掉 config 侧的写入与合并即可，settings 里的值不会丢。
+  // ── 应用级设置（settings.db scope='app'）──
+  // 用户定案：设置项能进 settings 就进 settings —— config.json 只留「定位数据目录」的锚点，
+  // 其余业务键一律存 settings.db，读取只认 settings、**不读 config.json 回退**。
+  // 这样未来简化 config 时不会波及任何设置项（曾经的「回退读 config」正是隐患：config 一旦被
+  // 裁掉某键，回退路径就取到 undefined，表现为设置莫名丢失或软件报错）。
+  // 白名单仅供 main 端 get_settings 组装默认值时参考；读写本身不限键（任意键均可存取）。
   static APP_SETTING_KEYS = ['notify_task_end', 'show_maintenance',
     'backup_dir', 'backup_auto_clean', 'backup_keep_days'];
 
+  // 启动时把 settings.db 的 app scope 全量载入内存 config（覆盖 DEFAULT_CONFIG 的默认值）。
+  // 未落过库的键保持默认值 —— 这就是「不回退 config」后的取值语义：
+  // 库里有就用库里的，库里没有就用默认值，绝不回头读 config.json。
   _loadAppSettings() {
     if (!this._useSettings()) return;
-    for (const k of Api.APP_SETTING_KEYS) {
-      const v = this._settingsStore.get('app', k);
-      if (v === undefined || v === null) continue;
-      this.config[k] = v;   // settings 值优先（config 里的同名值只作旧版迁移兜底）
+    let all = {};
+    try { all = this._settingsStore.all('app') || {}; } catch (e) { all = {}; }
+    for (const k of Object.keys(all)) {
+      if (all[k] === undefined || all[k] === null) continue;
+      this.config[k] = all[k];
     }
   }
 
-  // 单个应用级设置的读取（settings.db 优先，回退内存 config）—— 供 main 的 get_settings 使用：
-  // backup_* 只落 settings.db 不进 config.json，读回必须走这里而不是 loadConfig()
+  // 单个应用级设置的读取 —— 供 main 的 get_settings / 通知开关等使用。
+  // fallback 只在「设置库不可用」这一极端情形下使用（此时内存 config 也仅有默认值）。
   getAppSetting(key, fallback) {
     if (this._useSettings()) {
       const v = this._settingsStore.get('app', key);
@@ -5229,13 +5740,28 @@ let themes = [];
     return (this.config && this.config[key] !== undefined) ? this.config[key] : fallback;
   }
 
+  // 全量读取 app scope（供 main 端组装完整配置：settings.db 是唯一来源）
+  getAppSettings() {
+    if (!this._useSettings()) return {};
+    try { return this._settingsStore.all('app') || {}; } catch (e) { return {}; }
+  }
+
+  // 写入任意应用级设置（不限键）：main 端保存配置时逐键落库。
+  // 显式传对象而非默认取 this.config —— main.config 与 backend.config 是两个对象，
+  // 保存时必须由调用方给出要写的键值，避免两边不同步。
   _saveAppSettings(values) {
     if (!this._useSettings()) return;
-    const vals = (values && typeof values === 'object') ? values : this.config;
-    for (const k of Api.APP_SETTING_KEYS) {
+    const vals = (values && typeof values === 'object') ? values : {};
+    for (const k of Object.keys(vals)) {
       if (vals[k] === undefined) continue;
       try { this._settingsStore.set('app', k, vals[k]); } catch (e) {}
     }
+  }
+
+  // 删除应用级设置键（供一次性迁移用：旧键搬走后不留残留，保持「单一真相」）
+  _removeAppSetting(key) {
+    if (!this._useSettings()) return false;
+    try { return Number(this._settingsStore.remove('app', String(key))) > 0; } catch (e) { return false; }
   }
 
   // Windows 系统通知（任务失败 / 本轮跑完）：
@@ -5274,7 +5800,7 @@ let themes = [];
   async ensureFfmpeg(opts) {
     const force = !!(opts && opts.force);
     if (this._ffmpegBusy) return { ok: false, error: '已有 FFmpeg 修复在进行中' };
-    const env0 = this.checkEnv();
+    const env0 = await this.checkEnvAsync();
     // force：用户显式点「自动下载」——跳过合格检查强制走完整下载（演示/重装数据目录组件）
     if (!force && !env0.downloadNeeded) return { ok: true, skipped: true, env: env0 };
     this._ffmpegBusy = true;
@@ -5301,7 +5827,7 @@ let themes = [];
         });
         pctBase += 50;
       }
-      const env1 = this.checkEnv();
+      const env1 = await this.checkEnvAsync();
       if (env1.downloadNeeded) throw new Error('下载完成但校验未通过：' + (env1.missing || []).join('、'));
       emit({ phase: 'done', ok: true, dir: dir, version: ver });
       this._lg('ENV', 'ffmpeg.ensure', 'FFmpeg 环境就绪 · ' + ver + ' · ' + dir, { dir: dir, version: ver });

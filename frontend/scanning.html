@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Video Lab - 正在扫描</title>
+<!-- 独立轻量窗口（frame:false 无边框）。仅在「缓存未命中、需要全量扫描工作目录」时出现，
+     避免用户点了图标后长时间（首次可达数十秒）看不到任何反馈。
+     样式刻意内联、不引外部 css：本窗必须能在主窗口与皮肤资源就绪之前即刻渲染。 -->
+<style>
+  :root {
+    --bg-base-default: #FFFFFF;
+    --text-default: #222222;
+    --text-secondary: #555555;
+    --text-tertiary: #8A8A8A;
+    --border-neutral-l1: #E5E5E5;
+    --brand-primary: #6A6FFF;
+    --radius-8: 8px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    height: 100%;
+    overflow: hidden;
+    background: transparent;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+    -webkit-app-region: drag;   /* 无边框窗口：整窗可拖动 */
+  }
+  .wrap {
+    height: 100%;
+    display: flex; flex-direction: column; justify-content: center;
+    gap: 14px; padding: 22px 26px;
+    border: 1px solid var(--border-neutral-l1);
+    border-radius: var(--radius-8);
+    background: var(--bg-base-default);
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  .head { display: flex; align-items: center; gap: 10px; }
+  .logo {
+    width: 22px; height: 22px; flex: 0 0 22px;
+    border-radius: 6px;
+    background: var(--brand-primary);
+    opacity: .9;
+  }
+  .title { font-size: 14px; font-weight: 600; color: var(--text-default); }
+  .desc { font-size: 12px; color: var(--text-secondary); line-height: 1.6; }
+  .bar {
+    height: 4px; border-radius: 2px; overflow: hidden;
+    background: var(--border-neutral-l1);
+  }
+  .bar > i {
+    display: block; height: 100%; width: 30%;
+    border-radius: 2px;
+    background: var(--brand-primary);
+    animation: slide 1.15s ease-in-out infinite;
+  }
+  @keyframes slide {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(340%); }
+  }
+  .phase { font-size: 11px; color: var(--text-tertiary); min-height: 15px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <div class="logo"></div>
+    <div class="title">Video Lab 正在启动</div>
+  </div>
+  <div class="desc">正在扫描工作目录，请稍候…</div>
+  <div class="bar"><i></i></div>
+  <div class="phase" id="phase"></div>
+</div>
+<script>
+  (function () {
+    var api = window.txapi;
+    if (!api || !api.on_scan_progress) return;
+    // 主进程扫描进度（phase: clear/walk/log/clip/mark/list/done）→ 中文文案
+    var MAP = {
+      clear: '正在清理旧缓存…',
+      walk: '正在遍历目录…',
+      log: '正在整理日志…',
+      clip: '正在重建索引…',
+      mark: '正在核对水印…',
+      list: '即将完成…',
+      done: '完成'
+    };
+    api.on_scan_progress(function (p) {
+      var el = document.getElementById('phase');
+      if (!el || !p) return;
+      el.textContent = MAP[p.phase] || '';
+    });
+  })();
+</script>
+</body>
+</html>

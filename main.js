@@ -12,12 +12,32 @@ function bootMs() { return Number(process.hrtime.bigint() - _BOOT_T0) / 1e6; }
 // 进程创建/加载阶段（杀软扫描未签名 exe、磁盘冷读），而非任何 JS 逻辑。
 // 用 process.uptime() 反推进程真实创建时刻（Electron 主进程里该值自进程创建累计），
 // 写入独立文件而非 runLog —— 此时 runLog 尚未 require。
+// ⚠ 每个进程单独一个文件（文件名带 pid + 时刻），不覆盖：冷启动现场常发生在无人值守时，
+//    若只留单个文件，中途任何一次启动都会把冷启动那条证据冲掉。
 const _EARLY_UPTIME_MS = Math.round(process.uptime() * 1000);
 try {
-  require('fs').writeFileSync(
-    require('path').join(require('os').homedir(), '.video-lab', 'boot-probe.json'),
-    JSON.stringify({ at: new Date().toISOString(), pid: process.pid, argv: process.argv.slice(1), uptimeMsAtFirstLine: _EARLY_UPTIME_MS }),
+  const _fs = require('fs');
+  const _path = require('path');
+  const _dir = _path.join(require('os').homedir(), '.video-lab', 'boot-probe');
+  _fs.mkdirSync(_dir, { recursive: true });
+  const _stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  _fs.writeFileSync(
+    _path.join(_dir, _stamp + '_' + process.pid + '.json'),
+    JSON.stringify({
+      at: new Date().toISOString(),
+      pid: process.pid,
+      argv: process.argv.slice(1),
+      electronVersion: process.versions.electron,
+      uptimeMsAtFirstLine: _EARLY_UPTIME_MS,
+      // uptimeMsAtFirstLine 很大 = 进程创建后很久才轮到 JS 执行（杀软扫描 / exe 冷读 / 磁盘争抢）
+      // 该值正常应在 10-40ms 量级
+    }),
     'utf8');
+  // 只保留最近 20 个，避免长期堆积
+  const _files = _fs.readdirSync(_dir).filter((f) => f.endsWith('.json')).sort();
+  for (const f of _files.slice(0, Math.max(0, _files.length - 20))) {
+    try { _fs.unlinkSync(_path.join(_dir, f)); } catch (e) {}
+  }
 } catch (e) {}
 
 const fs = require('fs');
@@ -290,39 +310,259 @@ function defaultRoot() { return path.dirname(projectDir()); }
 // 已废弃的配置键：PS1 双轨期遗留（scripts_dir = 旧脚本目录、use_node_engine = 引擎开关）。
 // 代码已不再读取，但不显式剔除就会随 saveConfig 一直写回磁盘，成为永久残留。
 const OBSOLETE_CONFIG_KEYS = ['scripts_dir', 'use_node_engine'];
+// ── 配置读取：settings.db 为唯一业务来源，config.json 不参与业务键读取 ──
+// 用户定案：软件读 setting 而不读 config，**拒绝回退** —— config 会被逐步简化，
+// 任何「config 缺失就回退读它」的路径都会在未来变成取到 undefined 的隐患（表现为设置莫名丢失）。
+// 因此：业务键一律只从 settings.db 取；库里没有就用 DEFAULT_CONFIG 的默认值，绝不回头读 config.json。
+// config.json 仍保留并写入全部键，但只为「回滚旧版本」服务（旧版本读 config.json 时能拿到完整值）。
+const CONFIG_ANCHOR_KEYS = ['config_storage'];   // 唯一仍需从 config.json 读的键
+
+// ── 批量模式的工作目录：唯一真相 = `config.batch.root` ──
+// 用户定案（2026-09-26）：工作路径本就是**批量模式**的工作目录，不是整个软件的，各模式的工作目录
+// 由各模式自己承接（遮罩已有自己的 `mask.root`）。故顶层 `root` 迁入 `batch.root` 与之一致。
+// 读取一律用 getBatchRoot()；写入一律用 setBatchRoot()。
+// 顶层 `root` 只在「落盘 config.json」时作为**兼容镜像**保留 —— 旧版本回滚仍读它；
+// 它**不再写入 settings.db**（否则下次 loadConfig 读回来会形成两个真相，见 saveConfig）。
+function getBatchRoot(cfg) {
+  const b = cfg && cfg.batch;
+  return (b && typeof b === 'object' && typeof b.root === 'string') ? b.root.trim() : '';
+}
+function setBatchRoot(cfg, dir) {
+  if (!cfg) return;
+  const v = String(dir == null ? '' : dir).trim();
+  cfg.batch = Object.assign({}, cfg.batch || {}, { root: v });
+  cfg.root = v;   // 兼容镜像（仅随 config.json 落盘）
+}
+// 待落库的工作路径迁移值：loadConfig 首阶段只能做**内存**迁移（那时 api 还没构造），
+// 真正落库（写 batch.root、删旧 root）由 applySettingsFromDb 在 api 就绪后完成。
+let _pendingRootMigration = '';
+// 待落库的旧顶层 root 清理标记（batch.root 已就位却仍有残留 root 时置真）
+let _pendingRootCleanup = false;
+
+// 直读 settings.db 的 app scope（**不依赖 api**）。
+// ⚠ 必需存在的原因（2026-09-26 实测事故）：启动早期要先用 settings 里的 root 才能定位工作目录，
+//   而 api 的构造又必须先有 root —— 若此时只能靠 api 读设置，就形成死循环，root 只能取默认值，
+//   表现为「工作目录被解析成程序目录的上一级」（实测 root 变成 D:\Tools，冷启动全量扫描 29.7 秒）。
+//   故本函数直接从 storageDir() 派生库路径读一次，专供启动首阶段使用。
+//   库读不到一律返回 null（调用方保持默认值，不回退 config.json）。
+function readSettingsAppDirect() {
+  try {
+    const dbPath = path.join(storageDir(), SETTINGS_DB);
+    if (!fs.existsSync(dbPath)) return null;
+    const { DatabaseSync } = require('node:sqlite');
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    let out = null;
+    try {
+      const rows = db.prepare('SELECT key, value FROM settings WHERE scope = ?').all('app');
+      out = {};
+      for (const r of rows) {
+        // 与 SettingsStore.all 同语义：单条脏数据不拖垮整体
+        try { out[String(r.key)] = JSON.parse(String(r.value)); } catch (e) {}
+      }
+    } finally {
+      try { db.close(); } catch (e) {}
+    }
+    return out;
+  } catch (e) { return null; }
+}
+
+// 读 settings.db 的 app scope（失败返回 null 表示库不可用，调用方据此保持默认值）
+// 优先走 api（已建立连接、语义与 SettingsStore 完全一致）；api 尚未就绪时退回直读。
+function readSettingsApp() {
+  try {
+    if (typeof api === 'undefined' || !api || typeof api.getAppSettings !== 'function') return readSettingsAppDirect();
+    const all = api.getAppSettings();
+    return (all && typeof all === 'object') ? all : {};
+  } catch (e) { return readSettingsAppDirect(); }
+}
+
+// 写 settings.db 的 app scope（不占用调用方的异常路径：库不可用时静默，内存 config 仍生效）
+function writeSettingsApp(values) {
+  try {
+    if (typeof api === 'undefined' || !api || typeof api._saveAppSettings !== 'function') return;
+    api._saveAppSettings(values || {});
+  } catch (e) {}
+}
+
 function loadConfig() {
   const cfg = Object.assign({}, DEFAULT_CONFIG);
-  try {
-    const p = configFilePath();
-    // 清理上次中断遗留的未完成临时配置（原文件不受影响）
-    try { if (fs.existsSync(p + '.tmp')) fs.unlinkSync(p + '.tmp'); } catch (e2) {}
-    if (fs.existsSync(p)) {
-      const data = JSON.parse(fs.readFileSync(p, 'utf-8'));
-      if (data && typeof data === 'object' && !Array.isArray(data)) Object.assign(cfg, data);
+  // ① config.json 现有内容（一次性引导的取值来源；此后不再参与业务键读取）
+  const disk = readConfigDisk();
+  // ② 业务键：settings.db 全量载入（库不可用时保持默认值 —— 不回退 config.json）
+  const app = readSettingsApp();
+  if (app) {
+    // ③ 一次性迁移：旧顶层 root → batch.root。
+    //    ⚠ **必须在取值循环之前**完成 —— 否则首阶段 `resolveRoot()` 取不到工作目录，
+    //    会回退成程序目录的上一级（实测工作目录变成 D:\Tools，冷启动全量扫描 29.7 秒）。
+    //    这里只改内存（api 尚未构造、无法落库）；落库在 applySettingsFromDb 完成。
+    const legacyRoot = typeof app.root === 'string' ? app.root.trim() : '';
+    const batchObj = (app.batch && typeof app.batch === 'object') ? app.batch : {};
+    const hasBatchRoot = typeof batchObj.root === 'string' && batchObj.root.trim();
+    const appHasRootKey = Object.prototype.hasOwnProperty.call(app, 'root');
+    if (!hasBatchRoot && legacyRoot) {
+      app.batch = Object.assign({}, batchObj, { root: legacyRoot });
+      _pendingRootMigration = legacyRoot;   // 待落库：写 batch.root
+      _pendingRootCleanup = true;           // 待落库：删旧顶层 root
+    } else if (hasBatchRoot && appHasRootKey) {
+      // 残留清理：batch.root 已就位却仍留着旧顶层 root —— 历史上 root 被 seed 从
+      // config.json 灌回过（当时它还没被排除）；不清理会一直留着一个「假真相」。
+      _pendingRootCleanup = true;
     }
-  } catch (e) {}
+    for (const k of Object.keys(app)) {
+      if (app[k] === undefined || app[k] === null) continue;
+      cfg[k] = app[k];
+    }
+    // ③ 一次性引导：settings.db 尚未落过的键，用 config.json 的同名值补齐并落库
+    //    （详规见 seedSettingsFromConfig 注释）。
+    const seed = seedSettingsFromConfig(disk, app);
+    for (const k of Object.keys(seed)) cfg[k] = seed[k];
+    // ④ 兼容镜像：迁移后 settings 里已无顶层 root，用 batch.root 回填 ——
+    //    保证 config.json 的 root 键跟随更新（旧版本回滚时读到的是**当前**工作路径）。
+    //    该镜像只在写 config.json 时使用，不会写回 settings（见 saveConfig）。
+    if (!Object.prototype.hasOwnProperty.call(app, 'root')) {
+      const br = getBatchRoot(cfg);
+      if (br) cfg.root = br;
+    }
+  } else {
+    // 设置库确实读不到（api 与直读两条路都失败）—— 保持默认值，不回退 config.json。
+    // ⚠ 此处**不可引用 api**：顶层首调时 const api 尚在 TDZ，即使 typeof 也会抛 ReferenceError
+    //   （曾因此让整个启动崩溃）。readSettingsApp 内部已做 try 探测，走到这里就是真读不到。
+    try { runLog.sys('app.config', '设置库不可用：本次按默认值运行（不回退 config.json）', {}); } catch (e) {}
+  }
+  // ④ 锚点键：仅 config_storage（定位数据目录所必需，库路径由它派生，无法自举）
+  for (const k of CONFIG_ANCHOR_KEYS) {
+    if (disk[k] !== undefined && disk[k] !== null) cfg[k] = disk[k];
+  }
   for (const k of OBSOLETE_CONFIG_KEYS) delete cfg[k];
   return cfg;
 }
-function saveConfig(config) {
+// 读 config.json 全量内容（读不到返回空对象）；顺带清理上次中断遗留的临时文件
+function readConfigDisk() {
   try {
-    const dir = path.dirname(configFilePath());
-    fs.mkdirSync(dir, { recursive: true });
-    // 原子写：主配置写坏会丢设置与工作路径，先写临时文件再 rename 覆盖
-    fs.writeFileSync(configFilePath() + '.tmp', JSON.stringify(config, null, 2), 'utf-8');
-    fs.renameSync(configFilePath() + '.tmp', configFilePath());
+    const p = configFilePath();
+    try { if (fs.existsSync(p + '.tmp')) fs.unlinkSync(p + '.tmp'); } catch (e2) {}
+    if (!fs.existsSync(p)) return {};
+    const data = JSON.parse(fs.readFileSync(p, 'utf-8'));
+    return (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
+  } catch (e) { return {}; }
+}
+// 一次性引导：settings.db 尚未落过的键，用 config.json 的同名值补齐并落库。
+//   这是「修好断点」而非数据迁移 —— 补齐之后读路径完全只认 settings，config.json 不再被读。
+//   幂等：仅写 settings 里**不存在**的键，已落过库的值绝不覆盖；config.json 没有该键就跳过
+//   （留给 DEFAULT_CONFIG 默认值，不用默认值充数写库，避免污染「哪些键是用户真设过的」语义）。
+// ⚠ 不参与引导的键（SEED_EXCLUDE_KEYS）必须显式排除，否则会出现「删了又被灌回来」：
+//   顶层 `root` 是 config.json 的**兼容镜像**（真相在 batch.root），迁移时会被删掉；
+//   而 loadConfig() 每次调用（如 get_settings）都会跑一次本引导 —— 若 root 参与引导，
+//   它会被 config.json 的同名键立刻灌回 settings（2026-09-26 实测：删键后 536ms 就被灌回）。
+const SEED_EXCLUDE_KEYS = CONFIG_ANCHOR_KEYS.concat(OBSOLETE_CONFIG_KEYS).concat([
+  'root',   // 兼容镜像键：只写 config.json，真相是 batch.root
+]);
+function seedSettingsFromConfig(disk, app) {
+  const seed = {};
+  try {
+    for (const k of Object.keys(disk || {})) {
+      if (SEED_EXCLUDE_KEYS.indexOf(k) >= 0) continue;
+      if (Object.prototype.hasOwnProperty.call(app || {}, k)) continue;
+      if (disk[k] === undefined || disk[k] === null) continue;
+      seed[k] = disk[k];
+    }
+    if (Object.keys(seed).length) {
+      writeSettingsApp(seed);
+      try { runLog.sys('app.config', '设置库首次引导（' + Object.keys(seed).length + ' 项，取自 config.json）', { keys: Object.keys(seed) }); } catch (e) {}
+    }
+  } catch (e) {}
+  return seed;
+}
+// 保存配置：以「实际变更的键」为单位落盘，避免每次保存全量重写两侧。
+//  ① settings.db（唯一读取来源）：写入本次变更的键；
+//  ② config.json（仅为回滚旧版本而留的兼容快照）：**只更新本文件原本就有的键** ——
+//     代码新引入的键不写进去（旧版本不认识它们，写了只是污染；用户定案：软件本身没有的键就不要添加）。
+// 变更判定以 _configBaseline（最近一次落盘的快照）为基准，而非入参本身 —— 调用方普遍
+// 先改内存 config 再 saveConfig(config)，若拿入参自比会得出「零变更」。
+// 返回本次实际变更的键名数组（供调用方按需广播/重排定时器）。
+let _configBaseline = {};
+function saveConfig(config) {
+  const cfg = (config && typeof config === 'object') ? config : {};
+  const keys = Object.keys(cfg).filter((k) => OBSOLETE_CONFIG_KEYS.indexOf(k) < 0);
+  const changed = {};
+  for (const k of keys) {
+    if (!_configValueEqual(_configBaseline[k], cfg[k])) changed[k] = cfg[k];
+  }
+  // 基线同步（无论是否有变更：入参即当前真值，下次比对以它为准）
+  _configBaseline = JSON.parse(JSON.stringify(cfg));
+  if (!Object.keys(changed).length) return [];
+  // settings.db 不落顶层 root：它已被 batch.root 取代，只作 config.json 的兼容镜像存在。
+  // 若写进 settings，下次 loadConfig 会把它读回内存 → 形成两个真相
+  // （用户改工作路径时可能只更新其中一个，工作目录随之错乱）。
+  const forSettings = Object.assign({}, changed);
+  delete forSettings.root;
+  if (Object.keys(forSettings).length) writeSettingsApp(forSettings);
+  // config.json：仅合并「磁盘上已存在的键」，不新增键
+  try {
+    const p = configFilePath();
+    let disk = {};
+    try { if (fs.existsSync(p)) disk = JSON.parse(fs.readFileSync(p, 'utf-8')) || {}; } catch (e) { disk = {}; }
+    if (!disk || typeof disk !== 'object' || Array.isArray(disk)) disk = {};
+    let touched = false;
+    for (const k of Object.keys(changed)) {
+      if (!Object.prototype.hasOwnProperty.call(disk, k)) continue;   // 旧版本没有的键：不新增
+      if (_configValueEqual(disk[k], changed[k])) continue;
+      disk[k] = changed[k];
+      touched = true;
+    }
+    if (touched) {
+      const dir = path.dirname(p);
+      fs.mkdirSync(dir, { recursive: true });
+      // 原子写：主配置写坏会丢设置与工作路径，先写临时文件再 rename 覆盖
+      fs.writeFileSync(p + '.tmp', JSON.stringify(disk, null, 2), 'utf-8');
+      fs.renameSync(p + '.tmp', p);
+    }
   } catch (e) {
     try { if (fs.existsSync(configFilePath() + '.tmp')) fs.unlinkSync(configFilePath() + '.tmp'); } catch (e2) {}
   }
+  return Object.keys(changed);
+}
+// 配置值等价判定（对象按键逐层比，其余直接比）：用于「只写变更键」的差异计算
+function _configValueEqual(a, b) {
+  if (a === b) return true;
+  if (typeof a !== typeof b) return false;
+  if (a && b && typeof a === 'object') {
+    if (Array.isArray(a) !== Array.isArray(b)) return false;
+    const ka = Object.keys(a), kb = Object.keys(b);
+    if (ka.length !== kb.length) return false;
+    for (const k of ka) { if (!_configValueEqual(a[k], b[k])) return false; }
+    return true;
+  }
+  return false;
+}
+// 应用级设置的合入（软件端 IPC 与浏览器端 HTTP 两条保存路径共用）。
+// 落盘统一由 saveConfig 完成：settings.db 是唯一读取来源，config.json 仅作旧版本兼容快照
+// （只更新它原本就有的键）。故此处只做「把提交值合入 cfg」，不再区分新旧键、不再单独落库。
+// ⚠ 必须是模块级函数：HTTP 版 save_settings（buildHttpExtraRoutes 内）与 IPC 版都要调用，
+//    若定义在 registerIpc 内则 HTTP 路径取不到（曾因此报 mergeAppSettings is not defined，
+//    浏览器端保存应用级设置静默失败）。
+function mergeAppSettings(cfg, s) {
+  if (!s || typeof s !== 'object') return cfg;
+  if (typeof s.notify_task_end === 'boolean') cfg.notify_task_end = s.notify_task_end;
+  if (typeof s.show_maintenance === 'boolean') cfg.show_maintenance = s.show_maintenance;
+  if (typeof s.backup_dir === 'string') cfg.backup_dir = s.backup_dir;
+  if (typeof s.backup_auto_clean === 'boolean') cfg.backup_auto_clean = s.backup_auto_clean;
+  if (s.backup_keep_days !== undefined) cfg.backup_keep_days = parseInt(s.backup_keep_days, 10) || 7;
+  return cfg;
 }
 function resolveRoot(config) {
   const env = (process.env.TXT_MANAGER_ROOT || '').trim().replace(/^"|"$/g, '');
   if (env && fs.existsSync(env) && fs.statSync(env).isDirectory()) return env;
-  if (config.root && fs.existsSync(config.root) && fs.statSync(config.root).isDirectory()) return config.root;
+  // 工作目录取自批量模式的 batch.root（旧顶层 root 已在 loadConfig 中迁移过来）
+  const br = getBatchRoot(config);
+  if (br && fs.existsSync(br) && fs.statSync(br).isDirectory()) return br;
   return defaultRoot();
 }
 
 const config = loadConfig();
+// 落盘基线：saveConfig 以此判定「哪些键真的变了」，只写变更键（避免每次保存全量重写两个文件）。
+// 初值 = 启动时载入的完整配置（此后每次 saveConfig 都会更新它）。
+_configBaseline = JSON.parse(JSON.stringify(config));
 // ── 每日定时检查更新：按设置整点触发静默检查，检查后滚动安排次日（应用需保持运行） ──
 let dailyUpdateTimer = null;
 function scheduleDailyUpdateCheck() {
@@ -361,11 +601,61 @@ if (pendingTrashDirs.length) {
   app.whenReady().then(() => { for (const d of pendingTrashDirs) { try { recycleFile(d); } catch (e) {} } });
 }
 const api = new Api(root, config, resolveEnginesDir(), storageDir());
+// ── 设置库载入（两阶段之二）：api 就绪后用 settings.db 的真实值覆盖内存 config ──
+// 为什么分两阶段：loadConfig() 需要 api 才能读 settings.db，而 api 的构造又需要 config.root
+// （库路径由 storageDir 派生，无法自举）。故顶层先用「锚点 + 默认值」建 api，再用真值覆盖。
+// 覆盖范围 = 业务键全集：凡 settings.db 里有的键，一律以库值为准（不回退 config.json）。
+// 本段同时承担**首次引导**：顶层 loadConfig 调用时 api 尚未存在，引导无法执行；到此处补齐。
+(function applySettingsFromDb() {
+  try {
+    const app = api.getAppSettings();
+    if (!app || typeof app !== 'object') {
+      runLog.sys('app.config', '设置库不可用：本次会话按默认值运行（不回退 config.json）', {});
+      return;
+    }
+    let n = 0;
+    for (const k of Object.keys(app)) {
+      if (app[k] === undefined || app[k] === null) continue;
+      config[k] = app[k];
+      n++;
+    }
+    runLog.sys('app.config', '设置库已载入（' + n + ' 项）', { keys: Object.keys(app).length });
+    // 首次引导：settings.db 尚未落过的键用 config.json 同名值补齐（幂等，详见 seedSettingsFromConfig）
+    const seed = seedSettingsFromConfig(readConfigDisk(), app);
+    for (const k of Object.keys(seed)) config[k] = seed[k];
+    // 工作路径迁移落库（api 此时已就绪）：把旧顶层 root 写进 batch.root 并删除旧键，
+    // 保持「唯一真相」。内存迁移已在 loadConfig 完成（首阶段就要用它定位工作目录）。
+    if (_pendingRootMigration) {
+      try {
+        api._saveAppSettings({ batch: Object.assign({}, config.batch || {}, { root: _pendingRootMigration }) });
+        api._removeAppSetting('root');
+        runLog.sys('app.config', '工作路径已迁移至 batch.root（' + _pendingRootMigration + '）', { root: _pendingRootMigration });
+      } catch (e) {}
+      _pendingRootMigration = '';
+      _pendingRootCleanup = false;
+    } else if (_pendingRootCleanup) {
+      // 清理残留的旧顶层 root（batch.root 已是真相；留着它会被 seed 反复灌回、形成两个真相）
+      try {
+        api._removeAppSetting('root');
+        runLog.sys('app.config', '已清理残留的顶层 root（工作路径的真相在 batch.root）', {});
+      } catch (e) {}
+      _pendingRootCleanup = false;
+    }
+  } catch (e) {
+    try { runLog.err('app.config', e, { at: 'applySettingsFromDb' }); } catch (e2) {}
+  }
+  // 载入后刷新落盘基线：此后 saveConfig 的「变更判定」以设置库真值为基准
+  try { _configBaseline = JSON.parse(JSON.stringify(config)); } catch (e) {}
+})();
 // 扫描/重建环节进度：推送主窗口渲染层实时状态（walk/收集日志/重建成片索引/水印统计 一一对应）
+// 扫描小窗存在时也推给它（启动期全量扫描的进度反馈，见 scanning.html）
 api.onScanProgress = (p) => {
   try {
-    const w = (mainWin && !mainWin.isDestroyed()) ? mainWin : (BrowserWindow.getAllWindows()[0] || null);
-    if (w && !w.isDestroyed()) w.webContents.send('scan_progress', p);
+    const targets = [];
+    if (mainWin && !mainWin.isDestroyed()) targets.push(mainWin);
+    if (scanWin && !scanWin.isDestroyed()) targets.push(scanWin);
+    if (!targets.length) { const w = BrowserWindow.getAllWindows()[0] || null; if (w) targets.push(w); }
+    for (const w of targets) { try { w.webContents.send('scan_progress', p); } catch (e) {} }
   } catch (e) {}
   if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('scan_progress', p);
 };
@@ -377,6 +667,71 @@ api.onFfmpegProgress = (p) => {
 
 // 主窗口与任务窗口：主窗口仅在原生模态对话框/载入遮罩时被禁用；任务列表窗口不随父窗口禁用
 let mainWin = null;
+// 扫描小窗：仅在「需要全量扫描工作目录」时出现（缓存未命中），扫描期间给用户即时反馈。
+// 缓存命中（常态）不创建 —— 避免每次启动都多闪一个窗口。
+let scanWin = null;
+
+// 创建扫描小窗：无边框、不可缩放、置于最前，居中于屏幕
+function openScanWindow() {
+  if (scanWin && !scanWin.isDestroyed()) { try { scanWin.focus(); } catch (e) {} return scanWin; }
+  try {
+    scanWin = new BrowserWindow({
+      width: 360, height: 132,
+      resizable: false, maximizable: false, minimizable: false, fullscreenable: false,
+      frame: false, show: false, skipTaskbar: false, alwaysOnTop: true,
+      title: 'Video Lab',
+      webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false }
+    });
+    scanWin.loadFile(path.join(__dirname, 'frontend', 'scanning.html'));
+    scanWin.once('ready-to-show', () => { try { if (scanWin && !scanWin.isDestroyed()) scanWin.show(); } catch (e) {} });
+    scanWin.on('closed', () => { scanWin = null; });
+    logTiming('扫描小窗已创建');
+  } catch (e) { scanWin = null; }
+  return scanWin;
+}
+
+// 关闭扫描小窗（扫描结束/主窗口即将显示时调用）
+function closeScanWindow() {
+  try { if (scanWin && !scanWin.isDestroyed()) scanWin.close(); } catch (e) {}
+  scanWin = null;
+}
+
+// 按需预热扫描：**只在用户主动唤起主窗口时调用**（托盘点击 / 再次双击图标 / 托盘菜单）。
+// 开机自启（--autostart）是静默常驻托盘形态，用户很可能根本不打开界面 ——
+// 那种情况下绝不弹小窗、也不预热，避免无谓打扰与机械盘唤醒占用。
+// 唤起时若扫描缓存已失效（工作目录结构变了），补一次扫描并弹小窗反馈；
+// 缓存有效则静默放行（连小窗都不出现）。
+// 小窗延迟 1.2 秒出现：先让主窗口画出来，避免"刚弹出小窗又立刻关掉"的抖动。
+let _scanWarmBusy = false;
+function warmScanOnDemand(reason) {
+  try {
+    if (_scanWarmBusy) return;
+    if (!getBatchRoot(config)) return;
+    if (api.hasProjectsCache) return;      // 已有完整结果，无需扫描
+    _scanWarmBusy = true;
+    const _t = process.hrtime.bigint();
+    const _elapsed = () => Math.round(Number(process.hrtime.bigint() - _t) / 1e6);
+    api.isScanCacheFreshAsync().then((fresh) => {
+      if (fresh) {
+        _scanWarmBusy = false;
+        logTiming('唤起检查：扫描缓存有效，无需扫描（' + reason + '，' + _elapsed() + 'ms）');
+        return;
+      }
+      const winTimer = setTimeout(() => {
+        openScanWindow();
+        logTiming('唤起需要全量扫描：已弹扫描小窗');
+      }, 1200);
+      const finish = () => {
+        clearTimeout(winTimer);
+        closeScanWindow();
+        _scanWarmBusy = false;
+        logTiming('唤起预热扫描完成（' + reason + '，' + _elapsed() + 'ms）');
+      };
+      api.listProjectsAsync().then(finish).catch(finish);
+    }).catch(() => { _scanWarmBusy = false; });
+  } catch (e) { _scanWarmBusy = false; }
+}
+
 // 系统托盘：关闭主窗口仅最小化到托盘，右键托盘图标菜单可退出或显示主窗口
 let tray = null;
 let isQuitting = false;
@@ -390,12 +745,17 @@ let discardCloseHandled = false; // close 路径：未保存已确认（一次�
 let discardQuitHandled = false;  // quit 路径：未保存已确认（本次退出不再询问）
 // 图标源文件（resources/app/icon/），托盘图标使用多分辨率适配不同缩放的任务栏
 const ICON_DIR = path.join(__dirname, 'icon');
+// 托盘图标单例：图标文件在 asar 内、体积小，但 createFromPath 是同步读盘 ——
+// 冷态 + 安全软件扫描下首次读取可能被放大，故只构建一次并复用。
+let _trayIcon = null;
 function trayIcon() {
+  if (_trayIcon) return _trayIcon;
   const img = nativeImage.createFromPath(path.join(ICON_DIR, 'tray-icon.png'));
   for (const rep of ['tray-icon@1.25x.png', 'tray-icon@1.5x.png', 'tray-icon@2x.png']) {
     img.addRepresentation(nativeImage.createFromPath(path.join(ICON_DIR, rep)));
   }
-  return img.isEmpty() ? nativeImage.createEmpty() : img;
+  _trayIcon = img.isEmpty() ? nativeImage.createEmpty() : img;
+  return _trayIcon;
 }
 function showMainWindow() {
   // 托盘唤出计时：用户反馈「点托盘要等很久，窗口迟迟不出现」。
@@ -408,6 +768,9 @@ function showMainWindow() {
   mainWin.show();
   mainWin.focus();
   const ms = Number(process.hrtime.bigint() - _t) / 1e6;
+  // 用户主动唤起：若扫描缓存已失效则补扫并弹小窗（自启形态启动时跳过了预热）。
+  // isQuitting 时跳过 —— 退出流程里也会 showMainWindow()，那不是用户"想打开界面"。
+  if (!isQuitting) warmScanOnDemand('唤起主窗口');
   try {
     runLog.sys('app.timing', '托盘唤出主窗口'
       + (needRebuild ? '（窗口已销毁 → 重建）' : '（窗口仅隐藏 → 直接显示）'),
@@ -426,13 +789,33 @@ function showMainWindow() {
   } catch (e) {}
 }
 function createTray() {
-  if (!tray) {
-    tray = new Tray(trayIcon());
-    tray.setToolTip('Video Lab');
-  }
+  if (tray) return; // 已创建：避免重复 new Tray 与重复绑定 click 回调（会触发多次 showMainWindow）
+  tray = new Tray(trayIcon());
+  tray.setToolTip('Video Lab');
   // 左键直接唤起主窗口；右键唤出自绘托盘菜单
-  tray.on('click', () => { hideTrayMenu(); showMainWindow(); });
-  tray.on('right-click', () => showTrayMenu());
+  // ⚠ 点击留痕放在回调**最前**：若用户反馈「图标在、点不动」，这两条能区分两种情况 ——
+  //   ① 日志里没有「托盘收到点击」→ 事件根本没送达主进程（托盘对象异常）
+  //   ② 有「托盘收到点击」但没有后续「托盘唤出主窗口」→ 回调执行了但被卡在 show() 之前
+  tray.on('click', () => {
+    try { runLog.sys('app.timing', '托盘收到点击（左键）', { atSinceProcessStart: Math.round(bootMs()) }); } catch (e) {}
+    hideTrayMenu();
+    showMainWindow();
+  });
+  tray.on('right-click', () => {
+    try { runLog.sys('app.timing', '托盘收到点击（右键）', { atSinceProcessStart: Math.round(bootMs()) }); } catch (e) {}
+    showTrayMenu();
+  });
+  // 托盘对象存活探针：explorer 重启等情况下托盘可能失效，定期确认并在失效时留痕
+  if (!global.__vlTrayProbe) {
+    global.__vlTrayProbe = setInterval(() => {
+      try {
+        if (!tray || tray.isDestroyed()) {
+          runLog.sys('app.timing', '托盘对象已失效（isDestroyed）', {});
+          clearInterval(global.__vlTrayProbe); global.__vlTrayProbe = null;
+        }
+      } catch (e) {}
+    }, 30000);
+  }
 }
 // 自绘托盘菜单窗口：皮肤变量从主窗口实时读取注入（单一来源，避免皮肤定义重复漂移）；
 // 高度按内容自适应，锚定托盘图标上方弹出，失去焦点自动收起
@@ -1109,11 +1492,13 @@ function buildHttpExtraRoutes() {
       return runLog.readDay(o.date, o);
     },
     // 一次拿全环境上下文，省去 agent 多次探测
-    get_app_info: () => {
+    // ⚠ 整体走异步（env 用 checkEnvAsync）：同步探测会阻塞事件循环数十秒
+    get_app_info: async () => {
       const c = loadConfig();
       const t = (() => { try { return api.listTools(); } catch (e) { return { ok: false, error: String(e && e.message || e) }; } })();
       const enginesDir = resolveEnginesDir();
       const ready = (p) => { try { return fs.existsSync(p); } catch (e) { return false; } };
+      const env = await api.checkEnvAsync().catch(() => null);
       return {
         ok: true,
         app: 'Video Lab',
@@ -1127,7 +1512,7 @@ function buildHttpExtraRoutes() {
         root: api.getRoot(),
         skin: c.skin || '',
         http: { url: httpUrl(), port: parseInt(c.http_port, 10) || 9527 },
-        env: api.checkEnv(),
+        env: env,
         modules: [
           { id: 'batch', ready: ready(path.join(enginesDir, 'modules', 'batch', 'index.js')) },
           { id: 'mask', ready: ready(path.join(enginesDir, 'modules', 'mask', 'index.js')) },
@@ -1162,8 +1547,8 @@ function buildHttpExtraRoutes() {
     get_settings: () => {
       const c = loadConfig();
       return {
-        skin: c.skin, root: c.root || '',
-        batch: Object.assign({}, DEFAULT_CONFIG.batch, c.batch),
+        skin: c.skin,
+        batch: Object.assign({}, DEFAULT_CONFIG.batch, c.batch),   // 含批量模式的工作目录 batch.root
         replica: Object.assign({}, DEFAULT_CONFIG.replica, c.replica),
         mask: Object.assign({}, DEFAULT_CONFIG.mask, c.mask),
         auto_check_update: c.auto_check_update !== false,
@@ -1183,10 +1568,10 @@ function buildHttpExtraRoutes() {
         log_dir: runLog.getDir(),
         show_maintenance: c.show_maintenance === true,
         notify_task_end: c.notify_task_end !== false,
-        backup_dir: api.getAppSetting('backup_dir', ''),
-        backup_auto_clean: api.getAppSetting('backup_auto_clean', false) === true,
-        backup_keep_days: parseInt(api.getAppSetting('backup_keep_days', 7), 10) || 7,
-        backup_dir_effective: String(api.getAppSetting('backup_dir', '') || '').trim()
+        backup_dir: String(c.backup_dir || ''),
+        backup_auto_clean: c.backup_auto_clean === true,
+        backup_keep_days: parseInt(c.backup_keep_days, 10) || 7,
+        backup_dir_effective: String(c.backup_dir || '').trim()
           || require('path').join(storageDir(), 'backup'),   // 占位符直接显示实际默认地址
       };
     },
@@ -1197,10 +1582,8 @@ function buildHttpExtraRoutes() {
       const cfg = loadConfig();
       let configMoved = false;
       if (s && typeof s === 'object') {
-        for (const k of ['skin', 'root']) {
-          if (k === 'root') { if (typeof s.root === 'string' && s.root.trim()) cfg.root = s.root.trim(); }
-          else if (typeof s[k] === 'string') cfg[k] = s[k].trim();
-        }
+        // 工作路径已迁入 batch.root（见下方 batch 分支），不再从顶层 s.root 取
+        if (typeof s.skin === 'string') cfg.skin = s.skin.trim();
         if (s.config_storage === 'program' || s.config_storage === 'appdata') cfg.config_storage = s.config_storage;
         if (typeof s.auto_check_update === 'boolean') cfg.auto_check_update = s.auto_check_update;
         if (typeof s.check_update_daily === 'boolean') cfg.check_update_daily = s.check_update_daily;
@@ -1212,7 +1595,12 @@ function buildHttpExtraRoutes() {
         if (s.update_mode === 'auto' || s.update_mode === 'notify') cfg.update_mode = s.update_mode;
         if (s.http_port !== undefined && s.http_port !== null) { const p = parseInt(s.http_port, 10); if (p > 0 && p < 65536) cfg.http_port = p; }
         if (typeof s.http_token === 'string') { const tk = s.http_token.trim(); if (tk.length >= 8 && tk.length <= 64) cfg.http_token = tk; }
-        if (s.batch && typeof s.batch === 'object') cfg.batch = Object.assign({}, DEFAULT_CONFIG.batch, s.batch);
+        if (s.batch && typeof s.batch === 'object') {
+          const prevRoot = getBatchRoot(cfg);
+          cfg.batch = Object.assign({}, DEFAULT_CONFIG.batch, s.batch);
+          // 同步顶层 root 兼容镜像；空值不得覆盖已有工作路径（与旧逻辑一致）
+          setBatchRoot(cfg, getBatchRoot(cfg) || prevRoot);
+        }
         if (s.replica && typeof s.replica === 'object') cfg.replica = Object.assign({}, DEFAULT_CONFIG.replica, s.replica);
         if (s.mask && typeof s.mask === 'object') cfg.mask = Object.assign({}, DEFAULT_CONFIG.mask, s.mask);
       }
@@ -1221,10 +1609,8 @@ function buildHttpExtraRoutes() {
         const mv = moveConfigFile(target);
         if (mv.ok && mv.moved) { configMoved = true; }
       }
-      const httpStripped = stripNewSettings(cfg);   // 新版本设置项不进 config.json
-      saveConfig(cfg);
+      saveConfig(cfg);   // 只写实际变更的键：settings.db（唯一读取来源）+ config.json（旧版本兼容快照）
       Object.assign(config, cfg);
-      persistNewSettings(httpStripped, config);     // 补回内存 + 落 settings.db
       // 端口/令牌实际变更才重启 HTTP 服务器（重启会断开浏览器既有 SSE 连接）；
       // 皮肤等其它设置变更保留连接，settings_saved 广播可即时送达浏览器，无需手动刷新
       const httpPortWanted = parseInt(cfg.http_port, 10) || 9527;
@@ -1244,7 +1630,7 @@ function buildHttpExtraRoutes() {
       const s = args[0];
       const root = s && typeof s.root === 'string' ? s.root.trim() : '';
       if (!root || !fs.existsSync(root) || !fs.statSync(root).isDirectory()) return { ok: false, error: '路径无效或不存在' };
-      config.root = root; saveConfig(config); api.setRoot(root);
+      setBatchRoot(config, root); saveConfig(config); api.setRoot(root);
       return { ok: true, root };
     },
     get_skin: () => String(config.skin || 'white_blue'),
@@ -1303,7 +1689,8 @@ function buildHttpExtraRoutes() {
 }
 
 function registerIpc() {
-  ipcMain.handle('list_projects', (e, force) => api.listProjects(!!force));
+  // ⚠ 走异步版：同步版会 walkFiles + 逐文件 contentHash 占死事件循环数十秒（冷启动）
+  ipcMain.handle('list_projects', (e, force) => api.listProjectsAsync(!!force));
   ipcMain.handle('list_versions', (e, project, name) => api.listVersions(project, name));
   ipcMain.handle('read_config', (e, p) => api.readConfig(p));
   ipcMain.handle('save_config', (e, p, folders, excludes, watermark) => api.saveConfig(p, folders, excludes, watermark));
@@ -1461,44 +1848,11 @@ function registerIpc() {
     else if (action === 'quit') { isQuitting = true; app.quit(); }
     return { ok: true };
   });
-  // 设置页：读取完整配置（合并默认值，保证字段齐全）
-  // ───────── 应用级设置的读写（软件端 IPC 与浏览器端 HTTP 两条保存路径共用）─────────
-  // 用户定案：新版本加入的设置项只落 settings.db（config.json 仅作旧版回退写入，新字段不进）；
-  // 读取默认走 backend.getAppSetting（settings.db 优先、config 回退）。
-  // ⚠ 两条保存路径必须都调用这几个函数 —— 曾因只改 HTTP 路径、漏改 IPC 路径导致软件端保存失效。
-  const APP_SETTING_KEYS = ['notify_task_end', 'show_maintenance', 'backup_dir', 'backup_auto_clean', 'backup_keep_days'];
-  // 新版本设置项（不进 config.json，只落 settings.db）
-  const NEW_SETTING_KEYS = ['backup_dir', 'backup_auto_clean', 'backup_keep_days'];
-
-  function mergeAppSettings(cfg, s) {
-    if (!s || typeof s !== 'object') return cfg;
-    if (typeof s.notify_task_end === 'boolean') cfg.notify_task_end = s.notify_task_end;
-    if (typeof s.show_maintenance === 'boolean') cfg.show_maintenance = s.show_maintenance;
-    if (typeof s.backup_dir === 'string') cfg.backup_dir = s.backup_dir;
-    if (typeof s.backup_auto_clean === 'boolean') cfg.backup_auto_clean = s.backup_auto_clean;
-    if (s.backup_keep_days !== undefined) cfg.backup_keep_days = parseInt(s.backup_keep_days, 10) || 7;
-    return cfg;
-  }
-  // 写盘前摘除新设置项（config.json 不收），返回摘出的值
-  function stripNewSettings(cfg) {
-    const out = {};
-    for (const k of NEW_SETTING_KEYS) {
-      if (cfg[k] !== undefined) { out[k] = cfg[k]; delete cfg[k]; }
-    }
-    return out;
-  }
-  // 落 settings.db 并补回内存 config（显式传值：main.config 与 backend.config 是两个对象）
-  function persistNewSettings(vals, memoryConfig) {
-    for (const k of Object.keys(vals || {})) memoryConfig[k] = vals[k];
-    try { api._saveAppSettings(vals); } catch (e) {}
-  }
-
   ipcMain.handle('get_settings', () => {
     const c = loadConfig();
     return {
       skin: c.skin,
-      root: c.root || '',
-      batch: Object.assign({}, DEFAULT_CONFIG.batch, c.batch),
+      batch: Object.assign({}, DEFAULT_CONFIG.batch, c.batch),   // 含批量模式的工作目录 batch.root
       replica: Object.assign({}, DEFAULT_CONFIG.replica, c.replica),
       mask: Object.assign({}, DEFAULT_CONFIG.mask, c.mask),
       auto_check_update: c.auto_check_update !== false,
@@ -1511,13 +1865,12 @@ function registerIpc() {
       config_path_program: path.dirname(programConfigPath()),   // 显示目录（含引导文件与三库）
       config_path_appdata: path.dirname(appdataConfigPath()),
       log_dir: runLog.getDir(),   // 运行日志目录（设置页「打开文件夹」用；与 HTTP 版 get_settings 对齐）
-      show_maintenance: api.getAppSetting('show_maintenance', false) === true,   // 「维护」板块可见性（用户侧默认关闭）
-      notify_task_end: api.getAppSetting('notify_task_end', true) !== false,   // 任务通知（默认开启，settings 优先）
-      // backup_* 只落 settings.db，读回必须走 getAppSetting（loadConfig 的磁盘 config 不含它们）
-      backup_dir: api.getAppSetting('backup_dir', ''),
-      backup_auto_clean: api.getAppSetting('backup_auto_clean', false) === true,
-      backup_keep_days: parseInt(api.getAppSetting('backup_keep_days', 7), 10) || 7,
-      backup_dir_effective: String(api.getAppSetting('backup_dir', '') || '').trim()
+      show_maintenance: c.show_maintenance === true,   // 「维护」板块可见性（用户侧默认关闭）
+      notify_task_end: c.notify_task_end !== false,   // 任务通知（默认开启）
+      backup_dir: String(c.backup_dir || ''),
+      backup_auto_clean: c.backup_auto_clean === true,
+      backup_keep_days: parseInt(c.backup_keep_days, 10) || 7,
+      backup_dir_effective: String(c.backup_dir || '').trim()
         || path.join(storageDir(), 'backup'),   // 占位符直接显示实际默认地址
       autostart: c.autostart === true,
       close_behavior: c.close_behavior === 'exit' ? 'exit' : 'tray',
@@ -1531,10 +1884,8 @@ function registerIpc() {
     const cfg = loadConfig();
     let configMoved = false;
     if (s && typeof s === 'object') {
-      for (const k of ['skin', 'root']) {
-        if (k === 'root') { if (typeof s.root === 'string' && s.root.trim()) cfg.root = s.root.trim(); } // root 为空不得覆盖已有工作路径
-        else if (typeof s[k] === 'string') cfg[k] = s[k].trim();
-      }
+      // 工作路径已迁入 batch.root（见下方 batch 分支），不再从顶层 s.root 取
+      if (typeof s.skin === 'string') cfg.skin = s.skin.trim();
       if (s.config_storage === 'program' || s.config_storage === 'appdata') cfg.config_storage = s.config_storage;
       if (typeof s.auto_check_update === 'boolean') cfg.auto_check_update = s.auto_check_update;
       if (typeof s.check_update_daily === 'boolean') cfg.check_update_daily = s.check_update_daily;
@@ -1545,7 +1896,12 @@ function registerIpc() {
       if (s.update_mode === 'auto' || s.update_mode === 'notify') cfg.update_mode = s.update_mode;
       if (s.http_port !== undefined && s.http_port !== null) { const p = parseInt(s.http_port, 10); if (p > 0 && p < 65536) cfg.http_port = p; }
       if (typeof s.http_token === 'string') { const tk = s.http_token.trim(); if (tk.length >= 8 && tk.length <= 64) cfg.http_token = tk; }
-      if (s.batch && typeof s.batch === 'object') cfg.batch = Object.assign({}, DEFAULT_CONFIG.batch, s.batch);
+      if (s.batch && typeof s.batch === 'object') {
+        const prevRoot = getBatchRoot(cfg);
+        cfg.batch = Object.assign({}, DEFAULT_CONFIG.batch, s.batch);
+        // 同步顶层 root 兼容镜像；空值不得覆盖已有工作路径（与旧逻辑一致）
+        setBatchRoot(cfg, getBatchRoot(cfg) || prevRoot);
+      }
       if (s.replica && typeof s.replica === 'object') cfg.replica = Object.assign({}, DEFAULT_CONFIG.replica, s.replica);
       if (s.mask && typeof s.mask === 'object') cfg.mask = Object.assign({}, DEFAULT_CONFIG.mask, s.mask);
     }
@@ -1556,12 +1912,10 @@ function registerIpc() {
       const mv = moveConfigFile(target);
       if (mv.ok && mv.moved) { configMoved = true; } // 库随配置一并迁移（moveConfigFile 内部完成）
     }
-    const strippedNew = stripNewSettings(cfg);   // 新版本设置项不进 config.json（只落 settings.db）
-    saveConfig(cfg);
+    saveConfig(cfg);   // 只写实际变更的键：settings.db（唯一读取来源）+ config.json（旧版本兼容快照）
     // 应用开机自启动（openAtLogin + --autostart 静默托盘启动）；开发版不注册，避免污染开发环境
     try { if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: cfg.autostart === true, args: ['--autostart'] }); } catch (e) {}
     Object.assign(config, cfg);
-    persistNewSettings(strippedNew, config);     // 补回内存 config + 落 settings.db
     // 端口/令牌实际变更才重启 HTTP 服务器（重启会断开浏览器既有 SSE 连接）；
     // 皮肤等其它设置变更保留连接，settings_saved 广播可即时送达浏览器，无需手动刷新
     const httpPortWanted = parseInt(cfg.http_port, 10) || 9527;
@@ -1636,12 +1990,14 @@ function registerIpc() {
   // 设置页：改动状态通知（决定失焦时是直接关闭还是提醒保存）
   ipcMain.on('settings_dirty', (e, d) => { settingsDirty = !!d; });
   ipcMain.handle('get_root', () => api.getRoot());
-  ipcMain.handle('check_env', () => api.checkEnv());
+  // ⚠ 必须走异步版：同步 checkEnv 会在冷启动时用 spawnSync 阻塞主进程事件循环数十秒
+  //（首次加载 200MB+ 未签名 ffmpeg + 安全软件扫描），直接把窗口显示推迟到分钟级
+  ipcMain.handle('check_env', () => api.checkEnvAsync());
   // 首次引导窗口：保存工作路径
   ipcMain.handle('save_guide', (e, s) => {
     const root = s && typeof s.root === 'string' ? s.root.trim() : '';
     if (!root || !fs.existsSync(root) || !fs.statSync(root).isDirectory()) return { ok: false, error: '路径无效或不存在' };
-    config.root = root;
+    setBatchRoot(config, root);
     saveConfig(config);
     api.setRoot(root);
     return { ok: true, root };
@@ -1650,8 +2006,8 @@ function registerIpc() {
     const result = await dialog.showOpenDialog(mainWin, { title: '选择工作路径', defaultPath: api.getRoot(), properties: ['openDirectory'] });
     if (result.canceled || !result.filePaths || result.filePaths.length === 0) return { ok: false, canceled: true };
     const dir = result.filePaths[0];
-    config.root = dir; saveConfig(config); api.setRoot(dir);
-    return { ok: true, root: dir, projects: api.listProjects() };
+    setBatchRoot(config, dir); saveConfig(config); api.setRoot(dir);
+    return { ok: true, root: dir, projects: await api.listProjectsAsync() };
   });
   ipcMain.handle('get_skin', () => String(config.skin || 'white_blue'));
   ipcMain.handle('set_skin', (e, skin) => { const v = String(skin || '').trim(); config.skin = v || 'white_blue'; saveConfig(config); return config.skin; });
@@ -1665,15 +2021,17 @@ function registerIpc() {
     if (r.ok) saveConfig(config);   // backend 写入的 this.config.ffmpeg_dir 与这里是同一引用
     return r;
   });
-  // 启动检测 FFmpeg 环境：不完整才弹下载提示（滤镜链实跑比对，见 backend.checkEnv）
-  setTimeout(() => {
-    try {
-      const env = api.checkEnv();
-      if (!env.downloadNeeded) return;
-      sendToMain('env_fix_available', { missing: env.missing || [], hasFfmpeg: env.ffmpeg });
-      sendToSettings('env_fix_available', { missing: env.missing || [], hasFfmpeg: env.ffmpeg });
-    } catch (e) {}
-  }, 3500);
+  // 启动检测 FFmpeg 环境：不完整才弹下载提示（滤镜链实跑比对，见 backend.checkEnvAsync）
+  // ⚠ 用异步版（不阻塞事件循环）；且延迟到窗口就绪之后再跑，避免与首帧竞争
+  runAfterWindowLoad(() => {
+    setTimeout(() => {
+      api.checkEnvAsync().then((env) => {
+        if (!env.downloadNeeded) return;
+        sendToMain('env_fix_available', { missing: env.missing || [], hasFfmpeg: env.ffmpeg });
+        sendToSettings('env_fix_available', { missing: env.missing || [], hasFfmpeg: env.ffmpeg });
+      }).catch(() => {});
+    }, 500);
+  });
   ipcMain.handle('list_dir', async (e, dir) => api.listDir(dir));   // 工具页目录浏览对话框（preload 已定义，此前漏注册）
   ipcMain.handle('open_path', async (e, p) => { const target = path.resolve(p); if (fs.existsSync(target)) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '路径不存在' }; });
   ipcMain.handle('open_parent', async (e, p) => { const target = path.dirname(path.resolve(p)); if (fs.existsSync(target)) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '路径不存在' }; });
@@ -1813,14 +2171,31 @@ function createWindow() {
   mainWin = new BrowserWindow({ title: 'Video Lab', width: 1360, height: 860, minWidth: 1120, minHeight: 700, frame: false, show: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
   mainWin.loadFile(path.join(__dirname, 'frontend', 'index.html'));
   // 普通启动：页面就绪后显示；开机自启（--autostart）保持隐藏，仅托盘常驻
+  // ⚠ 若启动时需要全量扫描（缓存未命中），则**推迟到扫描完成后再显示**：
+  //    否则窗口先出现、内容区长时间空白（列表要等扫描完才有），体感更差。
+  //    扫描期间由独立的扫描小窗承担反馈（见 openScanWindow）。
   mainWin.once('ready-to-show', () => {
     logTiming('主窗口 ready-to-show（首帧可显示）');
-    if (!IS_AUTOSTART) mainWin.show();
+    if (IS_AUTOSTART) return;
+    if (global.__vlWaitScanToShow) { global.__vlMainReadyToShow = true; return; }
+    mainWin.show();
   });
   mainWin.on('close', (e) => {
     if (!isQuitting) { e.preventDefault(); handleMainWindowClose(); }
   });
   mainWin.on('closed', () => { mainWin = null; });
+}
+
+// 扫描结束后释放主窗口显示（若启动时因等待扫描而推迟 show）
+function showMainAfterScan() {
+  global.__vlWaitScanToShow = false;
+  try {
+    if (global.__vlMainReadyToShow && mainWin && !mainWin.isDestroyed() && !IS_AUTOSTART) {
+      logTiming('扫描完成：主窗口显示');
+      mainWin.show();
+    }
+  } catch (e) {}
+  global.__vlMainReadyToShow = false;
 }
 
 // 启动阶段计时落日志（app.timing）：冷启动排查的唯一数据来源，避免今后只能靠体感猜
@@ -1862,15 +2237,43 @@ function openGuideWindow() {
 }// 首次（或配置缺失）时：若有工作路径直接继续；否则打开引导窗口由用户保存或跳过。
 // 跳过（root 仍无效）时保持 root 为空：主窗口进入「空项目列表 + 居中选择路径」引导态
 async function ensureConfig() {
-    const isDir = (p) => { try { return p && fs.existsSync(p) && fs.statSync(p).isDirectory(); } catch (e) { return false; } };
+    const br = getBatchRoot(config);   // 工作目录取自批量模式的 batch.root
+    // ⚠ 工作目录可能在机械盘：主进程**不得**同步 stat —— 冷态首次访问会冻结事件循环
+    //   （2026-09-26 冷启动实测 ready-to-show 之后卡 124 秒，正是此处 existsSync/statSync）。
+    //   改用 fs.promises 异步判断，且只判一次（原实现对同一路径做了两次）。
+    let ok = false;
+    if (br) {
+      try { const st = await fs.promises.stat(br); ok = st.isDirectory(); } catch (e) { ok = false; }
+    }
     // 开机自启为静默后台启动：配置缺失也不弹首次引导窗，保持无打扰（用户稍后手动打开时再引导）
-    if (!IS_AUTOSTART && !isDir(config.root)) {
+    if (!IS_AUTOSTART && !ok) {
       await openGuideWindow(); // 保存或右上角关闭（跳过）都会关闭该窗口
     }
-    api.setRoot(isDir(config.root) ? config.root : '');
+    // root 已在 Api 构造时由 resolveRoot 正确设置；此处仅为确认，相同路径时快速返回
+    api.setRoot(ok ? br : '');
   }
 
 app.whenReady().then(async () => {
+  // ── 主进程事件循环心跳（启动期）──
+  // 「托盘图标在、点不动、要等很久才出窗口」= 主进程事件循环被同步操作占死的典型表现。
+  // 单靠各阶段打点看不出"两次打点之间事件循环是否卡住"，故起一个 500ms 心跳：
+  // 正常应每 500ms 一跳；若某两个心跳间隔远大于 500ms，说明中间那段代码阻塞了事件循环，
+  // 该间隔会被记成 app.timing 的「事件循环卡顿」事件（含卡顿时长），直接把元凶段暴露出来。
+  // 启动完成后（60 秒或首次交互后）自动停，不影响稳定态。
+  if (!global.__vlHeartbeat) {
+    global.__vlHeartbeat = { last: Date.now(), n: 0 };
+    const hb = setInterval(() => {
+      const now = Date.now();
+      const gap = now - global.__vlHeartbeat.last;
+      global.__vlHeartbeat.last = now;
+      global.__vlHeartbeat.n++;
+      if (gap > 800) { // 明显超过 500ms 才记，避免调度抖动噪声
+        try { runLog.sys('app.timing', '事件循环卡顿（心跳间隔异常）',
+          { gapMs: Math.round(gap), atSinceProcessStart: Math.round(bootMs()), beat: global.__vlHeartbeat.n }); } catch (e) {}
+      }
+      if (global.__vlHeartbeat.n >= 120) clearInterval(hb); // 约 60 秒后停
+    }, 500);
+  }
   // 应用身份（AppUserModelID）与 build.appId 统一（com.videolab.manager）：
   // 需配合「开始菜单快捷方式 + 相同 AUMID」一起注册，Windows 才能解析显示名（Video Lab）与图标；
   // 不可移除——缺失时任务管理器会把应用识别为框架名 "Electron"、图标解析失败（乱码）
@@ -1884,10 +2287,67 @@ app.whenReady().then(async () => {
   // 现在只保留「窗口必须先有的最小集」，其余一律在首帧之后再跑。
   createWindow();
   logTiming('主窗口已创建（loadFile 已发起）');
+  // ── 启动期全量扫描的「小窗 + 异步预热」 ──
+  // 缓存未命中（首次启动 / 工作目录结构变化）时才需要全量扫描，实测冷态可达 20-30 秒。
+  // 此时：① 弹轻量扫描小窗给即时反馈；② 主窗口推迟到扫描完成再显示（避免空白窗口）；
+  //      ③ 在后台异步预热，前端随后调 list_projects 时直接命中同一结果，不重复扫描。
+  // ⚠ 判定必须走**异步版**（isScanCacheFreshAsync）：同步版会在机械盘冷态首次访问时
+  //    冻结主进程达 117 秒（实测），连托盘和窗口都出不来。
+  // ⚠ 开机自启（--autostart）直接跳过整段：托盘静默常驻，用户不打开就不该弹小窗；
+  //    用户真去唤起时由 warmScanOnDemand() 按需补扫。
+  (() => {
+    if (IS_AUTOSTART) return;                 // 自启形态静默，不打扰
+    if (!getBatchRoot(config)) return;        // 未配置工作路径：无扫描可言
+    // 超过该时长仍未判定完（典型：工作目录所在盘休眠唤醒中），先弹小窗给反馈
+    const DECIDE_WIN_DELAY_MS = 1200;
+    let decided = false;
+    const winTimer = setTimeout(() => {
+      if (decided) return;
+      global.__vlWaitScanToShow = true;
+      openScanWindow();
+      logTiming('扫描判定超时：已弹扫描小窗');
+    }, DECIDE_WIN_DELAY_MS);
+    const _t = process.hrtime.bigint();
+    const _ms = () => Math.round(Number(process.hrtime.bigint() - _t) / 1e6);
+    const _diag = () => { try { return api._lastFreshTiming ? JSON.stringify(api._lastFreshTiming) : ''; } catch (e) { return ''; } };
+    const runWarmScan = () => {
+      global.__vlWaitScanToShow = true;
+      openScanWindow();
+      logTiming('启动需要全量扫描：已弹扫描小窗');
+      const _s = process.hrtime.bigint();
+      api.listProjectsAsync().then(() => {
+        const ms = Math.round(Number(process.hrtime.bigint() - _s) / 1e6);
+        logTiming('启动预热扫描完成（耗时 ' + ms + 'ms）');
+        closeScanWindow();
+        showMainAfterScan();
+      }).catch(() => {
+        closeScanWindow();
+        showMainAfterScan();
+      });
+    };
+    api.isScanCacheFreshAsync().then((fresh) => {
+      decided = true;
+      clearTimeout(winTimer);
+      logTiming('启动缓存判定完成（' + _ms() + 'ms，fresh=' + fresh + '，分解 ' + _diag() + '）');
+      if (fresh) { closeScanWindow(); showMainAfterScan(); return; }   // 缓存有效：连小窗都不必出现
+      runWarmScan();
+    }).catch(() => {
+      decided = true;
+      clearTimeout(winTimer);
+      runWarmScan();   // 判定异常按「需要扫描」处理，保证主窗口最终一定会显示
+    });
+  })();
   // 开机自启（--autostart）：进程静默常驻托盘，窗口保持隐藏
   runAfterWindowLoad(() => {
-    ensureConfig().catch(() => {});   // 首次引导窗口（配置缺失时）：必须在窗口加载后，避免阻塞启动
+    const _t0 = process.hrtime.bigint();
+    const _ms = () => Math.round(Number(process.hrtime.bigint() - _t0) / 1e6);
+    // 首次引导窗口（配置缺失时）：必须在窗口加载后，避免阻塞启动。
+    // ⚠ ensureConfig 内部已改为异步 stat（工作目录在机械盘，同步 stat 会冻结事件循环）。
+    //   这里补打完成埋点：下次冷态若它仍慢，只会体现在这行，不再拖累 createTray / HTTP。
+    ensureConfig().catch(() => {}).then(() => { logTiming('窗口加载后：ensureConfig 完成（' + _ms() + 'ms）'); });
+    logTiming('窗口加载后：createTray 开始');
     try { createTray(); } catch (e) {}
+    logTiming('窗口加载后：托盘已创建（' + _ms() + 'ms）');
     restartHttpServer();              // 内嵌 HTTP 服务器：浏览器访问 http://localhost:<port>
     if (IS_AUTOSTART && mainWin && !mainWin.isDestroyed()) mainWin.hide();
     logTiming('窗口加载后：托盘 / HTTP 就绪');
@@ -1897,10 +2357,13 @@ app.whenReady().then(async () => {
       scheduleDailyUpdateCheck();
     }
     // 任务列表恢复：读上百条任务日志，是最重的一步 —— 放到窗口加载后且让出一轮事件循环，
-    // 保证窗口已经画出来再占用主进程（原先它排在 createWindow 之前，直接拖慢每次冷启动）
+    // 保证窗口已经画出来再占用主进程（原先它排在 createWindow 之前，直接拖慢每次冷启动）。
+    // ⚠ 这里只计「同步段」：批量任务的输出目录校验已由 backend 转入异步（冷态下同步 existsSync
+    //   会逐任务冷访问机械盘 → 冻结主进程，实测约 9 秒），故异步部分不计入本耗时。
     setTimeout(() => {
+      const _t = process.hrtime.bigint();
       try { api.restoreTasks(); } catch (e) {}
-      logTiming('窗口加载后：任务列表已恢复');
+      logTiming('窗口加载后：任务恢复同步段完成（耗时 ' + Math.round(Number(process.hrtime.bigint() - _t) / 1e6) + 'ms · 输出目录校验已转异步）');
     }, 0);
   });
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

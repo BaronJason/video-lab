@@ -38,7 +38,7 @@ function openDirForeground(target) {
 // [channel, apiMethod, argTransform?] argTransform 可选，用于处理布尔/默认值
 const PURE_BACKEND_ROUTES = {
   report_ui_error: { m: 'reportUiError', a: (args) => [args[0]] },
-  list_projects: { m: 'listProjects', a: (args) => [!!args[0]] },
+  list_projects: { m: 'listProjectsAsync', a: (args) => [!!args[0]] },
   list_versions: { m: 'listVersions', a: (args) => [args[0], args[1]] },
   read_config: { m: 'readConfig', a: (args) => [args[0]] },
   save_config: { m: 'saveConfig', a: (args) => [args[0], args[1], args[2], args[3]] },
@@ -101,7 +101,7 @@ const PURE_BACKEND_ROUTES = {
   delete_secondary_products: { m: 'deleteSecondaryProducts', a: (args) => [args[0], args[1]] },
   clean_duplicate_star: { m: 'cleanDuplicateStar', a: (args) => [!!args[0]] },
   get_root: { m: 'getRoot', a: () => [] },
-  check_env: { m: 'checkEnv', a: () => [] },
+  check_env: { m: 'checkEnvAsync', a: () => [] },
   cancel_precheck: { m: 'cancelPrecheck', a: () => [] },
   clean_video_cache: { m: 'cleanVideoCache', a: () => [] },
 };
@@ -156,7 +156,7 @@ function startHttpServer(opts) {
       const result = await dialog.showOpenDialog({ title: '选择工作路径', defaultPath: api.getRoot(), properties: ['openDirectory'] });
       if (result.canceled || !result.filePaths || result.filePaths.length === 0) return { ok: false, canceled: true };
       const dir = result.filePaths[0];
-      return { ok: true, root: dir, projects: api.listProjects() };
+      return { ok: true, root: dir, projects: await api.listProjectsAsync() };
     },
     pick_watermark: async (args) => {
       const defaultPath = String(args[0] || '').trim();

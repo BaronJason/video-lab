@@ -8,6 +8,17 @@
 // 各阶段耗时统一落到运行日志的 app.timing 事件，下次再有人说慢可以直接看数。
 const _BOOT_T0 = process.hrtime.bigint();
 function bootMs() { return Number(process.hrtime.bigint() - _BOOT_T0) / 1e6; }
+// 极早探针：本行之前只有 V8 启动 + 本文件解析，若这里「进程已存活很久」说明卡在
+// 进程创建/加载阶段（杀软扫描未签名 exe、磁盘冷读），而非任何 JS 逻辑。
+// 用 process.uptime() 反推进程真实创建时刻（Electron 主进程里该值自进程创建累计），
+// 写入独立文件而非 runLog —— 此时 runLog 尚未 require。
+const _EARLY_UPTIME_MS = Math.round(process.uptime() * 1000);
+try {
+  require('fs').writeFileSync(
+    require('path').join(require('os').homedir(), '.video-lab', 'boot-probe.json'),
+    JSON.stringify({ at: new Date().toISOString(), pid: process.pid, argv: process.argv.slice(1), uptimeMsAtFirstLine: _EARLY_UPTIME_MS }),
+    'utf8');
+} catch (e) {}
 
 const fs = require('fs');
 const path = require('path');
@@ -158,6 +169,12 @@ runLog.sys('app.start',
   { version: app.getVersion(), packaged: app.isPackaged, portable: IS_PORTABLE, storageDir: storageDir(), enginesDir: resolveEnginesDir(), keepDays: runLog.KEEP_DAYS });
 runLog.sys('app.timing', '启动阶段 · 日志就绪',
   { electronReq: Math.round(_bootReqElectron), backendReq: Math.round(_bootReqBackend), logReady: Math.round(_bootLogReady) });
+// 进程创建 → JS 首行 的间隔：这一段时间完全在业务代码之外（框架加载/杀软扫描/磁盘冷读）。
+// 它异常大时，本行之内的一切耗时都不值得看 —— 问题在进程被外部阻塞。
+// 注意 two clock：uptimeMs 以进程创建为基准，bootMs 以本文件首行为基准，两者相减才是真间隔。
+runLog.sys('app.timing', '启动阶段 · 进程创建→JS 首行',
+  { uptimeMsAtFirstLine: _EARLY_UPTIME_MS, jsFromFirstLineToLogReadyMs: Math.round(_bootLogReady),
+    totalFromProcessCreateMs: Math.round(_EARLY_UPTIME_MS + _bootLogReady) });
 
 // ── IPC 统一留痕：一处覆盖全部通道 ──
 // 回答"用户到底点了什么"——任务窗口与主窗口的写操作都会经过这里，
@@ -381,8 +398,10 @@ function trayIcon() {
   return img.isEmpty() ? nativeImage.createEmpty() : img;
 }
 function showMainWindow() {
-  // 托盘唤出计时：用户反馈「点托盘要等很久」，这里记录从点击到窗口真正显示的耗时，
-  // 区分「窗口需重建（重 loadFile，慢）」与「窗口仅被隐藏（应 <100ms）」两种情况
+  // 托盘唤出计时：用户反馈「点托盘要等很久，窗口迟迟不出现」。
+  // 主进程只能测到 show() 调用本身返回的耗时；窗口是否真的画出来要看渲染侧首帧，
+  // 故同时向渲染进程要一次 rAF 双帧确认，两个数字分开记 —— 若 show() 很快而首帧很慢，
+  // 说明卡在渲染/合成（主进程事件循环被占住时最典型）。
   const _t = process.hrtime.bigint();
   const needRebuild = !mainWin || mainWin.isDestroyed();
   if (needRebuild) createWindow();
@@ -393,6 +412,17 @@ function showMainWindow() {
     runLog.sys('app.timing', '托盘唤出主窗口'
       + (needRebuild ? '（窗口已销毁 → 重建）' : '（窗口仅隐藏 → 直接显示）'),
       { costMs: Math.round(ms), rebuilt: needRebuild });
+  } catch (e) {}
+  // 渲染侧首帧确认（异步）：与上面的 costMs 对照即可区分「主进程卡」还是「渲染卡」
+  try {
+    if (mainWin && !mainWin.isDestroyed()) {
+      mainWin.webContents.executeJavaScript(
+        'new Promise(function(res){requestAnimationFrame(function(){requestAnimationFrame(function(){res(1);});});})'
+      ).then(() => {
+        const total = Number(process.hrtime.bigint() - _t) / 1e6;
+        try { runLog.sys('app.timing', '托盘唤出 · 渲染首帧确认', { showMs: Math.round(ms), firstFrameMs: Math.round(total), rebuilt: needRebuild }); } catch (e) {}
+      }).catch(() => {});
+    }
   } catch (e) {}
 }
 function createTray() {

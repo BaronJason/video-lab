@@ -2837,7 +2837,14 @@ class Api {
       // 排序与普通项目保持一致：按日期降序（最新在前）。此前直接返回未排序列表，
       // 实际按「项目名 → 月份目录 → 日期目录」的路径字符串排列，跨月即错乱（如 "10月" < "7月"）。
       // date 取文件名前 4 位「月日」；跨年不区分（用户定案 2026-09-27：届时再想简洁的区分办法）。
-      const list = this._replicaLogFiles(mode).map((f) => ({ path: f, name: path.basename(f), date: path.basename(f).slice(0, 4) }));
+      const list = this._replicaLogFiles(mode).map((f) => {
+        const name = path.basename(f);
+        const date = name.slice(0, 4);
+        // 分支标签带项目名（MMDD-项目名）：同一天多个项目都做过复刻时，仅凭 MMDD 分辨不出是哪个项目
+        //（用户定案 2026-09-27）。项目名取相对根目录的第一段目录。
+        const proj = this._projectOf(f);
+        return { path: f, name, date, label: proj ? (date + '-' + proj) : date };
+      });
       list.sort((a, b) => (b.date.localeCompare(a.date) || a.name.localeCompare(b.name)));
       return list;
     }

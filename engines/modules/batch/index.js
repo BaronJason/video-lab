@@ -894,6 +894,11 @@ async function run(ctx, env = process.env) {
   logger.lockAcquired('开始执行拼接任务');
 
   let hasError = false;
+  // 当前加速档位（0 基）：定义在**函数级**，因为除了「档位循环」内部，
+  // 失败诊断（round / fail 事件）也要读它 —— 先前它用 const 定义在 retryCount 循环体内，
+  // 循环外的引用一旦执行就是 `thrStep is not defined`（2026-09-27 实测：第 16 个成片
+  // 首次出现「超阈值未达标」才走到该路径，前 15 个正常，报错后整批中断）。
+  let thrStep = 0;
   try {
     // ── 创建输出目录 ──
     logger.info('');
@@ -983,7 +988,7 @@ async function run(ctx, env = process.env) {
       // 当前生效的"允许组合时长"（随档位变化；输出上限不变，见上方红线说明）
       let ladderAllowed = cfg.maxTotalDuration * cfg.speedThreshold;
       for (retryCount = 0; retryCount < ladderRounds; retryCount++) {
-        const thrStep = Math.min(Math.floor(retryCount / RETRY_PER_STEP), THR_STEPS.length - 1);
+        thrStep = Math.min(Math.floor(retryCount / RETRY_PER_STEP), THR_STEPS.length - 1);
         ladderAllowed = Math.min(
           cfg.maxTotalDuration * cfg.speedThreshold * THR_STEPS[thrStep],
           cfg.maxTotalDuration * MAX_SPEED_RATIO
@@ -1163,14 +1168,19 @@ async function run(ctx, env = process.env) {
             + ` ｜ 源状态：${srcStat}`
             + ` ｜ 可尝试：${hints.map((h, k) => (k + 1) + ') ' + h).join('；')}`;
         } catch (e3) { /* 诊断失败不影响主流程 */ }
-        // 命名前的失败：同时输出「序号」协议行 —— 后端据此记录 failedIndices，
-        // 续跑时按序号补做（否则名单为空，只能把整批重做）
-        logger.diag('fail', { n: outIndex, rounds: retryCount + 1, step: thrStep + 1,
-          dur: Math.round(totalDuration * 10) / 10, allow: Math.round(ladderAllowed * 10) / 10,
-          limit: cfg.maxTotalDuration, reason: String(failReason || '').slice(0, 200),
-          detail: diagText,
-          exhausted: Array.from(exhaustedSrcs).map((i) => i + 1) });
+        // 命名前的失败：输出「序号」协议行 —— 后端据此记录 failedIndices，续跑时按序号补做。
+        // ⚠ 顺序很关键（2026-09-27 实报）：**必须先记序号、再写诊断**。
+        //   此前 failIndex 排在诊断之后，而诊断引用了作用域越界的变量（thrStep）抛错 →
+        //   序号从未落盘 → 任务虽然标为失败，续跑却报「没有找到需要完成的成片」，只能整批重做。
+        //   诊断属于"锦上添花"，绝不能阻断"记录失败序号"这条主流程。
         logger.failIndex(outIndex, userMsg);
+        try {
+          logger.diag('fail', { n: outIndex, rounds: retryCount + 1, step: thrStep + 1,
+            dur: Math.round(totalDuration * 10) / 10, allow: Math.round(ladderAllowed * 10) / 10,
+            limit: cfg.maxTotalDuration, reason: String(failReason || '').slice(0, 200),
+            detail: diagText,
+            exhausted: Array.from(exhaustedSrcs).map((i) => i + 1) });
+        } catch (eDiag) { /* 诊断失败绝不影响失败序号与后续流程 */ }
         logger.error(`第 ${outIndex} 个成片`, userMsg);
         hasError = true;
         continue;
@@ -1201,6 +1211,13 @@ async function run(ctx, env = process.env) {
       // 整串再合并连续 `--`，消除 txtNameSuffix 为空时出现的 `--序号`
       let finalOutName = `${nameItems.join('-')}-${suffixStr}${outIndex}.mp4`.replace(/-{2,}/g, '-');
       let finalOut = path.join(outDir, finalOutName);
+      // ★ 先写临时名，编码成功后再原子改名（用户方案 2026-09-27）：
+      //   此前 ffmpeg 直接写正式名，一旦「编码到一半意外停止」（进程被杀 / 断电 / 编码器崩溃），
+      //   磁盘上会留下**正式名的半截文件** —— 后果有两层：
+      //     ① 用户会把它当成品拿走，但根本放不出来；
+      //     ② 续跑按产物反推「还缺哪些序号」时会把它算作已完成 → 该序号被永久跳过且不报错。
+      //   改为临时名后：**正式名 ⇔ 完整可播放产物**，反推逻辑不必再猜。
+      const tmpOut = finalOut + '.tmp.mp4';
 
       // ── 输入文件存在性 ──
       let allExist = true;
@@ -1252,7 +1269,7 @@ async function run(ctx, env = process.env) {
         '-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'vbr', '-cq', '27',
         '-profile:v', 'high', '-level', '4.1',
         '-c:a', 'aac', '-b:a', '192k',
-        '-y', finalOut,
+        '-y', tmpOut,
       ];
       const targetDur = totalDuration > cfg.maxTotalDuration ? cfg.maxTotalDuration : totalDuration;
       logger.clipDuration(targetDur);
@@ -1263,7 +1280,18 @@ async function run(ctx, env = process.env) {
         const ffTail = logger.ffmpegTail(stderr);
         logger.diag('ffmpeg.fail', { step: 'batch.encode', n: outIndex, code, tail: ffTail });
         logger.error(`第 ${outIndex} 个成片`, '一次性编码失败');
+        try { if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut); } catch (e) { /* 清掉半截临时产物 */ }
         logger.fail(finalOutName, 'ffmpeg 编码失败（退出码 ' + code + '）');
+        hasError = true;
+        continue;
+      }
+      // ★ 编码成功 → 原子改名到正式名；改名前不得有任何"正式名"产物出现
+      try {
+        fs.renameSync(tmpOut, finalOut);
+      } catch (e) {
+        logger.error(`第 ${outIndex} 个成片`, '产物改名失败：' + ((e && e.message) || e));
+        try { if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut); } catch (e2) {}
+        logger.fail(finalOutName, '产物改名失败');
         hasError = true;
         continue;
       }

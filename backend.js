@@ -4375,7 +4375,7 @@ class Api {
   }
 
   // 继续：暂停的任务按冻结的显示顺位插回执行队列；无运行任务时立即启动
-  resumeTask(id) {
+  async resumeTask(id) {
     const t = this.tasks.get(id);
     if (!t) return { ok: false, error: '任务不存在' };
     if (t.status !== 'paused') return { ok: false, error: '任务未处于暂停状态' };
@@ -5264,7 +5264,7 @@ class Api {
 
   // 断点续跑：失败/中断/停止的复刻任务，仅续跑失败/未完成的成片，不删除已成功产物。
   // 从 failedVideos 或日志中提取失败成片名，构造 REPLICA_ONLY_NAMES 新任务。
-  continueReplica(id) {
+  async continueReplica(id) {
     const t = this.tasks.get(id);
     if (!t) return { ok: false, error: '任务不存在' };
     const softPaused = t._softPaused === true && t.status === 'paused';
@@ -5330,6 +5330,28 @@ class Api {
         }
       }
     }
+    // ③ 兜底（2026-09-27 实报）：从**磁盘实际产物**反推待补序号。
+    //   中断/停止的任务本来就没有失败记录；失败序号也可能因引擎异常未落盘
+    //   （实测：batch 的 thrStep 作用域崩溃 → failIndex 未执行 → 任务标为 error、
+    //    失败记录为空 → 续跑报「没有发现需要续跑的成片」，只能整批重做）。
+    //   成片名携带序号标识（与引擎 parseOnlyNameIndex 同规则），据此得出「还缺哪些」——
+    //   这是客观事实，不依赖运行时记录是否完整。
+    if (!failNames.size && t.type === 'batch') {
+      // 先清理**不可播放**的产物（用户要求 2026-09-27）：半截文件也在磁盘上，
+      // 不清理会被当作"已完成"，导致该序号被永久跳过。
+      try { await this._pruneBrokenOutputs(t); } catch (e) {}
+      const missing = this._batchMissingIndices(t, src);
+      if (missing.length) {
+        t.failedIndices = missing.slice();                        // 走序号补做（最精确）
+        for (const n of missing) failNames.add('第' + n + '个');   // 兼容既有"按名收集"通道
+        try {
+          this._lg('RUN', 'resume.infer',
+            '续跑范围由磁盘产物反推 · 待补 ' + missing.length + ' 片 · ' + missing.slice(0, 12).join(',')
+            + (missing.length > 12 ? '…' : ''),
+            { id: t.id, total: Number((t.env || {}).BATCH_COUNT) || 0, missing: missing.slice(0, 40) });
+        } catch (e) {}
+      }
+    }
     if (!failNames.size) {
       this._lg('RUN', 'resume.fail',
         '续跑中止 · 既无失败记录也无从标记反推 · ' + t.type + ' · ' + String(t.title || '').slice(0, 50),
@@ -5382,6 +5404,117 @@ class Api {
   // 关键约束：成片名里含「配置所在目录名」（引擎以 baseDir 名作命名基准），若直接改用归档路径，
   // 续跑产物名会多出一段目录名而与首次不一致 → 必须先复制回原路径，再以原路径运行。
   // 复制是幂等的：引擎读到该副本后会再次把它移回归档位置（覆盖同名）。
+  // 从成片目录的实际产物反推「还缺哪些序号」（续跑兜底，见 resumeTask ③ 段）。
+  // 反解规则与引擎 parseOnlyNameIndex 完全一致：末段 = 可选后缀标识 + 序号 + 可选组后缀
+  // （如 `...-研究院-10C.mp4` → 10）。目录定位复用 _batchTaskOutDetail（含凌晨迁移回退）。
+  _batchMissingIndices(t, src) {
+    try {
+      const total = Number((t.env || {}).BATCH_COUNT) || 0;
+      if (!total) return [];
+      const detail = this._batchTaskOutDetail(t, true);
+      const dir = (detail && detail.outDir) || path.dirname(String(src || ''));
+      if (!dir) return [];
+      let names = [];
+      try { names = fs.readdirSync(dir); } catch (e) { return []; }
+      const done = new Set();
+      for (const f of names) {
+        // 临时产物不算完成（引擎先写 `*.tmp.mp4`、成功后原子改名，见 batch/index.js）：
+        // 否则编码中途留下的半截文件会被当成"已完成"，该序号被永久跳过。
+        if (/\.tmp\.mp4$/i.test(f) || /\.bak$/i.test(f)) continue;
+        if (!VIDEO_EXTS.has(path.extname(f).toLowerCase())) continue;
+        const m = /-([^-\d]*)(\d+)([A-Z]?)$/.exec(path.basename(f, path.extname(f)));
+        if (m) { const n = parseInt(m[2], 10); if (n > 0) done.add(n); }
+      }
+      // 目录里一个**正式产物**都没有（首次运行 / 损坏产物刚被清理掉）→ 整批都要做。
+      // ⚠ 这里必须返回全集而不是空数组：否则「清理损坏产物之后反推为空」会让续跑彻底没有目标
+      //   （2026-09-27 实测：清了 3 个损坏文件后反推变成空，比不清理还糟）。
+      if (!done.size) {
+        const all = [];
+        for (let i = 1; i <= total; i++) all.push(i);
+        return all;
+      }
+      const missing = [];
+      for (let i = 1; i <= total; i++) if (!done.has(i)) missing.push(i);
+      return missing;
+    } catch (e) { return []; }
+  }
+
+  // 续跑前的产物校验与清理（用户要求 2026-09-27）：
+  // 「需要清除可能存在的失败成片，即损坏的无法正常播放的成片（例如编码到一半意外停止）」
+  // 为什么必须先做：反推「还缺哪些序号」依据的是"文件在不在"，而**半截文件也在**——
+  // 不清理就会把损坏成片当成已完成、永久跳过该序号（用户拿不到片子，且不会报错）。
+  // ⚠ 安全原则（务必保守）：**只在能明确判定损坏时才动文件**。
+  //   · `.tmp.mp4`（引擎临时产物）→ 直接删（100% 安全：正式名才是交付物）；
+  //   · ffprobe **明确报出损坏特征**（moov atom not found / Invalid data 等）→ 改名留证；
+  //   · ffprobe 超时 / 启动失败 / 权限错误 → **一律不动**（工具自身不可信时，不能替用户下结论）。
+  //   教训：清理比不清理更糟的情形真实存在 —— 误判会把好成片改名，等于让用户丢片子。
+  async _pruneBrokenOutputs(task) {
+    const out = { dir: '', checked: 0, broken: [], temps: [], skipped: 0 };
+    try {
+      const detail = this._batchTaskOutDetail(task, true);
+      const dir = detail && detail.outDir;
+      if (!dir) return out;
+      out.dir = dir;
+      let names = [];
+      try { names = fs.readdirSync(dir); } catch (e) { return out; }
+      // ① 临时/残缺命名：引擎的临时产物（`.tmp.mp4`）**直接删除**（无保留价值）；
+      //    其它可疑残留改名留证
+      const tempRe = /(\.tmp\.mp4$|\.tmp$|\.part$|\.ytdl$|\.temp$|^\d+-temp|temp-\d+)/i;
+      for (const f of names) {
+        if (!tempRe.test(f)) continue;
+        const p = path.join(dir, f);
+        const tmpPath = /\.tmp\.mp4$/i.test(f) ? p : '';   // 仅引擎临时产物可永久删除
+        try {
+          if (tmpPath) { fs.unlinkSync(tmpPath); out.temps.push(f + '(已删)'); }
+          else { fs.renameSync(p, p + '.broken-' + Date.now() + '.bak'); out.temps.push(f); }
+        } catch (e) {}
+      }
+      // ② ffprobe 逐个校验（能读出正时长才算可播放）
+      const bin = this._resolveFfmpegBin();
+      const ffprobe = bin && bin.ffprobePath;
+      const vids = names.filter((f) => !/\.tmp\.mp4$/i.test(f) && !/\.bak$/i.test(f) && VIDEO_EXTS.has(path.extname(f).toLowerCase()));
+      if (!ffprobe || !vids.length) { out.checked = 0; return out; }
+      const probeOne = (file) => new Promise((resolve) => {
+        try {
+          require('child_process').execFile(ffprobe,
+            ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', path.join(dir, file)],
+            { windowsHide: true, timeout: 20000, maxBuffer: 1024 * 1024 },
+            (err, stdout, stderr) => {
+              const dur = parseFloat(String(stdout || '').trim());
+              if (!err && isFinite(dur) && dur > 0) return resolve({ state: 'ok' });
+              // 只有 ffprobe **确实跑起来并明确报错**时 stderr 才可信；超时/启动失败一律不下结论
+              const msg = String(stderr || (err && err.message) || '');
+              const conclusive = /moov atom not found|Invalid data found|could not find codec parameters/i.test(msg);
+              resolve({ state: conclusive ? 'broken' : 'unknown', msg: msg.slice(0, 200) });
+            });
+        } catch (e) { resolve({ state: 'unknown', msg: String((e && e.message) || e) }); }
+      });
+      for (const f of vids) {
+        out.checked++;
+        const fsp = fs.promises;
+        const p = path.join(dir, f);
+        let size = 0;
+        try { size = (await fsp.stat(p)).size; } catch (e) { continue; }
+        const r = await probeOne(f);
+        if (r.state === 'ok') continue;
+        if (r.state === 'unknown') { out.skipped++; continue; }   // 无法判定 → 绝不替用户下结论
+        // 明确损坏：改名留证（不删除），该序号回到未完成
+        try { await fsp.rename(p, p + '.broken-' + Date.now() + '.bak'); out.broken.push({ name: f, size }); } catch (e) {}
+        // 让路：逐个校验本身就慢，期间把事件循环交还出去
+        await new Promise((r2) => setImmediate(r2));
+      }
+      if (out.broken.length || out.temps.length || out.skipped) {
+        try {
+          this._lg('DEL', 'resume.prune',
+            '续跑前产物校验 · 损坏 ' + out.broken.length + ' 个（已改名留证）/ 临时 ' + out.temps.length + ' 个（已删）'
+            + ' / 无法判定 ' + out.skipped + ' 个（未改动）· 共校验 ' + out.checked,
+            { dir, broken: out.broken.slice(0, 10), temps: out.temps.slice(0, 10), skipped: out.skipped, checked: out.checked });
+        } catch (e) {}
+      }
+    } catch (e) {}
+    return out;
+  }
+
   _locateBatchConfig(oldPath, t) {
     const cur = String(oldPath || '');
     try { if (cur && fs.existsSync(cur)) return cur; } catch (e) {}

@@ -800,6 +800,10 @@ async function run(ctx, env = process.env) {
       }
       let finalOut = path.join(outRoot, outName);
       if (path.extname(finalOut) === '') finalOut += '.mp4';
+      // ★ 同批量模块：先写临时名，编码成功后再原子改名 ——
+      //   正式名必须是「完整可播放产物」的唯一标志，否则编码中途停止会留下正式名半截文件
+      //   （用户会误取、且续跑反推序号会把它当成已完成而永久跳过）。见 batch/index.js 同处说明。
+      const tmpOut = finalOut + '.tmp.mp4';
 
       // ── 拼接 + 水印 + 编码（GPU 硬约束） ──
       const n = videos.length;
@@ -829,7 +833,7 @@ async function run(ctx, env = process.env) {
         '-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'vbr', '-cq', '27',
         '-profile:v', 'high', '-level', '4.1',
         '-c:a', 'aac', '-b:a', '192k',
-        '-y', finalOut,
+        '-y', tmpOut,
       ];
       const targetDur = totalDuration > maxDuration ? maxDuration : totalDuration;
       logger.clipDuration(round2(targetDur));
@@ -839,7 +843,18 @@ async function run(ctx, env = process.env) {
         const ffTail = logger.ffmpegTail(stderr);
         logger.diag('ffmpeg.fail', { step: 'replica.encode', name: job.name, code, tail: ffTail });
         logger.error('日志复刻-编码', `编码失败：${job.name}`);
+        try { if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut); } catch (e) { /* 清掉半截临时产物 */ }
         logger.fail(job.name, 'ffmpeg 编码失败（退出码 ' + code + '）');
+        hasError = true;
+        continue;
+      }
+      // ★ 编码成功 → 原子改名到正式名（改名前不得出现正式名产物）
+      try {
+        fs.renameSync(tmpOut, finalOut);
+      } catch (e) {
+        logger.error('日志复刻-编码', `产物改名失败：${job.name} · ${(e && e.message) || e}`);
+        try { if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut); } catch (e2) {}
+        logger.fail(job.name, '产物改名失败');
         hasError = true;
         continue;
       }

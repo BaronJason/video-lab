@@ -52,6 +52,10 @@ const IDLE_BOOT_GRACE_MS = 20000;
 // 前台活动让路窗口：最近这段时间内有过前台活动（渲染/读取/任务）就让队列再等一会儿 ——
 // 与预检测的「行内优先、后台让路」同一思路。
 const IDLE_FOREGROUND_HOLD_MS = 3000;
+
+// 后台全量重扫的最小间隔：外部新增/删除配置发生在子目录里，目录树指纹发现不了，
+// 因此改为「空闲期无条件重扫」，靠这个间隔控制成本（30 分钟内不重复全量遍历）。
+const SCAN_FULL_MIN_INTERVAL_MS = 30 * 60 * 1000;
 // 成片存在性结论的**持久化**有效期（verify_cache）：命中则连热启动也省掉重复核验。
 // 取 10 分钟：只用来「合并同一批文件的重复校验」，不做长期真相缓存 ——
 // 陈旧信息的窗口必须短，否则用户在资源管理器里删了成片，界面会一直说"还在"。
@@ -843,21 +847,25 @@ class Api {
   //    指纹 = 各一级项目目录的 mtimeMs 摘要 —— 目录增删子项会更新其 mtime，
   //    足以发现「新增/删除配置或目录」；文件内容变更不改目录 mtime，但内容只用于
   //    去重（同内容配置保留一份），短暂延后一次不影响列表正确性，且下次任一目录变动即自愈。
-  _collectAllTxt() {
-    if (this._txtTree && this._txtTreeRoot === this.root) return this._txtTree;
+  _collectAllTxt(force) {
+    if (!force && this._txtTree && this._txtTreeRoot === this.root) return this._txtTree;
     // 启动期**绝不扫描**：缓存没有就返回空列表（前端先渲染空，后台重建后刷新）
-    if (this._bootFast) {
+    if (!force && this._bootFast) {
       const cachedFast = this._bootCachedTxtTree();
       if (cachedFast) return cachedFast;
       this._enqueueScanRebuild();
       return [];
     }
     const fp = this._logTreeFingerprint();
-    const cached = this._loadTxtTree(fp);
-    if (cached) { this._txtTree = cached; this._txtTreeRoot = this.root; return cached; }
+    // force：跳过缓存读取，无条件重扫（刷新必须是真值）
+    if (!force) {
+      const cached = this._loadTxtTree(fp);
+      if (cached) { this._txtTree = cached; this._txtTreeRoot = this.root; return cached; }
+    }
     this._loadScanCache();
     const out = [];
     const active = new Set();
+    const stopped = false;   // 同步版不中断（保留同名变量，与异步版共用落盘逻辑）
     if (fs.existsSync(this.root) && fs.statSync(this.root).isDirectory()) {
       let entries;
       try { entries = fs.readdirSync(this.root); } catch (e) { entries = []; }
@@ -891,7 +899,7 @@ class Api {
       this._scanDirty = false;
       this._saveScanCache();
     }
-    this._saveTxtTree(out, fp);
+    if (!stopped) this._saveTxtTree(out, fp);   // ★ 被中断则不写缓存（避免残缺结果覆盖完整数据）
     return out;
   }
 
@@ -907,29 +915,43 @@ class Api {
     } catch (e) { return null; }
   }
 
-  // 把「目录树指纹校验」排入空闲队列（用户建议：后台检测 + 自愈）。
-  // 指纹 = 根 + 各一级目录 mtime（少量 stat），且完全在后台执行，不占用启动路径。
+  // 把「配置树 / 日志索引」的后台校验排入空闲队列（用户建议：后台检测 + 自愈）。
+  // ⚠ 2026-09-26 用户实报「文件明明在、前端就是不显示」后改为**无条件重建**：
+  //   目录树指纹只看「根 + 一级目录 mtime」，而外部新增/删除几乎都发生在
+  //   「项目\月\日」这类**子目录**里 —— 子目录内容变化**不改变父目录 mtime**，
+  //   指纹永远认为"没变"，缓存就一直返回旧列表。指纹粒度与操作粒度不匹配时不能靠它兜底。
+  //   现行做法：空闲期统一重扫一次（串行、节流、可中断/让路），任何外部变化都会在后台
+  //   被发现并刷新前端；用持久化的 last_full_at 控制频率，避免每次启动都全量遍历。
   _enqueueScanVerify() {
     if (this._scanVerifyQueued) return;
     this._scanVerifyQueued = true;
     this._idleEnqueue('scanverify:' + this.root, async () => {
       this._scanVerifyQueued = false;
-      const cachedFp = (this._txtTreeCacheRaw() || {}).fp || '';
-      let fp = '';
-      try { fp = await this._logTreeFingerprintAsync(); } catch (e) { fp = ''; }
-      if (!fp || (cachedFp && cachedFp === fp)) return;   // 未变化 → 什么都不做（绝大多数启动走这里）
-      // 变化了 → 临时关闭快速路径，强制重建（异步），完成后刷新界面（自愈）
+      // 频率控制：距上次全量重扫不足间隔就跳过
+      let lastFull = 0;
+      try { if (this._useDbCache()) lastFull = Number(this._cacheStore.getKv('scan_full_at:' + this.root) || 0) || 0; } catch (e) { lastFull = 0; }
+      if (lastFull && (Date.now() - lastFull) < SCAN_FULL_MIN_INTERVAL_MS) return;
       const fastWas = this._bootFast;
-      this._bootFast = false;
+      this._bootFast = false;                                        // 放开：允许真正扫描
+      // 让路/中断：**只在有任务运行/排队时**中断（执行层）——
+      // 前台活动只影响"何时开始"（队列调度层的 _idleKick），不该让已经开始的重扫半途而废。
+      const shouldStop = () => {
+        try { return !!(this.hasRunningTask() || this.hasQueuedTask()); } catch (e) { return false; }
+      };
+      const _t = Date.now();
+      let rebuilt = false;
       try {
-        try { await this._collectAllTxtAsync(true); } catch (e) {}
-        try { await this._collectLogFilesAsync(true); } catch (e) {}
+        try { await this._collectAllTxtAsync({ force: true, shouldStop }); rebuilt = true; } catch (e) {}
+        try { await this._collectLogFilesAsync({ force: true, shouldStop }); } catch (e) {}
       } finally { this._bootFast = fastWas; }
+      if (!rebuilt) return;                                          // 被中断：不记时间，下次继续补
+      try { if (this._useDbCache()) this._cacheStore.setKv('scan_full_at:' + this.root, String(Date.now())); } catch (e) {}
       this._projectsCache = null;
-
       try { this._emitTasks(); } catch (e) {}
       try {
-        if (this._lg) this._lg('MOD', 'scan.verify', '目录树指纹已变化 → 已后台重建配置/日志索引并刷新界面', { cachedFp: cachedFp.slice(0, 40), fp: fp.slice(0, 40) });
+        if (this._lg) this._lg('MOD', 'scan.verify',
+          '空闲期已重建配置/日志索引（无条件重扫，不依赖目录树指纹）· ' + (Date.now() - _t) + 'ms',
+          { ms: Date.now() - _t });
       } catch (e) {}
     });
   }
@@ -1072,30 +1094,35 @@ class Api {
   // 与同步版同语义，但全程用 fs.promises + 分片让位，不阻塞主进程事件循环。
   // 缓存未命中（首次启动 / 目录结构变化）时走这里，窗口可先显示、扫描期间 UI 不卡。
   async _collectAllTxtAsync(opts) {
-    if (this._txtTree && this._txtTreeRoot === this.root) return this._txtTree;
+    const force = !!(opts && opts.force);
+    if (!force && this._txtTree && this._txtTreeRoot === this.root) return this._txtTree;
     // 启动期**绝不扫描**：缓存没有就返回空列表 + 排入后台重建（前端先渲染空）。
-    // opts.force（用户主动刷新配置）不受此限 —— 那正是用户要求真扫的场景。
-    if (this._bootFast && !(opts && opts.force)) {
+    // force（用户主动刷新配置）不受此限 —— 那正是用户要求真扫的场景。
+    if (!force && this._bootFast) {
       const cachedFast = this._bootCachedTxtTree();
       if (cachedFast) return cachedFast;
       this._enqueueScanRebuild();
       return [];
     }
     const fp = await this._logTreeFingerprintAsync();
-    const cached = this._loadTxtTree(fp);
-    if (cached) { this._txtTree = cached; this._txtTreeRoot = this.root; return cached; }
+    // force：**跳过缓存读取**，无条件重扫并覆盖写回（刷新必须是真值）
+    if (!force) {
+      const cached = this._loadTxtTree(fp);
+      if (cached) { this._txtTree = cached; this._txtTreeRoot = this.root; return cached; }
+    }
     this._loadScanCache();
     const out = [];
     const active = new Set();
     const onTick = (opts && opts.onTick) || null;
     const shouldStop = (opts && opts.shouldStop) || null;
+    let stopped = false;   // 被中断（用户操作/任务抢占）→ 本次结果不落盘，避免残缺覆盖完整缓存
     let rootOk = false;
     try { const st = await fs.promises.stat(this.root); rootOk = st.isDirectory(); } catch (e) { rootOk = false; }
     if (rootOk) {
       let entries = [];
       try { entries = await fs.promises.readdir(this.root); } catch (e) { entries = []; }
       for (const name of entries) {
-        if (shouldStop && shouldStop()) break;
+        if (shouldStop && shouldStop()) { stopped = true; break; }
         if (name.startsWith('.') || name.startsWith('_')) continue;
         if (EXCLUDED_TOP_DIRS.has(name)) continue;
         const pdir = path.join(this.root, name);
@@ -1119,6 +1146,9 @@ class Api {
     }
     this._txtTree = out;
     this._txtTreeRoot = this.root;
+    // ⚠ 被中断（用户操作/任务抢占）时**不落盘**：残缺结果会覆盖掉完整缓存，导致别的项目凭空消失。
+    // 下次空闲会自动再补一次（job 未记 last_full_at）。
+    this._txtTreeTruncated = stopped;
     if (this._scanDirty) {
       const prefix = this.root + '\n';
       for (const k of [...this._scanCache.keys()]) {
@@ -1127,7 +1157,7 @@ class Api {
       this._scanDirty = false;
       this._saveScanCache();
     }
-    this._saveTxtTree(out, fp);
+    if (!stopped) this._saveTxtTree(out, fp);   // ★ 被中断则不写缓存（避免残缺结果覆盖完整数据）
     return out;
   }
 
@@ -1168,11 +1198,15 @@ class Api {
     // 不合并则同一份扫描并发跑多遍（各自遍历工作目录 + 读文件），冷态下代价成倍放大。
     if (!force && this._projectsInflight) return this._projectsInflight;
     const seq = this._projectsSeq || 0;
+    // force 必须**透传给收集器**：否则它们会「指纹未变 → 命中持久化缓存」，
+    // 刷新等于什么都没做（2026-09-26 用户报「刷新也没用」的根因；新增配置位于日期子目录，
+    // 只改变子目录 mtime，一级目录指纹发现不了）。
+    const copts = force ? Object.assign({}, opts, { force: true }) : opts;
     const run = (async () => {
       this._emitScan('walk');
-      await this._collectLogFilesAsync(opts);
+      await this._collectLogFilesAsync(copts);
       this._emitScan('log');
-      await this._collectAllTxtAsync(opts);
+      await this._collectAllTxtAsync(copts);
       this._emitScan('list');
       const data = this._buildProjectsData();
       if (seq === (this._projectsSeq || 0)) this._projectsCache = data;   // 期间被 force 刷新过则丢弃本次结果
@@ -1196,9 +1230,9 @@ class Api {
       this._enqueueScanRebuild();
       return { files: [], fp: '' };
     }
-    if (this._logCache && this._logCacheRoot === this.root) return this._logCache;
+    if (!forceA && this._logCache && this._logCacheRoot === this.root) return this._logCache;
     this._loadLogCache();
-    if (this._logCache && this._logCacheRoot === this.root && this._logCache.files && this._logCache.files.length) {
+    if (!forceA && this._logCache && this._logCacheRoot === this.root && this._logCache.files && this._logCache.files.length) {
       // 启动快速路径：跳过指纹 stat（校验交空闲队列）
       if (this._bootFast) { this._enqueueScanVerify(); return this._logCache; }
       const fp = await this._logTreeFingerprintAsync();
@@ -1248,18 +1282,18 @@ class Api {
       return this._projectsCache;
     }
     this._emitScan('walk');
-    this._collectLogFiles(); // 刷新配置时一并收集日志 txt 缓存
+    this._collectLogFiles(force); // 刷新配置时一并收集日志 txt 缓存（force 透传：真扫）
     this._emitScan('log');
-    const data = this._buildProjectsData();
+    const data = this._buildProjectsData(force);
     this._emitScan('list');
     this._projectsCache = data;
     return data;
   }
 
-  _buildProjectsData() {
+  _buildProjectsData(force) {
     // 未配置工作路径：项目列表为空（连"复刻"虚拟项目也不显示），交给前端引导态
     if (!this.root) return [];
-    const all = this._collectAllTxt();
+    const all = this._collectAllTxt(force);
     const byProject = new Map();
     for (const t of all) {
       if (!byProject.has(t.pdir)) byProject.set(t.pdir, []);
@@ -3458,9 +3492,10 @@ class Api {
   }
 
   // 把队列跑空（回归/手动排查用；正常使用不需要）
+  // 注意要同时等 `_idleRunning` 结束：job 是**出队后才执行**的，只看队列长度会提前返回。
   async drainIdleQueue(timeoutMs) {
     const deadline = Date.now() + (Number(timeoutMs) || 30000);
-    while ((this._idleJobs && this._idleJobs.length) && Date.now() < deadline) {
+    while (((this._idleJobs && this._idleJobs.length) || this._idleRunning) && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 10));
     }
     return this.idleQueueState();

@@ -5271,7 +5271,7 @@ class Api {
 
   // 断点续跑：失败/中断/停止的复刻任务，仅续跑失败/未完成的成片，不删除已成功产物。
   // 从 failedVideos 或日志中提取失败成片名，构造 REPLICA_ONLY_NAMES 新任务。
-  async continueReplica(id) {
+  async continueReplica(id, opts) {
     const t = this.tasks.get(id);
     if (!t) return { ok: false, error: '任务不存在' };
     const softPaused = t._softPaused === true && t.status === 'paused';

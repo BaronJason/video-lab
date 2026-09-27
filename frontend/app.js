@@ -882,8 +882,9 @@
         if (lh) active = lh;
         state._locateLogPath = null;
       }
-      // 复刻项目无配置可定位：默认选中最新一天的日志；其余场景回退首个
-      if (!active) active = (state.activeProject === REPLICA_PROJECT && files.length) ? files[files.length - 1] : files[0];
+      // 无配置可定位：默认选中最新一天的日志（后端已按日期降序，首个即最新 —— 复刻与普通项目一致）
+      if (!active) active = files.length ? files[0] : null;
+      if (!active) { state.activeLogDate = null; state.activeLogPath = null; c.innerHTML = '<span class="date-branch-btn">无日志</span>'; updateModeToggle(); return; }
       var had = state.activeLogPath === active.path;
       state.activeLogDate = active.date;
       state.activeLogPath = active.path;

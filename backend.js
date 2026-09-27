@@ -206,7 +206,9 @@ function relativeDateLabel(relParts) {
     const p = relParts[i].trim();
     if (p && p !== '月份') return p;
   }
-  return '(根目录)';
+  // 兜底标签：配置/日志直接位于根目录、路径里没有任何日期段时用它
+  // （用户定案 2026-09-27：前端显示不加括号）
+  return '根目录';
 }
 
 function isChengpianFile(relParts) { return relParts.some((p) => p.endsWith('成片')); }
@@ -2832,7 +2834,12 @@ class Api {
   listLogFiles(fromPath, configName) {
     if (fromPath && String(fromPath).startsWith(REPLICA_MARK)) {
       const mode = String(fromPath).slice(REPLICA_MARK.length);
-      return this._replicaLogFiles(mode).map((f) => ({ path: f, name: path.basename(f), date: path.basename(f).slice(0, 4) }));
+      // 排序与普通项目保持一致：按日期降序（最新在前）。此前直接返回未排序列表，
+      // 实际按「项目名 → 月份目录 → 日期目录」的路径字符串排列，跨月即错乱（如 "10月" < "7月"）。
+      // date 取文件名前 4 位「月日」；跨年不区分（用户定案 2026-09-27：届时再想简洁的区分办法）。
+      const list = this._replicaLogFiles(mode).map((f) => ({ path: f, name: path.basename(f), date: path.basename(f).slice(0, 4) }));
+      list.sort((a, b) => (b.date.localeCompare(a.date) || a.name.localeCompare(b.name)));
+      return list;
     }
     // 使用刷新时写入的日志缓存，按项目 + 配置名过滤（不限定单一日期，展示该配置的全部日志日期分支）
     // 每条日志附加所属配置版本 label（同成片文件夹的序号化 -N/正本优先，否则当日外部 *），

@@ -4375,7 +4375,7 @@ class Api {
   }
 
   // 继续：暂停的任务按冻结的显示顺位插回执行队列；无运行任务时立即启动
-  async resumeTask(id) {
+  async resumeTask(id, opts) {
     const t = this.tasks.get(id);
     if (!t) return { ok: false, error: '任务不存在' };
     if (t.status !== 'paused') return { ok: false, error: '任务未处于暂停状态' };
@@ -4385,7 +4385,7 @@ class Api {
     //   mask → 直接重新入队（引擎对已存在成片有 skip 幂等检测，天然续跑）；
     //   恢复后必须清软暂停标志，否则下一个成片完成时会被再次终止（暂停死循环）。
     if (t._softPaused && (t.type === 'batch' || t.type === 'replica')) {
-      return this.continueReplica(id);
+      return this.continueReplica(id, opts);
     }
     delete t._softPause;
     delete t._softPaused;
@@ -5365,6 +5365,24 @@ class Api {
     const env = Object.assign({}, t.env || {});
     let src = env.REPLICA_TXT ? String(env.REPLICA_TXT) : '';
     if (!src) return { ok: false, error: '原任务缺少 TXT 配置，无法继续制作' };
+    // ⚠ 演练模式（opts.dryRun）：只算出「会补做哪些」，**不删原任务、不建任务、不入队**。
+    //   验证/诊断脚本一律用它 —— 本方法默认行为会真正启动引擎与 ffmpeg
+    //   （2026-09-27 事故：验证脚本直接调用本方法去核对续跑范围，结果真的编码了 30 个成片，
+    //    落在真实输出目录、消耗大量 GPU 时间；只读核对必须走 dryRun）。
+    if (opts && opts.dryRun) {
+      const idxDry = Array.isArray(t.failedIndices) ? t.failedIndices.filter((n) => Number.isInteger(n) && n > 0) : [];
+      const missDry = (!failNames.size && t.type === 'batch') ? this._batchMissingIndices(t, '') : [];
+      const willDo = (t.type === 'batch' && (idxDry.length || missDry.length))
+        ? (idxDry.length ? idxDry : missDry)
+        : null;
+      return {
+        ok: true, dryRun: true, type: t.type,
+        count: willDo ? willDo.length : [...failNames].filter(Boolean).length,
+        indices: willDo || undefined,
+        names: [...failNames].filter(Boolean).slice(0, 40),
+        env: this._envBrief(env),
+      };
+    }
     this.tasks.delete(id);
     this._removeMarker(t);
     let task;

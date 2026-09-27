@@ -5334,13 +5334,15 @@ class Api {
     //   中断/停止的任务本来就没有失败记录；失败序号也可能因引擎异常未落盘
     //   （实测：batch 的 thrStep 作用域崩溃 → failIndex 未执行 → 任务标为 error、
     //    失败记录为空 → 续跑报「没有发现需要续跑的成片」，只能整批重做）。
-    //   成片名携带序号标识（与引擎 parseOnlyNameIndex 同规则），据此得出「还缺哪些」——
-    //   这是客观事实，不依赖运行时记录是否完整。
+    //   与路由 B 的区别：这里不依赖任务标记（marker），而是按提交时刻直接算出输出目录，
+    //   标记缺失/不完整时仍能得出「还缺哪些」——成片名携带序号，这是客观事实。
+    //   ⚠ 此处不得引用 `src`：它在本函数后面才声明（TDZ），早期版本因此抛
+    //   「Cannot access 'src' before initialization」，用户点「继续制作」直接失败。
     if (!failNames.size && t.type === 'batch') {
       // 先清理**不可播放**的产物（用户要求 2026-09-27）：半截文件也在磁盘上，
       // 不清理会被当作"已完成"，导致该序号被永久跳过。
       try { await this._pruneBrokenOutputs(t); } catch (e) {}
-      const missing = this._batchMissingIndices(t, src);
+      const missing = this._batchMissingIndices(t, '');
       if (missing.length) {
         t.failedIndices = missing.slice();                        // 走序号补做（最精确）
         for (const n of missing) failNames.add('第' + n + '个');   // 兼容既有"按名收集"通道
@@ -5396,7 +5398,12 @@ class Api {
         onlyVar: t.type === 'batch' ? (env.BATCH_ONLY_INDEX ? 'BATCH_ONLY_INDEX' : 'BATCH_ONLY_NAMES') : 'REPLICA_ONLY_NAMES',
         only: namesArr.slice(0, 40),
         env: this._envBrief(env) });
-    return { ok: true, taskId: task.id, count: namesArr.length };
+    // 返回"实际补做片数"：batch 走序号补做时以序号数为准（按名收集可能多算一项，
+    // 例如标记推断与产物反推同时命中同一条），否则按名字数。
+    const realCount = (t.type === 'batch' && env.BATCH_ONLY_INDEX)
+      ? String(env.BATCH_ONLY_INDEX).split(';').filter(Boolean).length
+      : namesArr.length;
+    return { ok: true, taskId: task.id, count: realCount };
   }
 
   // 批量任务续跑的配置重定位。
@@ -5498,15 +5505,27 @@ class Api {
         const r = await probeOne(f);
         if (r.state === 'ok') continue;
         if (r.state === 'unknown') { out.skipped++; continue; }   // 无法判定 → 绝不替用户下结论
-        // 明确损坏：改名留证（不删除），该序号回到未完成
-        try { await fsp.rename(p, p + '.broken-' + Date.now() + '.bak'); out.broken.push({ name: f, size }); } catch (e) {}
+        // 明确损坏：**移出成片目录**，该序号回到未完成。
+        // 优先移入回收站（项目红线：删除一律可还原）；回收站不可用时才退化为改名 ——
+        // 但绝不把 .bak 留在正式产出目录里（用户 2026-09-27 指出：留在目录里等于没清，
+        // 而且会被误当成本批产物）。
+        let recycled = false;
+        try { recycled = !!this._recycleFile(p); } catch (e) { recycled = false; }
+        if (!recycled) {
+          const trashDir = path.join(dir, '..', '_损坏产物');
+          try {
+            fs.mkdirSync(trashDir, { recursive: true });
+            await fsp.rename(p, path.join(trashDir, path.basename(p) + '.broken-' + Date.now() + '.bak'));
+          } catch (e2) {}
+        }
+        out.broken.push({ name: f, size, recycled });
         // 让路：逐个校验本身就慢，期间把事件循环交还出去
         await new Promise((r2) => setImmediate(r2));
       }
       if (out.broken.length || out.temps.length || out.skipped) {
         try {
           this._lg('DEL', 'resume.prune',
-            '续跑前产物校验 · 损坏 ' + out.broken.length + ' 个（已改名留证）/ 临时 ' + out.temps.length + ' 个（已删）'
+            '续跑前产物校验 · 损坏 ' + out.broken.length + ' 个（已移出成片目录·回收站可还原）/ 临时 ' + out.temps.length + ' 个（已删）'
             + ' / 无法判定 ' + out.skipped + ' 个（未改动）· 共校验 ' + out.checked,
             { dir, broken: out.broken.slice(0, 10), temps: out.temps.slice(0, 10), skipped: out.skipped, checked: out.checked });
         } catch (e) {}

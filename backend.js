@@ -1266,7 +1266,14 @@ class Api {
           try {
             // peek：列表渲染只需知道"是否空配置"，缓存未命中时**不读文件**（渲染路径不该有磁盘读）
             const cfg = this.readConfig(versions[0].path, { peek: true });
-            empty = !(cfg.folders || []).some((f) => String(f && typeof f === 'object' ? f.path : f).trim() !== '');
+            // ⚠ 只有**命中缓存**的 peek 才可信：未命中时 readConfig 返回乐观结构（带 `_peek`），
+            //   此时"读不出素材路径"只代表**这份配置还没被读过**，不代表它是空白配置。
+            //   不区分就会踩这个坑：任务把配置移入成片文件夹后，正本路径从未被读取过 → 被判成
+            //   「空白配置」→ 前端「空白配置恒置顶」生效 → 表现为「刷新后置顶、再刷新才回位」
+            //   （用户报障 2026-09-27；且与缓存是否刷新无关，所以前几次修缓存都不见效）。
+            if (cfg && !cfg._peek) {
+              empty = !(cfg.folders || []).some((f) => String(f && typeof f === 'object' ? f.path : f).trim() !== '');
+            }
           } catch (e) {}
         }
         txts.push({ name, latest, count: versions.length, dup: dupNames.has(name), empty });
@@ -4423,6 +4430,15 @@ class Api {
             return;
           }
           if (task.status !== 'running') return;
+    // ★ 引擎把配置 TXT 移入成片文件夹作为正本 → 配置的**归属位置**变了，必须立刻失效缓存并广播。
+    //   这件事只发生在引擎进程内（后端 spawn 时文件还在原处），所以由引擎输出协议行、后端在此接收；
+    //   否则「开始任务后列表仍显示旧的 0927*、点进去却是空的」会一直存在到低频轮询或手动刷新。
+    if (s.indexOf('配置正本就位：') === 0) {
+      try { this._invalidateCaches(true); } catch (e) {}
+      this._notifyTreeChanged();
+      this._enqueueScanRebuild();
+      return;
+    }
           // 单成片实时进度：目标时长（分母）+ ffmpeg time（分子）。
           // 必须放在进度行拦截前，否则 ffmpeg 进度行被折叠后 clip/clipTarget 不再更新（进度条失效）
           const durM = s.match(/(?:成片预计时长|当前文件时长):\s*([\d.]+)\s*秒/);

@@ -923,6 +923,11 @@ async function run(ctx, env = process.env) {
       fs.copyFileSync(txtFilePath, txtDest);
       try { fs.unlinkSync(txtFilePath); } catch (e2) { /* 忽略 */ }
     }
+    // ★ 通知主进程「配置的归属位置已改变」：主进程据此立刻失效配置树缓存并广播前端。
+    //   这一步只可能发生在引擎进程内（主进程 spawn 时文件还在原处），所以必须由引擎主动上报；
+    //   否则界面会继续显示已失效的旧条目（用户报障 2026-09-27：开始任务后列表仍是「0927*」外部配置，
+    //   点进去是空的，要等低频轮询或手动刷新才恢复）。
+    logger.info('配置正本就位：' + path.basename(txtDest));
 
     const logFilePath = path.join(outDir, `${tag}-${txtName}-拼接日志.txt`);
     // 续跑时日志已存在 → 保留并追加，不清空（否则会抹掉首次记录）

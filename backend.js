@@ -52,9 +52,16 @@ const IDLE_BOOT_GRACE_MS = 20000;
 // 与预检测的「行内优先、后台让路」同一思路。
 const IDLE_FOREGROUND_HOLD_MS = 3000;
 
-// 后台全量重扫的最小间隔：外部新增/删除配置发生在子目录里，目录树指纹发现不了，
-// 因此改为「空闲期无条件重扫」，靠这个间隔控制成本（30 分钟内不重复全量遍历）。
-const SCAN_FULL_MIN_INTERVAL_MS = 30 * 60 * 1000;
+
+
+// 后台全量重扫的最小间隔（**外部更改的兜底通道**）：
+// 已知的变更时刻（保存配置 / 任务启停）走「立即失效 + 广播」，不经这里；
+// 这里只兜底**外部**对素材盘的改（用户手动增删改文件、别的程序写入）——
+// 原始设计就是「外部删改 / 任务迁移 → 低频轮询兜底」（见前端 refreshActiveVersions 的 4 秒轮询，
+// 它每次都会重拉项目列表，因此只要这里的重扫把缓存刷新，界面就会在下一轮自动跟上）。
+// 取值权衡：一次全量要遍历整个工作根（本机实测约 3000 次 readdir），机械盘上不能按秒做，
+// 但也不能长到让外部改动迟迟不出现 —— 60 秒 + 队列的前台/任务让路（只在真空闲时跑）是可接受的平衡。
+const SCAN_FULL_MIN_INTERVAL_MS = 60 * 1000;
 // 成片存在性结论的**持久化**有效期（verify_cache）：命中则连热启动也省掉重复核验。
 // 取 10 分钟：只用来「合并同一批文件的重复校验」，不做长期真相缓存 ——
 // 陈旧信息的窗口必须短，否则用户在资源管理器里删了成片，界面会一直说"还在"。
@@ -941,6 +948,7 @@ class Api {
       try { if (this._useDbCache()) this._cacheStore.setKv('scan_full_at:' + this.root, String(Date.now())); } catch (e) {}
       this._projectsCache = null;
       try { this._emitTasks(); } catch (e) {}
+      this._notifyTreeChanged();   // 后台重建完成 → 前端重拉列表（外部改动/自愈的最终可见结果）
       try {
         if (this._lg) this._lg('MOD', 'scan.verify',
           '空闲期已重建配置/日志索引（无条件重扫，不依赖目录树指纹）· ' + (Date.now() - _t) + 'ms',
@@ -996,10 +1004,17 @@ class Api {
       } catch (e) { /* 失败留待下次空闲重试 */ }
       this._projectsCache = null;
       try { this._emitTasks(); } catch (e) {}
+      this._notifyTreeChanged();   // 通知前端重拉项目/配置列表（否则界面继续吃旧列表）
       try {
-        if (this._lg) this._lg('ADD', 'scan.rebuild', '启动期缓存缺失 → 已后台重建配置树/日志索引并刷新界面', { root: this.root });
+        if (this._lg) this._lg('ADD', 'scan.rebuild', '配置树/日志索引缺失 → 已后台重建并刷新界面', { root: this.root });
       } catch (e) {}
     });
+  }
+
+
+  // 配置树/日志索引发生实质变化后通知前端重拉列表（main 注入 onVersionsChanged → versions_changed）
+  _notifyTreeChanged() {
+    try { if (typeof this.onVersionsChanged === 'function') this.onVersionsChanged(); } catch (e) {}
   }
 
   // 扫描缓存是否新鲜（毫秒级）：仅比对目录树指纹，不做任何遍历。
@@ -1383,6 +1398,13 @@ class Api {
       else sources.push({ full: t.full, parts: t.parts, hash: t.hash });
     }
     const groups = new Map();
+    // 顺序稳定化（用户报障 2026-09-27「刷新后位置在置顶、再刷新才恢复正常」）：
+    // txs 可能来自「增量并入」（新条目追加在末尾）或「全量扫描」（目录遍历序），两者顺序不同，
+    // 会让下面 dedupeByDir 的 -1/-2 编号互换 → 同一份配置在两次刷新间位置跳动。
+    // 按路径排序即与全量扫描一致，读取路径与刷新结果因此恒定。
+    const byFull = (a, b) => String(a.full).localeCompare(String(b.full), 'zh-CN');
+    sources.sort(byFull);
+    copies.sort(byFull);
     for (const s of sources) {
       const label = relativeDateLabel(s.parts);
       if (!groups.has(label)) groups.set(label, { source: null, copies: [] });
@@ -4376,6 +4398,13 @@ class Api {
         this._emitTasks();
         // 任务真正开始：创建任务标记（含 env 快照，供失败重开精确还原）
         this._touchMarker(task);
+        // ★ 任务开始即失效配置树缓存（含持久化），并排后台重建 —— 用户报障 2026-09-27：
+        //   批量任务会把配置 TXT **移进成片目录**作为正本，原路径随即失效，界面若继续吃缓存
+        //   就会显示已失效的旧配置（点进去还是空的），而"等后台自愈"要受 30 分钟频率控制约束 → 不及时。
+        //   这里必须连**持久化**一起清：只清内存的话，下一次读取又会从库里读回同一份旧数据。
+        try { this._invalidateCaches(true); } catch (e) {}
+        this._notifyTreeChanged();     // 立即通知前端重拉（缓存已失效 → 读到真值）
+        this._enqueueScanRebuild();
         const decodeLine = (buf) => {
           try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); }
           catch (e) { try { return new TextDecoder('gbk').decode(buf); } catch (e2) { return buf.toString('latin1'); } }
@@ -4533,6 +4562,11 @@ class Api {
           // 任务结束 → 成片存在性结论失效：本次可能刚产出成片（旧结论是"无"），
           // 精确失效后由下次启动/空闲校验重新判定，避免界面显示"成片已删除"却其实还在
           try { this._invalidateHasOutput(task.id); } catch (e) {}
+          // ★ 任务结束同样失效配置树缓存 + 排重建：出片会把配置正本搬进成片文件夹、并新增成片目录，
+          //   目录结构与配置归属都变了，界面必须立刻按真实情况重整（不能等 30 分钟频率控制的空闲自愈）。
+          try { this._invalidateCaches(true); } catch (e) {}
+          this._notifyTreeChanged();   // 立即通知前端重拉（任务已改动配置归属与目录结构）
+          this._enqueueScanRebuild();
           if (task.status === 'error' && !task.failReason) task.failReason = this._deriveFailReason(task);
           this._lg('RUN', 'task.end',
             '任务结束 · ' + status + ' · ' + task.type + ' · 退出码 ' + code

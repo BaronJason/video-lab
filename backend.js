@@ -43,7 +43,6 @@ const ENV_PROBE_TIMEOUT_MS = Math.max(1, Number(process.env.VL_ENV_PROBE_TIMEOUT
 
 // 成片存在性判定的内存缓存有效期（毫秒）：启动预热写入后，期内 snapshotTasks 纯内存判定、
 // 不再逐任务碰磁盘；超期回退实时探测（用户在资源管理器手动删掉成片后仍能纠正）。
-const HAS_OUTPUT_MEMO_TTL_MS = 60000;
 
 // 启动保护期：启动后这段时间内空闲队列不消费任务（首屏渲染与首次操作期间零 E 盘竞争）。
 // 20 秒足够覆盖「窗口出现 → 项目列表渲染 → 用户第一眼扫过」，之后后台才开始慢慢校验。
@@ -369,11 +368,12 @@ class Api {
     // 到期后按自适应节流开工，并在有任务运行/前台刚有活动时继续让路。
     this._idleStartAt = Date.now() + IDLE_BOOT_GRACE_MS;
     this._lastForegroundAt = 0;
-    // 启动快速路径（用户指示 2026-09-26：「将需要 io 的部分全部缓存化，txt 路径以及里面的全部内容」）：
-    // 启动后一段时间内**不做目录树指纹校验**（指纹要 stat E 盘），直接用持久化缓存渲染；
-    // 指纹校验与重建排入空闲队列，发现变化再重建并刷新界面（自愈）。60 秒后自动退出该模式。
-    this._bootFast = true;
-    try { setTimeout(() => { this._bootFast = false; }, 60000); } catch (e) {}
+    // 「缓存优先」是**默认行为**，不再有"启动快速路径"标志（2026-09-27 架构清理）：
+    //   读取一律先命中内存/持久化缓存；指纹校验与重建一律排入空闲队列 —— 后者自带启动保护期
+    //   （`_idleStartAt`）与前台让路（`_lastForegroundAt`），那才是"启动期"的正确落点，有真实语义；
+    //   只有用户主动刷新（force）才绕过缓存真扫。
+    //   此前用 `_bootFast` + 60 秒时间窗口近似"启动期"，导致窗口内外行为不同，并已引发两次真实缺陷
+    //   （force 刷新被拦下 → 列表变空；清内存缓存后又被持久化旧值读回 → 新配置不显示）。
     this._videoCacheDirty = false; // 缓存内容是否有未落盘变更：无变更时预检测不再重复写整份缓存
     this._videoCacheDirtyKeys = new Set();   // 待写回的路径（增量 upsert）
     this._videoCacheRemovedKeys = new Set(); // 待删除的路径
@@ -614,7 +614,6 @@ class Api {
   //      下次读取必然重扫，宁可慢一点也不能显示陈旧内容
   //      （注意：这类操作常发生在二级/三级目录，**不会改变一级目录 mtime**，靠指纹发现不了）。
   _markConfigModified(...paths) {
-    this._bootFast = false;
     const list = paths.filter(Boolean);
     let merged = 0;
     for (const p of list) { try { if (this._upsertTxtTreeEntry(p)) merged++; } catch (e) {} }
@@ -744,21 +743,12 @@ class Api {
   //    新增/删除项目或目录即变化；文件内容变化不改目录 mtime，但日志列表只关心「有哪些文件」，
   //    内容变化不影响本列表（config 归属由路径决定），故无需更细粒度指纹。
   _collectLogFiles(force = false) {
-    // 启动期**只读缓存、绝不扫描**（用户指示 2026-09-26）：缓存没有就返回空列表 + 后台重建。
-    // force（用户主动刷新）不受此限。
-    if (!force && this._bootFast) {
-      const cachedBoot = this._bootCachedLogFiles();
-      if (cachedBoot) return cachedBoot;
-      this._enqueueScanRebuild();
-      return { files: [], fp: '' };
-    }
-    if (!force && this._logCache && this._logCacheRoot === this.root) return this._logCache;
-    this._loadLogCache();
-    if (!force && this._logCache && this._logCacheRoot === this.root && this._logCache.files && this._logCache.files.length) {
-      // 启动快速路径：跳过指纹 stat（校验交空闲队列），直接用持久化缓存
-      if (this._bootFast) { this._enqueueScanVerify(); return this._logCache; }
-      const fp = this._logTreeFingerprint();
-      if (fp && fp === this._logCache.fp) return this._logCache;   // 缓存有效：免全量遍历
+    // **缓存优先（默认行为）**：内存 → 持久化缓存直接用，随后排入空闲队列做后台校验；
+    // 只有「缓存缺失（首次运行 / 新机器）」或 force（用户主动刷新）才真扫。
+    // 不再有"启动期"专有分支 —— 启动与运行走同一条路，行为不随 60 秒边界变化。
+    if (!force) {
+      const cached = (this._logCache && this._logCacheRoot === this.root) ? this._logCache : this._cachedLogFiles();
+      if (cached && cached.files && cached.files.length) { this._enqueueScanVerify(); return cached; }
     }
     const files = [];
     if (this.root && fs.existsSync(this.root)) {
@@ -863,20 +853,13 @@ class Api {
   //    足以发现「新增/删除配置或目录」；文件内容变更不改目录 mtime，但内容只用于
   //    去重（同内容配置保留一份），短暂延后一次不影响列表正确性，且下次任一目录变动即自愈。
   _collectAllTxt(force) {
-    if (!force && this._txtTree && this._txtTreeRoot === this.root) return this._txtTree;
-    // 启动期**绝不扫描**：缓存没有就返回空列表（前端先渲染空，后台重建后刷新）
-    if (!force && this._bootFast) {
-      const cachedFast = this._bootCachedTxtTree();
-      if (cachedFast) return cachedFast;
-      this._enqueueScanRebuild();
-      return [];
-    }
-    const fp = this._logTreeFingerprint();
-    // force：跳过缓存读取，无条件重扫（刷新必须是真值）
+    // **缓存优先（默认行为）**：内存 → 持久化缓存直接用，并排入空闲队列做后台校验；
+    // 仅「缓存缺失」或 force（用户主动刷新）才真扫。
     if (!force) {
-      const cached = this._loadTxtTree(fp);
-      if (cached) { this._txtTree = cached; this._txtTreeRoot = this.root; return cached; }
+      const cached = (this._txtTree && this._txtTreeRoot === this.root) ? this._txtTree : this._cachedTxtTree();
+      if (cached) { this._enqueueScanVerify(); return cached; }
     }
+    const fp = this._logTreeFingerprint();   // 只有真要扫时才算指纹
     this._loadScanCache();
     const out = [];
     const active = new Set();
@@ -938,16 +921,11 @@ class Api {
   //   现行做法：空闲期统一重扫一次（串行、节流、可中断/让路），任何外部变化都会在后台
   //   被发现并刷新前端；用持久化的 last_full_at 控制频率，避免每次启动都全量遍历。
   _enqueueScanVerify() {
-    if (this._scanVerifyQueued) return;
-    this._scanVerifyQueued = true;
     this._idleEnqueue('scanverify:' + this.root, async () => {
-      this._scanVerifyQueued = false;
       // 频率控制：距上次全量重扫不足间隔就跳过
       let lastFull = 0;
       try { if (this._useDbCache()) lastFull = Number(this._cacheStore.getKv('scan_full_at:' + this.root) || 0) || 0; } catch (e) { lastFull = 0; }
       if (lastFull && (Date.now() - lastFull) < SCAN_FULL_MIN_INTERVAL_MS) return;
-      const fastWas = this._bootFast;
-      this._bootFast = false;                                        // 放开：允许真正扫描
       // 让路/中断：**只在有任务运行/排队时**中断（执行层）——
       // 前台活动只影响"何时开始"（队列调度层的 _idleKick），不该让已经开始的重扫半途而废。
       const shouldStop = () => {
@@ -958,7 +936,7 @@ class Api {
       try {
         try { await this._collectAllTxtAsync({ force: true, shouldStop }); rebuilt = true; } catch (e) {}
         try { await this._collectLogFilesAsync({ force: true, shouldStop }); } catch (e) {}
-      } finally { this._bootFast = fastWas; }
+      } catch (e) { /* 重建失败不记时间，留待下次空闲重试 */ }
       if (!rebuilt) return;                                          // 被中断：不记时间，下次继续补
       try { if (this._useDbCache()) this._cacheStore.setKv('scan_full_at:' + this.root, String(Date.now())); } catch (e) {}
       this._projectsCache = null;
@@ -972,18 +950,9 @@ class Api {
   }
 
   // 配置 TXT 树持久化（cache_kv，键 txt_tree:<root>）：存 { fp, items }
-  // fp 为目录树指纹，与 _collectAllTxt 传入的一致才复用。库不可用时静默跳过（退化为纯内存）。
-  // 启动期不经过这里：走 _bootCachedTxtTree（连指纹都不算），指纹校验交给 _enqueueScanVerify。
-  _loadTxtTree(fp) {
-    if (!this._useDbCache() || !fp) return null;
-    try {
-      const raw = this._cacheStore.getKv('txt_tree:' + this.root);
-      if (!raw) return null;
-      const data = JSON.parse(raw);
-      if (!data || data.fp !== fp || !Array.isArray(data.items)) return null;
-      return data.items;
-    } catch (e) { return null; }
-  }
+  // fp 为"上次扫描时目录长什么样"的记录，仅供排查；读取不再做指纹比对
+  // （指纹粒度与写入粒度不匹配，比对反而会命中旧值）——校验统一交给 _enqueueScanVerify。
+  // 读取入口：_cachedTxtTree()（连指纹都不算）。
 
   _saveTxtTree(items, fp) {
     if (!this._useDbCache()) return;
@@ -996,7 +965,7 @@ class Api {
   //    哪怕 E 盘里的内容全没了，也是之后再自愈/重新检测的事」）──
   // 缓存命中 → 立即返回；**缓存没有 → 返回 null，由调用方按空列表渲染**，绝不回退到扫描。
   // 扫描一律走空闲队列（后台、串行、节流），完成后刷新界面 —— 不引入任何"等待/静默期"冻结。
-  _bootCachedTxtTree() {
+  _cachedTxtTree() {
     if (this._txtTree && this._txtTreeRoot === this.root) return this._txtTree;
     const raw = this._txtTreeCacheRaw();
     if (raw) {
@@ -1008,7 +977,7 @@ class Api {
     return null;
   }
 
-  _bootCachedLogFiles() {
+  _cachedLogFiles() {
     if (this._logCache && this._logCacheRoot === this.root) return this._logCache;
     this._loadLogCache();
     if (this._logCache && this._logCacheRoot === this.root && this._logCache.files && this._logCache.files.length) {
@@ -1018,18 +987,13 @@ class Api {
     return null;
   }
 
-  // 启动期缓存缺失 → 后台重建（扫描在空闲队列里做，绝不阻塞渲染）
+  // 缓存缺失（首次运行 / 新机器 / 缓存被清）→ 后台重建（扫描在空闲队列里做，不阻塞渲染）
   _enqueueScanRebuild() {
-    if (this._scanRebuildQueued) return;
-    this._scanRebuildQueued = true;
     this._idleEnqueue('scanrebuild:' + this.root, async () => {
-      this._scanRebuildQueued = false;
-      const fastWas = this._bootFast;
-      this._bootFast = false;         // 临时放开：允许真正扫描（但仍在本队里串行执行）
       try {
-        try { await this._collectAllTxtAsync(true); } catch (e) {}
-        try { await this._collectLogFilesAsync(true); } catch (e) {}
-      } finally { this._bootFast = fastWas; }
+        try { await this._collectAllTxtAsync({ force: true }); } catch (e) {}
+        try { await this._collectLogFilesAsync({ force: true }); } catch (e) {}
+      } catch (e) { /* 失败留待下次空闲重试 */ }
       this._projectsCache = null;
       try { this._emitTasks(); } catch (e) {}
       try {
@@ -1058,39 +1022,18 @@ class Api {
       const useDb = this._useDbCache();
       timing.db = _ms(t0);
       if (!useDb) { reason = 'no-db'; return false; }
-      // 启动快速路径（用户指示 2026-09-26：启动期不要碰 E 盘 IO）：
-      // **不算指纹**（指纹要 stat 根 + 各一级目录，冷态机械盘上就是那几十秒的来源），
-      // 有缓存即视为新鲜 → 主窗口直接显示，扫描小窗不弹；真正的校验交给空闲队列
-      // （_enqueueScanVerify），发现变化再后台重建 + 刷新界面（自愈）。
-      if (this._bootFast) {
-        const rawIdxFast = this._cacheStore.getKv('log_index:' + this.root);
-        const rawTreeFast = this._cacheStore.getKv('txt_tree:' + this.root);
-        timing.kv = _ms(t0);
-        timing.idxLen = rawIdxFast ? rawIdxFast.length : 0;
-        timing.treeLen = rawTreeFast ? rawTreeFast.length : 0;
-        if (rawIdxFast || rawTreeFast) { this._enqueueScanVerify(); reason = 'hit:fastboot'; return true; }
-      }
-      t0 = process.hrtime.bigint();
-      const fp = await this._logTreeFingerprintAsync();
-      timing.fp = _ms(t0);
-      if (!fp) { reason = 'no-fp'; return false; }
+      // **不算指纹（默认行为）**：指纹要 stat 根 + 各一级目录，冷态机械盘上就是那几十秒的来源。
+      // 有持久化缓存即视为新鲜 → 主窗口直接显示、扫描小窗不弹；
+      // 真正的校验交给空闲队列（_enqueueScanVerify：无条件重扫 + 频率控制 + 前台让路），
+      // 发现变化再重建并刷新界面（自愈）。只有用户主动刷新（force）才真扫。
       t0 = process.hrtime.bigint();
       const rawIdx = this._cacheStore.getKv('log_index:' + this.root);
       const rawTree = this._cacheStore.getKv('txt_tree:' + this.root);
       timing.kv = _ms(t0);
       timing.idxLen = rawIdx ? rawIdx.length : 0;
       timing.treeLen = rawTree ? rawTree.length : 0;
-      timing.fpLen = fp.length;
-      if (!rawIdx) { reason = 'no-idx'; return false; }
-      let idx = null;
-      try { idx = JSON.parse(rawIdx); } catch (e) { reason = 'idx-bad-json'; return false; }
-      if (!Array.isArray(idx) && idx && Array.isArray(idx.files) && idx.fp === fp) { reason = 'hit:idx'; return true; }
-      timing.idxFpLen = idx && idx.fp ? String(idx.fp).length : 0;
-      if (!rawTree) { reason = 'no-tree'; return false; }
-      const t = JSON.parse(rawTree);
-      if (t && t.fp === fp && Array.isArray(t.items)) { reason = 'hit:tree'; return true; }
-      timing.treeFpLen = t && t.fp ? String(t.fp).length : 0;
-      reason = 'miss-both';
+      if (rawIdx || rawTree) { this._enqueueScanVerify(); reason = 'hit:cache'; return true; }
+      reason = 'no-cache';
       return false;
     } catch (e) {
       reason = 'throw:' + ((e && e.message) || e);
@@ -1110,21 +1053,15 @@ class Api {
   // 缓存未命中（首次启动 / 目录结构变化）时走这里，窗口可先显示、扫描期间 UI 不卡。
   async _collectAllTxtAsync(opts) {
     const force = !!(opts && opts.force);
-    if (!force && this._txtTree && this._txtTreeRoot === this.root) return this._txtTree;
-    // 启动期**绝不扫描**：缓存没有就返回空列表 + 排入后台重建（前端先渲染空）。
-    // force（用户主动刷新配置）不受此限 —— 那正是用户要求真扫的场景。
-    if (!force && this._bootFast) {
-      const cachedFast = this._bootCachedTxtTree();
-      if (cachedFast) return cachedFast;
-      this._enqueueScanRebuild();
-      return [];
-    }
-    const fp = await this._logTreeFingerprintAsync();
-    // force：**跳过缓存读取**，无条件重扫并覆盖写回（刷新必须是真值）
+    // **缓存优先（默认行为）**：内存 → 持久化缓存直接用，并排入空闲队列做后台校验；
+    // 仅「缓存缺失」或 force（用户主动刷新配置）才真扫 —— 启动与运行同一条路。
     if (!force) {
-      const cached = this._loadTxtTree(fp);
-      if (cached) { this._txtTree = cached; this._txtTreeRoot = this.root; return cached; }
+      const cached = (this._txtTree && this._txtTreeRoot === this.root) ? this._txtTree : this._cachedTxtTree();
+      if (cached) { this._enqueueScanVerify(); return cached; }
     }
+    // 只有真要扫时才计算指纹（读取路径不算 —— 那是"启动期零 IO"的前提）：
+    // 指纹随扫描结果一起落库，仅作为"上次扫描时目录长什么样"的记录。
+    const fp = await this._logTreeFingerprintAsync();
     this._loadScanCache();
     const out = [];
     const active = new Set();
@@ -1199,11 +1136,9 @@ class Api {
     this._touchForeground();
     if (force) {
       this._emitScan('clear');
-      // force = 用户主动「刷新配置」：**必须真扫** —— 关掉启动快速路径。
-      // （修复 2026-09-26：此前 force 先清缓存、快速路径又拦着不让扫 → 列表变空。）
-      this._bootFast = false;
-      // 只清内存缓存，**持久化缓存保留**：异步扫描期间旧数据仍可兜底，天然是增量体验
-      //（扫描完成后覆盖写回；即使扫描中断也不会把列表清空）。
+      // force = 用户主动「刷新配置」：读取端天然绕过缓存（force 透传给收集器），此处只做必要清场。
+      // 只清内存缓存、**持久化缓存保留**：异步扫描期间旧数据仍可兜底（扫描完成后覆盖写回；
+      // 即使扫描中断也不会把列表清空）。
       this._invalidateCaches(false);
       this._rebuildClipIndexAsync();
       try { setImmediate(() => { this._emitScan('mark'); this._warmWatermarkCache(); }); } catch (e) {}
@@ -1235,23 +1170,12 @@ class Api {
     return run;
   }
 
-  // 异步版日志收集：缓存有效则秒回；否则异步遍历
+  // 异步版日志收集：**缓存优先（默认）**；缓存缺失或 force 才异步遍历
   async _collectLogFilesAsync(opts) {
-    // 启动期**只读缓存、绝不扫描**（用户指示 2026-09-26）：缓存没有就返回空 + 后台重建
     const forceA = !!(opts && opts.force);
-    if (!forceA && this._bootFast) {
-      const cachedBoot = this._bootCachedLogFiles();
-      if (cachedBoot) return cachedBoot;
-      this._enqueueScanRebuild();
-      return { files: [], fp: '' };
-    }
-    if (!forceA && this._logCache && this._logCacheRoot === this.root) return this._logCache;
-    this._loadLogCache();
-    if (!forceA && this._logCache && this._logCacheRoot === this.root && this._logCache.files && this._logCache.files.length) {
-      // 启动快速路径：跳过指纹 stat（校验交空闲队列）
-      if (this._bootFast) { this._enqueueScanVerify(); return this._logCache; }
-      const fp = await this._logTreeFingerprintAsync();
-      if (fp && fp === this._logCache.fp) return this._logCache;
+    if (!forceA) {
+      const cached = (this._logCache && this._logCacheRoot === this.root) ? this._logCache : this._cachedLogFiles();
+      if (cached && cached.files && cached.files.length) { this._enqueueScanVerify(); return cached; }
     }
     const files = [];
     let rootOk = false;
@@ -1285,8 +1209,7 @@ class Api {
   listProjects(force = false) {
     if (force) {
       this._emitScan('clear');
-      // 同 listProjectsAsync：force 必须真扫（关掉快速路径），且只清内存缓存、保留持久化兜底
-      this._bootFast = false;
+      // 同 listProjectsAsync：force 由读取端绕过缓存，此处只清内存缓存、保留持久化兜底
       this._invalidateCaches(false);
       // 重建成片索引：后台分批重建（解析日志+写大缓存），不阻塞本次列表返回；搜索仍走按目录惰性命中
       this._rebuildClipIndexAsync();
@@ -1326,17 +1249,17 @@ class Api {
         let empty = false;
         if (versions.length) {
           try {
-            const cfg = this.readConfig(versions[0].path, { peek: this._bootFast });
+            // peek：列表渲染只需知道"是否空配置"，缓存未命中时**不读文件**（渲染路径不该有磁盘读）
+            const cfg = this.readConfig(versions[0].path, { peek: true });
             empty = !(cfg.folders || []).some((f) => String(f && typeof f === 'object' ? f.path : f).trim() !== '');
           } catch (e) {}
         }
         txts.push({ name, latest, count: versions.length, dup: dupNames.has(name), empty });
       }
       let mtime = 0;
-      // 启动期：**不 stat 项目目录**（用户指示「不要动 E 盘」）—— 用缓存里各 TXT 的 mtime 聚合代替，
-      // 前端只拿它做排序，语义足够。热/非启动期仍取目录 mtime（更准）。
-      if (this._bootFast) { for (const t of txs) mtime = Math.max(mtime, Number(t.mtimeMs) || 0); }
-      else { try { mtime = fs.statSync(pdir).mtimeMs; } catch (e) {} }
+      // 项目 mtime：用缓存里各 TXT 的 mtime 聚合（前端只拿它做排序，语义足够），
+      // **不 stat 项目目录** —— 列表渲染路径保持零磁盘访问，与是否"启动期"无关。
+      for (const t of txs) mtime = Math.max(mtime, Number(t.mtimeMs) || 0);
       projects.push({ name: path.basename(pdir), mtime, txts });
     }
     projects.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
@@ -1370,7 +1293,7 @@ class Api {
   // 从配置树缓存派生版本列表（零磁盘 IO）：项目列表页本来就是这么取版本的，
   // 这里让 listVersions 在启动期也走同一条路（用户指示 2026-09-26「前端全部用缓存渲染」）。
   _versionsFromTreeCache(project, name) {
-    const all = this._bootCachedTxtTree();
+    const all = this._cachedTxtTree();
     if (!Array.isArray(all) || !all.length) return null;
     const pdir = path.join(this.root, project);
     const txs = all.filter((t) => t.pdir === pdir && t.name === name);
@@ -1379,13 +1302,11 @@ class Api {
   }
 
   listVersions(project, name) {
-    // 启动期：**零磁盘访问** —— 从配置树缓存派生；缓存也没有就返回空列表，后台重建后刷新
-    if (this._bootFast) {
-      const fromCache = this._versionsFromTreeCache(project, name);
-      if (fromCache) return fromCache;
-      this._enqueueScanRebuild();
-      return [];
-    }
+    // **缓存优先**：能从配置树缓存派生就直接返回（零磁盘访问）；
+    // 缓存里没有（首次运行 / 刚新建的配置）才落到下面的目录扫描兜底 ——
+    // 那是「用户主动打开某配置」的路径，允许读盘；启动渲染路径（项目列表）不经过这里。
+    const fromCache = this._versionsFromTreeCache(project, name);
+    if (fromCache) return fromCache;
     const pdir = path.join(this.root, project);
     if (!fs.existsSync(pdir) || !fs.statSync(pdir).isDirectory()) return [];
     const key = this.root + '\u0000' + project + '\u0000' + name;
@@ -1583,18 +1504,19 @@ class Api {
   readConfig(filePath, opts) {
     this._touchForeground();
     filePath = path.resolve(filePath);
+    const peek = !!(opts && opts.peek);
     const store = this._useDbCache() ? this._cacheStore : null;
     const row = (store && typeof store.txtGet === 'function') ? store.txtGet(filePath) : null;
     if (row && row.parsed) {
-      // 启动期：**直接信缓存，不做 stat**（用户指示 2026-09-26「前端全部用缓存渲染」）；
-      // 一致性由后台空闲队列校验（文件被外部改动会在稍后自愈）。
-      if (this._bootFast) return this._configFromCacheRow(filePath, row);
+      // peek（项目列表渲染：只想知道"这份配置是不是空的"）：直接信缓存、**不做 stat** ——
+      // 列表渲染路径必须零磁盘访问。免 IO 的依据是**调用方语义**，不是"是否启动期"。
+      if (peek) return this._configFromCacheRow(filePath, row);
+      // 正常打开配置：缓存 + 一次 stat 校验（指纹一致即免读整份文件、免解析）
       const fp = this._configFingerprint(filePath);
-      if (fp && fp === row.fp) return this._configFromCacheRow(filePath, row);   // 命中：内容取缓存，零文件读取
+      if (fp && fp === row.fp) return this._configFromCacheRow(filePath, row);
     }
-    // peek：调用方只想知道"这份配置是不是空的"（项目列表渲染用），无缓存时**不要读文件**，
-    // 直接给乐观结构 —— 启动期渲染路径上一行磁盘 IO 都不该有。
-    if (opts && opts.peek) {
+    // peek 且无缓存：给乐观结构（非空），**不读文件** —— 同上，渲染路径不该有磁盘 IO
+    if (peek) {
       return { path: filePath, raw: '', lines: [], folders: [{ path: '', nonround: false }], excludes: [], watermark: '', name: path.basename(filePath, path.extname(filePath)), _peek: true };
     }
     const text = readText(filePath);
@@ -2596,27 +2518,17 @@ class Api {
   }
 
   // 收集根目录下所有属于某复刻模式的日志文件（命名形如 MMdd-模式名日志.txt）
-  // 复刻日志清单：**结果缓存化 + 启动期零遍历**（用户指示 2026-09-26：「前端全部用缓存渲染，
-  // 不要动 E 盘」）。此前每调用一次就 walkFiles(this.root) 全量遍历，而 _buildProjectsData 会为
-  // 两种复刻模式各调一次 → 实测启动期 3070 次 readdirSync（审计定位）。
+  // 复刻日志清单：**结果缓存化**。此前每调用一次就 walkFiles(this.root) 全量遍历，而
+  // `_buildProjectsData` 会为两种复刻模式各调一次 → 实测启动期 3070 次 readdirSync（审计定位）。
   _replicaLogFiles(modeName) {
     const esc = String(modeName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const pat = new RegExp('^\\d{4}-' + esc + '日志\\.txt$');
-    // ① 内存/持久化缓存（零 IO）
+    // ① 内存/持久化缓存（零 IO）——缓存优先是默认行为
     const cached = this._replicaLogFilesCached(modeName);
     if (cached) return cached;
-    // ② 启动期**绝不遍历**：返回空列表，后台重建后刷新
-    if (this._bootFast) { this._enqueueReplicaLogRebuild(); return []; }
-    const out = [];
-    if (!this.root || !fs.existsSync(this.root)) return out;
-    for (const full of walkFiles(this.root)) {
-      if (!path.basename(full).toLowerCase().endsWith('.txt')) continue;
-      if (pat.test(path.basename(full))) out.push(full);
-    }
-    out.sort();
-    this._replicaLogCache = { root: this.root, byMode: Object.assign({}, (this._replicaLogCache || {}).byMode, { [modeName]: out }) };
-    this._saveReplicaLogCache();
-    return out;
+    // ② 缓存缺失（首次运行 / 新机器）：不在这里全量遍历，排队后台重建后刷新界面
+    this._enqueueReplicaLogRebuild();
+    return [];
   }
 
   // 复刻日志清单缓存：一次遍历把「所有复刻模式的日志」都算出来存库，之后启动零遍历
@@ -2646,10 +2558,7 @@ class Api {
 
   // 启动期缓存缺失 → 后台一次性遍历，把所有复刻模式的日志清单都建好并落库
   _enqueueReplicaLogRebuild() {
-    if (this._replicaRebuildQueued) return;
-    this._replicaRebuildQueued = true;
     this._idleEnqueue('repbuild:' + this.root, async () => {
-      this._replicaRebuildQueued = false;
       const byMode = {};
       let modes = [];
       try { modes = REPLICA_MODES.slice(); } catch (e) { modes = []; }
@@ -3272,7 +3181,7 @@ class Api {
     // 校验完成后写回库并增量刷新界面（自愈）。**任何情况下都不做同步磁盘探测** ——
     // 同步 stat/readdir 是历次冷启动冻结的源头（实测 5.7s ~ 49.5s），已彻底移除。
     const memo = this._hasOutputMemo && this._hasOutputMemo.get(t.id);
-    const ttl = (memo && memo.ttl) || HAS_OUTPUT_MEMO_TTL_MS;
+    const ttl = (memo && memo.ttl) || HAS_OUTPUT_PERSIST_TTL_MS;
     if (memo && (Date.now() - memo.at) < ttl) return memo.v;
     const probes = this._taskOutputProbes(t);
     if (!probes) return true;
@@ -3443,10 +3352,10 @@ class Api {
         '任务恢复完成（同步段 ' + (_t3 - _t0) + 'ms · 读库 ' + (_t1 - _t0) + ' / 主循环 ' + (_t2 - _t1) + ' / GC ' + (_t3 - _t2) + ' · 任务 ' + rows.length + ' 条 · 待异步校验输出目录 ' + pendingOut.length + ' 条）',
         { dbMs: _t1 - _t0, loopMs: _t2 - _t1, gcMs: _t3 - _t2, tasks: rows.length, pendingOut: pendingOut.length });
     } catch (e) {}
-    // 输出目录校验：启动期入队（异步、串行、节流），不在启动窗口内打素材盘 IO
+    // 输出目录校验：**一律入队**（异步、串行、节流）—— 不在启动窗口内打素材盘 IO，
+    // 由空闲队列的启动保护期与让路机制决定何时真正执行（比"启动期判断"更准确）。
     if (pendingOut.length) {
-      if (this._bootFast) this._idleEnqueue('outdirverify:' + this.root, () => this._verifyBatchOutDirs(pendingOut));
-      else this._verifyBatchOutDirs(pendingOut);
+      this._idleEnqueue('outdirverify:' + this.root, () => this._verifyBatchOutDirs(pendingOut));
     }
     // 启动只读库：把已持久化的成片存在性结论载入内存（一次查询、零文件 IO），
     // 其余待校验项**只入队**（空闲队列串行执行，见 _prewarmHasOutputAsync / _idleKick）
@@ -6360,8 +6269,6 @@ let themes = [];
     }
     return { ok: true, deleted, videos: removedVideos };
   }
-
-  resolvePath(filePath) { return path.resolve(filePath); }
 
   // 检测应用运行所需的外部环境是否可用（ffmpeg / ffprobe / 内置引擎）
   // 项目实际依赖的滤镜清单（三模块 + 视频处理工具的 -filter_complex 全量收集）

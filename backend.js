@@ -5455,7 +5455,11 @@ class Api {
   //   · ffprobe **明确报出损坏特征**（moov atom not found / Invalid data 等）→ 改名留证；
   //   · ffprobe 超时 / 启动失败 / 权限错误 → **一律不动**（工具自身不可信时，不能替用户下结论）。
   //   教训：清理比不清理更糟的情形真实存在 —— 误判会把好成片改名，等于让用户丢片子。
-  async _pruneBrokenOutputs(task) {
+  // ⚠ 演练模式（opts.dryRun）：只**报告**会怎么处理，绝不改文件。
+  //   验证/诊断脚本一律用它 —— 真实素材目录只应被"用户点继续制作"这一条路径写入
+  //   （2026-09-27：验证脚本曾直接对真实目录调用本方法，虽未造成改动，但那是本不该有的写权限）。
+  async _pruneBrokenOutputs(task, opts) {
+    const dryRun = !!(opts && opts.dryRun);
     const out = { dir: '', checked: 0, broken: [], temps: [], skipped: 0 };
     try {
       const detail = this._batchTaskOutDetail(task, true);
@@ -5472,8 +5476,10 @@ class Api {
         const p = path.join(dir, f);
         const tmpPath = /\.tmp\.mp4$/i.test(f) ? p : '';   // 仅引擎临时产物可永久删除
         try {
-          if (tmpPath) { fs.unlinkSync(tmpPath); out.temps.push(f + '(已删)'); }
-          else { fs.renameSync(p, p + '.broken-' + Date.now() + '.bak'); out.temps.push(f); }
+          if (tmpPath) {
+            if (dryRun) out.temps.push(f + '(演练：将删除)');
+            else { fs.unlinkSync(tmpPath); out.temps.push(f + '(已删)'); }
+          } else { fs.renameSync(p, p + '.broken-' + Date.now() + '.bak'); out.temps.push(f); }
         } catch (e) {}
       }
       // ② ffprobe 逐个校验（能读出正时长才算可播放）
@@ -5510,15 +5516,19 @@ class Api {
         // 但绝不把 .bak 留在正式产出目录里（用户 2026-09-27 指出：留在目录里等于没清，
         // 而且会被误当成本批产物）。
         let recycled = false;
-        try { recycled = !!this._recycleFile(p); } catch (e) { recycled = false; }
-        if (!recycled) {
-          const trashDir = path.join(dir, '..', '_损坏产物');
-          try {
-            fs.mkdirSync(trashDir, { recursive: true });
-            await fsp.rename(p, path.join(trashDir, path.basename(p) + '.broken-' + Date.now() + '.bak'));
-          } catch (e2) {}
+        if (dryRun) {
+          out.broken.push({ name: f, size, recycled: false, dryRun: true });
+        } else {
+          try { recycled = !!this._recycleFile(p); } catch (e) { recycled = false; }
+          if (!recycled) {
+            const trashDir = path.join(dir, '..', '_损坏产物');
+            try {
+              fs.mkdirSync(trashDir, { recursive: true });
+              await fsp.rename(p, path.join(trashDir, path.basename(p) + '.broken-' + Date.now() + '.bak'));
+            } catch (e2) {}
+          }
+          out.broken.push({ name: f, size, recycled });
         }
-        out.broken.push({ name: f, size, recycled });
         // 让路：逐个校验本身就慢，期间把事件循环交还出去
         await new Promise((r2) => setImmediate(r2));
       }

@@ -9,7 +9,7 @@ const path = require('node:path');
 const { runFfmpeg } = require('../../base/ffmpeg');
 const { probe } = require('../../base/probe');
 const { acquireLock } = require('../../base/lock');
-const { stripQuotes, getNumberSuffix, exists } = require('../../base/paths');
+const { stripQuotes, getNumberSuffix, exists, renameWithRetry } = require('../../base/paths');
 const dedupe = require('../../base/dedupe');
 
 // 缓存作用域位掩码（与 engines/base/cache.js 的 SCOPES 同源）。
@@ -803,7 +803,9 @@ async function run(ctx, env = process.env) {
       // ★ 同批量模块：先写临时名，编码成功后再原子改名 ——
       //   正式名必须是「完整可播放产物」的唯一标志，否则编码中途停止会留下正式名半截文件
       //   （用户会误取、且续跑反推序号会把它当成已完成而永久跳过）。见 batch/index.js 同处说明。
-      const tmpOut = finalOut + '.tmp.mp4';
+      // 临时名 = 正式名去掉扩展后接 `.tmp.mp4`（末尾仍是 .mp4 供 ffmpeg 识别容器；
+      // 此前直接追加会得到 `xxx.mp4.tmp.mp4`，扩展名重复、名字过长 —— 用户 2026-09-27 指出）
+      const tmpOut = finalOut.replace(/\.mp4$/i, '') + '.tmp.mp4';
 
       // ── 拼接 + 水印 + 编码（GPU 硬约束） ──
       const n = videos.length;
@@ -849,11 +851,12 @@ async function run(ctx, env = process.env) {
         continue;
       }
       // ★ 编码成功 → 原子改名到正式名（改名前不得出现正式名产物）
-      try {
-        fs.renameSync(tmpOut, finalOut);
-      } catch (e) {
-        logger.error('日志复刻-编码', `产物改名失败：${job.name} · ${(e && e.message) || e}`);
-        try { if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut); } catch (e2) {}
+      // 带重试：Windows 上杀软 / 索引服务会瞬时占用刚写完的大文件，单次失败即把成片误判为失败
+      //（用户 2026-09-27：合成完成后要确保改名能完成，不被其他软件影响）
+      const rnErr = await renameWithRetry(tmpOut, finalOut);
+      if (rnErr) {
+        logger.error('日志复刻-编码', `产物改名失败：${job.name} · ${(rnErr && rnErr.message) || rnErr}`);
+        // ⚠ 保留临时产物：改名失败多为瞬时占用，删掉等于白编码一次
         logger.fail(job.name, '产物改名失败');
         hasError = true;
         continue;

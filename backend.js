@@ -621,8 +621,21 @@ class Api {
     if (!list.length || merged < list.length) {
       // 有未并入的变更（或批量变更）→ 丢弃持久化配置树，保证下次读取是真扫结果
       try { if (this._useDbCache()) this._cacheStore.removeKv('txt_tree:' + this.root); } catch (e) {}
+      this._invalidateCaches();
+    } else {
+      // ✅ 并入完整：**保留**更新后的配置树（_upsertTxtTreeEntry 已把它写回持久化）。
+      //    此前这里无条件 _invalidateCaches()，把刚并入并落盘的树清掉 —— 而新增/改动配置
+      //    常发生在二级/三级目录、**不改变一级目录 mtime**（见上方注释）→ 指纹不变 →
+      //    下次读取命中「旧指纹缓存」→ 新配置**突然消失**，必须点刷新（force 真扫）才回来
+      //    （用户报障 2026-09-27）。此处只失效「项目列表 / 版本 / 日志」这类派生缓存即可。
+      this._projectsCache = null;
+      this._projectsInflight = null;
+      this._projectsSeq = (this._projectsSeq || 0) + 1;   // 在跑的旧任务结果作废
+      this._versionsCache.clear();
+      this._versionsFp.clear();
+      this._logCache = null;
+      this._logCacheRoot = '';
     }
-    this._invalidateCaches();
     if (typeof this.onVersionsChanged === 'function') { try { this.onVersionsChanged(); } catch (e) {} }
   }
 

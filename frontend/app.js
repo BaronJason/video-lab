@@ -2869,6 +2869,7 @@
           return;
         }
         // 展开/切换：若有原展开项目，先播原项目收回（去底色）+ 配置区渐隐，随即重建展开新项目
+        var prevExpanded = state.expandedProject;   // 供「取消切换」时回滚
         state.expandedProject = pname;
         var oldHeader = $('sidebarTree').querySelector('.tree-project__name.is-filled');
         var oldWrap = $('sidebarTree').querySelector('.tree-project__items');
@@ -2906,7 +2907,19 @@
             window.setTimeout(function () { newHeader.classList.remove('is-filling'); }, 400);
           }
         };
-        if (oldHeader || oldWrap) { window.setTimeout(applyExpand, 50); } else { applyExpand(); }
+        var runExpand = function () {
+          if (oldHeader || oldWrap) { window.setTimeout(applyExpand, 50); } else { applyExpand(); }
+        };
+        // 切换项目：若已选中配置，中间栏一并复位（与「折叠项目」分支一致）——
+        // 否则原项目的日期分支与配置内容会残留显示（用户报障 2026-09-27）；未保存修改同样先弹窗确认。
+        if (state.activeTxt) {
+          checkConfigModifiedBeforeLeave(
+            function () { if (state.activeTxt) resetCenterToLaunch(); runExpand(); },
+            function () { state.expandedProject = prevExpanded; buildSidebar(); }   // 取消切换：回滚展开态，与中栏保持一致
+          );
+        } else {
+          runExpand();
+        }
         return;
       }
       var item = e.target.closest('.tree-txt-item');

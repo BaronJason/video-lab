@@ -415,14 +415,14 @@
     var hint = $('inputHint');
     if (state.files.length) {
       hint.className = 'tl-hint';
-      hint.textContent = '已选 ' + state.files.length + ' 个视频文件（按文件清单处理，不再按目录扫描）';
+      hint.textContent = '已选 ' + state.files.length + ' 个视频文件（按文件清单处理，不再按文件夹扫描）';
     } else if (state.root) {
       hint.className = 'tl-hint';
-      hint.textContent = '将' + (state.recursive ? '递归' : '仅在本层') + '扫描该目录下的视频'
-        + '（自动跳过应用自身的输出与备份目录）';
+      hint.textContent = '将' + (state.recursive ? '递归' : '仅在本层') + '扫描该文件夹下的视频'
+        + '（自动跳过应用自身的输出与备份文件夹）';
     } else {
       hint.className = 'tl-hint';
-      hint.textContent = '请选择目录，或直接选择若干视频文件';
+      hint.textContent = '请选择文件夹，或直接选择若干视频文件';
     }
   }
 
@@ -431,10 +431,10 @@
     $('outDirRow').classList.toggle('tl-out__row--hide', !dirMode);
     $('outNameRow').classList.toggle('tl-out__row--hide', !dirMode);
     $('outModeHint').textContent = dirMode
-      ? '空目录 → 直接输出；已有文件 → 自动新建子目录'
+      ? '空文件夹 → 直接输出；已有文件 → 自动新建子文件夹'
       : '处理结果直接替换原文件（有备份可还原）';
     $('outHint').textContent = $('outBackup').checked
-      ? '备份目录留空时落在应用数据目录下（源目录之外，不会被当成素材再次处理）'
+      ? '备份文件夹留空时落在应用数据文件夹下（源文件夹之外，不会被当成素材再次处理）'
       : '已关闭备份：覆盖后原文件不可恢复';
   }
 
@@ -442,7 +442,7 @@
     $('outMode').addEventListener('change', syncOutputRows);
     $('outBackup').addEventListener('change', syncOutputRows);
     $('btnPickDir').addEventListener('click', function () {
-      if (!api || !api.pick_directory) { toast('后端不支持目录选择', 'error'); return; }
+      if (!api || !api.pick_directory) { toast('后端不支持文件夹选择', 'error'); return; }
       api.pick_directory('选择要处理的文件夹', state.root || undefined).then(function (p) {
         if (p) { state.root = p; state.files = []; $('inRoot').value = p; renderInputHint(); }
       });
@@ -465,37 +465,37 @@
       state.root = v;
       renderInputHint();
       clearTimeout(_rootTimer);
-      if (!v) { setStatus('请选择目录，或直接粘贴路径'); return; }
+      if (!v) { setStatus('请选择文件夹，或直接粘贴路径'); return; }
       _rootTimer = setTimeout(function () {
         if (!api || !api.check_exists) return;
         api.check_exists([v]).then(function (m) {
           if (String($('inRoot').value || '').trim() !== v) return;   // 已改成别的路径
-          if (m && m[v]) setStatus('目录有效：' + v);
-          else toast('目录不存在：' + v, 'error');
+          if (m && m[v]) setStatus('文件夹有效：' + v);
+          else toast('文件夹不存在：' + v, 'error');
         }).catch(function () {});
       }, 400);
     });
     $('inRecursive').addEventListener('change', function () { state.recursive = !!$('inRecursive').checked; renderInputHint(); });
     $('btnPickOutDir').addEventListener('click', function () {
-      if (!api || !api.pick_directory) { toast('后端不支持目录选择', 'error'); return; }
-      api.pick_directory('选择输出目录', $('outDir').value || state.root || undefined).then(function (p) {
+      if (!api || !api.pick_directory) { toast('后端不支持文件夹选择', 'error'); return; }
+      api.pick_directory('选择输出文件夹', $('outDir').value || state.root || undefined).then(function (p) {
         if (p) $('outDir').value = p;
       });
     });
     $('btnPickBackupDir').addEventListener('click', function () {
-      if (!api || !api.pick_directory) { toast('后端不支持目录选择', 'error'); return; }
-      api.pick_directory('选择备份目录', $('outBackupDir').value || state.defaultBackupDir || undefined).then(function (p) {
+      if (!api || !api.pick_directory) { toast('后端不支持文件夹选择', 'error'); return; }
+      api.pick_directory('选择备份文件夹', $('outBackupDir').value || state.defaultBackupDir || undefined).then(function (p) {
         if (p) $('outBackupDir').value = p;
       });
     });
     var obb = $('btnOpenBackupDir');
     if (obb) obb.addEventListener('click', function () {
-      if (!api || !api.open_folder_select) { toast('后端不支持打开目录', 'error'); return; }
+      if (!api || !api.open_folder_select) { toast('后端不支持打开文件夹', 'error'); return; }
       api.open_folder_select($('outBackupDir').value.trim() || state.defaultBackupDir).then(function (r) {
-        if (r && r.ok === false) { toast('打开备份目录失败：' + (r.error || '未知错误'), 'error'); return; }
+        if (r && r.ok === false) { toast('打开备份文件夹失败：' + (r.error || '未知错误'), 'error'); return; }
         // 浏览器端由本体代开：explorer 可能被 Windows 前台锁压到后台，只在任务栏出现 —— 明确告知去哪看
         if (location.protocol.indexOf('http') === 0) toast('资源管理器已在后台打开，可从任务栏查看', 'info');
-      }).catch(function (e) { toast('打开备份目录失败：' + e.message, 'error'); });
+      }).catch(function (e) { toast('打开备份文件夹失败：' + e.message, 'error'); });
     });
     $('logHead').addEventListener('click', function () { $('logBox').classList.toggle('tl-log--open'); });
     $('btnRun').addEventListener('click', onSubmit);
@@ -504,8 +504,8 @@
   function collectSpec() {
     var stepIds = Object.keys(state.sel).filter(function (k) { return state.sel[k]; });
     if (!stepIds.length) return { error: '请至少勾选一个处理步骤' };
-    if (!state.root && !state.files.length) return { error: '请选择要处理的目录或视频文件' };
-    if ($('outMode').value === 'directory' && !$('outDir').value.trim()) return { error: '请选择输出目录' };
+    if (!state.root && !state.files.length) return { error: '请选择要处理的文件夹或视频文件' };
+    if ($('outMode').value === 'directory' && !$('outDir').value.trim()) return { error: '请选择输出文件夹' };
     // 数字型参数在表单里是字符串，提交前统一还原成数字（引擎侧按数字判断阈值）
     var coerce = function (v) {
       if (v == null || v === '' || typeof v === 'number' || typeof v === 'boolean') return v;
@@ -563,7 +563,7 @@
       var msg = '<b>将处理：</b>' + esc(scope) + '<br>'
         + '<b>本次启用：</b>' + esc(titles.join(' + ')) + '<br>'
         + '<b>处理前备份：</b>' + (backupOn ? '已开启' : '<span style="color:var(--status-error-default);font-weight:600">未开启 —— 覆盖后原文件不可恢复</span>')
-        + (spec.files.length ? '' : '<br><b>扫描范围：</b>' + (spec.recursive ? '含子目录' : '仅本层'));
+        + (spec.files.length ? '' : '<br><b>扫描范围：</b>' + (spec.recursive ? '含子文件夹' : '仅本层'));
       showDialog({
         title: '将覆盖原视频',
         cssClass: 'modal-card--wide',
@@ -693,7 +693,7 @@
         // ★ 就绪即启用主操作按钮 —— 参数不完整时交给点击后的校验去提示，
         //   否则按钮一直灰着，用户不知道为什么不能点
         setRunEnabled(true, '');
-        setStatus('就绪 —— 选好目录、勾选要做的处理后点「开始处理」');
+        setStatus('就绪 —— 选好文件夹、勾选要做的处理后点「开始处理」');
       }
     }).catch(function (e) {
       setRunEnabled(false, '读取处理能力失败');

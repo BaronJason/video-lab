@@ -497,7 +497,7 @@
       if (cur.type === 'tool') {
         confirmPopover({
           title: '删除任务记录',
-          message: '仅从列表移除，不会删除任何视频文件。\n\n该任务处理过的视频若需要还原，请到备份目录取回。',
+          message: '仅从列表移除，不会删除任何视频文件。\n\n该任务处理过的视频若需要还原，请到备份文件夹取回。',
           okLabel: '仅移除记录', danger: true
         }, e.currentTarget).then(function (ok) {
           if (!ok) return;
@@ -1177,7 +1177,7 @@
     }).length;
     if (toolN) {
       msg += '\n\n其中 ' + toolN + ' 个是视频处理任务：这部分**仅移除列表记录，不会删除任何视频文件**'
-        + '（它的产物就是处理后的原视频，需要还原请到备份目录取回）。';
+        + '（它的产物就是处理后的原视频，需要还原请到备份文件夹取回）。';
     }
     if (ids) {
       title = '清除任务';

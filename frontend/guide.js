@@ -18,7 +18,7 @@
   $('guidePick').addEventListener('click', function () {
     api.pick_directory('选择项目数据工作路径', '').then(function (p) {
       if (p) { $('guideRoot').value = p; setStatus('', true); }
-    }).catch(function () { setStatus('选择目录失败', false); });
+    }).catch(function () { setStatus('选择文件夹失败', false); });
   });
 
   $('guideSave').addEventListener('click', function () {

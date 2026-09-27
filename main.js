@@ -1573,6 +1573,7 @@ function buildHttpExtraRoutes() {
         backup_keep_days: parseInt(c.backup_keep_days, 10) || 7,
         backup_dir_effective: String(c.backup_dir || '').trim()
           || require('path').join(storageDir(), 'backup'),   // 占位符直接显示实际默认地址
+        backup_root_effective: api.getBackupRoot(),   // 备份实际落盘根（自定义目录时含「Video Lab 备份」层）
       };
     },
     // 运行日志目录（设置页「维护」区）
@@ -1580,6 +1581,7 @@ function buildHttpExtraRoutes() {
     save_settings: (args) => {
       const s = args[0];
       const cfg = loadConfig();
+      const prevBackupDir = String(cfg.backup_dir || '').trim();   // 变更前值：用于备份目录迁移
       let configMoved = false;
       if (s && typeof s === 'object') {
         // 工作路径已迁入 batch.root（见下方 batch 分支），不再从顶层 s.root 取
@@ -1622,6 +1624,11 @@ function buildHttpExtraRoutes() {
       if (!httpServerInfo) restartHttpServer();
       scheduleDailyUpdateCheck();
       api.updateSettings(cfg);
+      // 备份目录实际变更：把旧目录里已有的备份迁移到新目录（异步执行，不阻塞保存返回）
+      const nextBackupDir = String(cfg.backup_dir || '').trim();
+      if (nextBackupDir !== prevBackupDir) {
+        try { api.migrateBackups(prevBackupDir, nextBackupDir); } catch (e) {}
+      }
       for (const w of BrowserWindow.getAllWindows()) w.webContents.send('settings_saved', cfg);
       if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('settings_saved', cfg);
       return { ok: true, config_moved: configMoved };
@@ -1872,6 +1879,7 @@ function registerIpc() {
       backup_keep_days: parseInt(c.backup_keep_days, 10) || 7,
       backup_dir_effective: String(c.backup_dir || '').trim()
         || path.join(storageDir(), 'backup'),   // 占位符直接显示实际默认地址
+      backup_root_effective: api.getBackupRoot(),   // 备份实际落盘根（自定义目录时含「Video Lab 备份」层）
       autostart: c.autostart === true,
       close_behavior: c.close_behavior === 'exit' ? 'exit' : 'tray',
       http_port: parseInt(c.http_port, 10) || 9527,
@@ -1882,6 +1890,7 @@ function registerIpc() {
   // 设置页：保存完整配置，写入 config.json 并同步内存/后端/主窗口皮肤；切换保存位置时迁移并删除旧文件
   ipcMain.handle('save_settings', (e, s) => {
     const cfg = loadConfig();
+    const prevBackupDir = String(cfg.backup_dir || '').trim();   // 变更前值：用于备份目录迁移
     let configMoved = false;
     if (s && typeof s === 'object') {
       // 工作路径已迁入 batch.root（见下方 batch 分支），不再从顶层 s.root 取
@@ -1927,6 +1936,11 @@ function registerIpc() {
     if (!httpServerInfo) restartHttpServer();
     scheduleDailyUpdateCheck(); // 定时检查设置可能变更：重新安排
     api.updateSettings(cfg);
+    // 备份目录实际变更：把旧目录里已有的备份迁移到新目录（异步执行，不阻塞保存返回）
+    const nextBackupDir = String(cfg.backup_dir || '').trim();
+    if (nextBackupDir !== prevBackupDir) {
+      try { api.migrateBackups(prevBackupDir, nextBackupDir); } catch (e) {}
+    }
     for (const w of BrowserWindow.getAllWindows()) w.webContents.send('settings_saved', cfg);
     if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('settings_saved', cfg);
     return { ok: true, config_moved: configMoved };
@@ -2392,6 +2406,9 @@ app.whenReady().then(async () => {
       const _t = process.hrtime.bigint();
       try { api.restoreTasks(); } catch (e) {}
       logTiming('窗口加载后：任务恢复同步段完成（耗时 ' + Math.round(Number(process.hrtime.bigint() - _t) / 1e6) + 'ms · 输出目录校验已转异步）');
+      // 过期备份清理：后台异步跑。同步版只在「视频处理任务结束后」触发，用户此后不跑该任务
+      // 就永远不会清理（实测保留 3 天、6 天前的备份仍在），故在启动时补一次。
+      try { api._cleanupBackupsAsync(); } catch (e) {}
     }, 0);
   });
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

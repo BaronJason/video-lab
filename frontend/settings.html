@@ -79,14 +79,14 @@
           <label class="opt-radio">
             <input type="radio" name="configStorage" value="program">
             <span class="opt-radio__dot"></span>
-            <span class="opt-radio__label">程序所在目录<span class="opt-path" id="cfgPathProgram"></span></span>
+            <span class="opt-radio__label">程序所在文件夹<span class="opt-path" id="cfgPathProgram"></span></span>
           </label>
         </div>
         <div class="opt-row">
           <label class="opt-radio">
             <input type="radio" name="configStorage" value="appdata">
             <span class="opt-radio__dot"></span>
-            <span class="opt-radio__label">AppData 目录<span class="opt-path" id="cfgPathAppdata"></span></span>
+            <span class="opt-radio__label">AppData 文件夹<span class="opt-path" id="cfgPathAppdata"></span></span>
           </label>
         </div>
       </div>
@@ -208,10 +208,10 @@
 
       <div class="settings-group"><span class="settings-group__title">路径</span></div>
       <div class="form-group">
-        <div class="form-group__desc">批量拼接的工作目录，存放各项目文件夹及 TXT 配置</div>
+        <div class="form-group__desc">批量拼接的工作路径，存放各项目文件夹及 TXT 配置</div>
         <div class="dir-row">
           <input class="form-input" id="cfgRoot" type="text" placeholder="">
-          <button class="btn btn-ghost" data-dir="cfgRoot">选择目录</button>
+          <button class="btn btn-ghost" data-dir="cfgRoot">选择文件夹</button>
         </div>
       </div>
 
@@ -313,7 +313,7 @@
         <div class="form-group__desc">存放遮罩的路径，以文件夹区分项目</div>
         <div class="dir-row">
           <input class="form-input" id="maskRoot" type="text" placeholder="必填，选择遮罩叠加工作路径">
-          <button class="btn btn-ghost" data-dir="maskRoot">选择目录</button>
+          <button class="btn btn-ghost" data-dir="maskRoot">选择文件夹</button>
         </div>
       </div>
 
@@ -342,10 +342,14 @@
       <div class="settings-group"><span class="settings-group__title">备份</span></div>
 
       <div class="form-group">
-        <label class="form-group__label">默认备份目录<small>「处理前备份」的文件存放位置</small></label>
+        <label class="form-group__label">默认备份文件夹<small>「处理前备份」的文件存放位置</small></label>
         <div class="dir-row">
           <input class="form-input" id="backupDir" type="text" placeholder="">
-          <button class="btn btn-ghost" data-dir="backupDir">选择目录</button>
+          <button class="btn btn-ghost" data-dir="backupDir">选择文件夹</button>
+        </div>
+        <div class="opt-row">
+          <button type="button" class="btn btn-ghost" id="btnOpenBackupDir">打开备份文件夹</button>
+          <span class="opt-path" id="backupDirPath"></span>
         </div>
       </div>
 

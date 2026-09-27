@@ -927,7 +927,7 @@
       html += '<input type="text" class="config-path-row__input" value="' + escapeHtml(f.path) + '" title="' + escapeHtml(f.path) + '">';
       html += '<span class="config-path-row__precheck" data-index="' + idx + '"><span class="config-path-row__badge precheck--pending">检测中…</span></span>';
       html += '<button class="config-path-row__browse" title="修改路径">' + icon('pencil', 14) + '</button>';
-      html += '<button class="config-path-row__open" title="打开路径">' + icon('folder-open', 14) + '</button>';
+      html += '<button class="config-path-row__open" title="打开文件夹">' + icon('folder-open', 14) + '</button>';
       html += '<button class="config-path-row__remove" title="移除路径">' + icon('x', 14) + '</button></div>';
     });
     html += '</div>';
@@ -1489,7 +1489,7 @@
   }
   function pathRowHtml(value) {
     var v = value == null ? '' : String(value);
-    return '<span class="config-path-row__drag" draggable="true" title="按住拖动排序">' + icon('grip-vertical', 14) + '</span><label class="config-path-row__checkbox" title="勾选 = 不轮询（添加 = 前缀）"><input type="checkbox" class="config-path-row__check"><span class="config-path-row__check-mark"></span></label><input type="text" class="config-path-row__input" value="' + escapeHtml(v) + '" title="' + escapeHtml(v) + '"><span class="config-path-row__precheck"><span class="config-path-row__badge precheck--pending">检测中…</span></span><button class="config-path-row__browse" title="修改路径">' + icon('pencil', 14) + '</button><button class="config-path-row__open" title="打开路径">' + icon('folder-open', 14) + '</button><button class="config-path-row__remove" title="移除路径">' + icon('x', 14) + '</button>';
+    return '<span class="config-path-row__drag" draggable="true" title="按住拖动排序">' + icon('grip-vertical', 14) + '</span><label class="config-path-row__checkbox" title="勾选 = 不轮询（添加 = 前缀）"><input type="checkbox" class="config-path-row__check"><span class="config-path-row__check-mark"></span></label><input type="text" class="config-path-row__input" value="' + escapeHtml(v) + '" title="' + escapeHtml(v) + '"><span class="config-path-row__precheck"><span class="config-path-row__badge precheck--pending">检测中…</span></span><button class="config-path-row__browse" title="修改路径">' + icon('pencil', 14) + '</button><button class="config-path-row__open" title="打开文件夹">' + icon('folder-open', 14) + '</button><button class="config-path-row__remove" title="移除路径">' + icon('x', 14) + '</button>';
   }
   function addPathRow(path) {
     var p = String(path == null ? '' : path).trim();
@@ -1882,7 +1882,7 @@
         var missing = clip.getAttribute('data-exists') === '0';
         var items = [
           { label: '打开文件', disableIfMissing: true, title: missing ? '文件不存在' : '', action: function () { openFileInShell(p); } },
-          { label: '打开路径', disableIfMissing: true, title: missing ? '文件不存在' : '', action: function () { openInShell(p); } }
+          { label: '在文件夹中显示', disableIfMissing: true, title: missing ? '文件不存在' : '', action: function () { openInShell(p); } }
         ];
         if (missing) items.forEach(function (it) { if (it.disableIfMissing) it.disabled = true; });
         showMenu(e.clientX, e.clientY, items);
@@ -2383,7 +2383,7 @@
   }
   function setStatus(msg) { var el = $('statusLeft'); if (!el) return; el.classList.remove('status-bar__success'); el.textContent = msg; }
 
-  // 「打开路径/目录」统一入口：失败 toast；浏览器端由本体代开（explorer 可能被前台锁压到后台，
+  // 「打开文件夹 / 在文件夹中显示」统一入口：失败 toast；浏览器端由本体代开（explorer 可能被前台锁压到后台，
   // 只在任务栏出现）→ 成功后提示去任务栏查看。全项目所有打开目录调用都走这里，文案与行为一致。
   // 打开「路径 / 文件夹 / 所在位置」类操作：后端按目标类型分流 ——
   // 传目录则打开该目录（进入），传文件则打开其所在文件夹并选中该文件（定位）
@@ -2816,7 +2816,7 @@
       collapsePreviewPanel(); checkConfigModifiedBeforeLeave(resetCenterToLaunch);
     });
     $('sidebarTree').addEventListener('scroll', syncAzHighlight);
-    // 右键项目名：打开项目位置 / 项目设置（复刻虚拟项目无配置水印，不提供）
+    // 右键项目名：打开项目文件夹 / 项目设置（复刻虚拟项目无配置水印，不提供）
     $('sidebarTree').addEventListener('contextmenu', function (e) {
       var ph = e.target.closest('.tree-project__name');
       if (!ph) return;
@@ -2824,7 +2824,7 @@
       if (!pname || pname === REPLICA_PROJECT) return;
       e.preventDefault();
       showMenu(e.clientX, e.clientY, [
-        { label: '打开项目位置', action: function () { call('open_project_dir', pname).then(function (r) { if (!(r && r.ok)) setStatus('打开项目失败：' + ((r && r.error) || '未知错误')); }).catch(function (err) { setStatus('打开项目失败：' + err.message); }); } },
+        { label: '打开项目文件夹', action: function () { call('open_project_dir', pname).then(function (r) { if (!(r && r.ok)) setStatus('打开项目失败：' + ((r && r.error) || '未知错误')); }).catch(function (err) { setStatus('打开项目失败：' + err.message); }); } },
         { label: '项目设置', action: function () { openProjectWatermarkDialog(pname); } }
       ]);
     });
@@ -2930,7 +2930,7 @@
       var label = btn.getAttribute('data-label'); var v = state.versions.find(function (x) { return x.label === label; }); if (v) openFileInShell(v.path);
     });
     document.addEventListener('contextmenu', function (e) {
-      // 遮罩模式日志日期分支右键：打开成片路径（找不到成片置灰）/ 打开日志文件 / 迁移全部成片 / 移除该日志（仅日志或连同成片）
+      // 遮罩模式日志日期分支右键：在文件夹中显示（找不到成片置灰）/ 打开日志文件 / 迁移全部成片 / 移除该日志（仅日志或连同成片）
       var mb = $('maskDateBranches');
       if (mb && mb.contains(e.target)) {
         var mbtn = e.target.closest('.date-branch-btn');
@@ -2953,7 +2953,7 @@
         modeName = '日志';
         showMenu(e.clientX, e.clientY, [
           { label: '打开文件', action: function () { openFileInShell(fp); } },
-          { label: '打开路径', action: function () { openInShell(fp); } },
+          { label: '在文件夹中显示', action: function () { openInShell(fp); } },
           { label: '移除', action: function () { confirmRemoveBranch(target, modeName, false); } }
         ]);
         return;
@@ -2965,7 +2965,7 @@
       modeName = '配置';
       showMenu(e.clientX, e.clientY, [
         { label: '打开文件', action: function () { openFileInShell(v.path); } },
-        { label: '打开路径', action: function () { openInShell(v.path); } },
+        { label: '在文件夹中显示', action: function () { openInShell(v.path); } },
         { label: '移除', action: function () { confirmRemoveBranch(target, modeName, !!v.isExternal); } }
       ]);
     });
@@ -4161,14 +4161,14 @@
     tree.innerHTML = html;
     tree.querySelectorAll('.mask-proj-item').forEach(function (el) {
       el.addEventListener('click', function () { selectMaskProject(el.getAttribute('data-maskproj')); });
-      // 项目行右键：打开项目位置 / 项目设置（样式参考批量模式）
+      // 项目行右键：打开项目文件夹 / 项目设置（样式参考批量模式）
       el.addEventListener('contextmenu', function (e) {
         e.preventDefault();
         e.stopPropagation();
         var pName = el.getAttribute('data-maskproj');
         var pItem = maskState.projects.find(function (x) { return x.name === pName; });
         showMenu(e.clientX, e.clientY, [
-          { label: '打开项目位置', action: function () { if (pItem) openInShell(pItem.path); } },
+          { label: '打开项目文件夹', action: function () { if (pItem) openInShell(pItem.path); } },
           { label: '项目设置', action: function () { if (pName) openMaskProjectSettings(pName, pItem ? pItem.path : ''); } }
         ]);
       });
@@ -4186,10 +4186,10 @@
         '<button type="button" class="modal-close" title="关闭">✕</button>' +
         '<div class="modal__title">项目设置</div>' +
         '<div class="modal__wm-body">' +
-        '<div class="wm-section-title">默认输出目录</div>' +
+        '<div class="wm-section-title">默认输出文件夹</div>' +
         '<div class="wm-row"><span class="wm-row__label">输出路径</span><div class="wm-row__ops">' +
         '<input type="text" class="wm-row__input" id="maskDefaultOutInput" style="flex:1; min-width:0" placeholder="' + escapeHtml(projPath) + '" value="' + escapeHtml(curDir) + '" spellcheck="false">' +
-        '<button type="button" class="modal-btn" id="maskDefaultOutPick">选择目录</button>' +
+        '<button type="button" class="modal-btn" id="maskDefaultOutPick">选择文件夹</button>' +
         '</div></div>' +
         '</div>' +
         '<div class="modal__actions">' +
@@ -4202,7 +4202,7 @@
       function closeDlg() { overlay.remove(); }
       card.querySelector('#maskDefaultOutPick').addEventListener('click', function () {
         var cur = inp.value.trim() || curDir || projPath || '';
-        call('pick_directory', '选择默认输出目录', cur).then(function (np) { if (np) inp.value = np; }).catch(function () {});
+        call('pick_directory', '选择默认输出文件夹', cur).then(function (np) { if (np) inp.value = np; }).catch(function () {});
       });
       overlay.addEventListener('click', function (e) { if (e.target === overlay) closeDlg(); });
       card.querySelector('.modal-close').addEventListener('click', closeDlg);
@@ -4362,12 +4362,12 @@
     if (at) at.addEventListener('click', function () { maskPickAdd('theme', 'dir'); });
     var atf = $('maskAddThemeFile');
     if (atf) atf.addEventListener('click', function () { maskPickAdd('theme', 'file'); });
-    // 两栏素材右键菜单：遮罩主题组/文件、原片文件 → 打开文件/打开路径/删除素材成片；原片文件夹行 → 打开路径
+    // 两栏素材右键菜单：遮罩主题组/文件、原片文件 → 打开文件/在文件夹中显示/删除素材成片；原片文件夹行 → 打开文件夹
     panel.addEventListener('contextmenu', function (e) {
       var mkOpen = function (full) {
         showMenu(e.clientX, e.clientY, [
           { label: '打开文件', action: function () { openFileInShell(full); } },
-          { label: '打开路径', action: function () { openInShell(full); } }
+          { label: '在文件夹中显示', action: function () { openInShell(full); } }
         ]);
       };
       var gf = e.target.closest('.mask-group-file');
@@ -4381,7 +4381,7 @@
           e.preventDefault();
           showMenu(e.clientX, e.clientY, [
             { label: '打开文件', action: function () { openFileInShell(fFull); } },
-            { label: '打开路径', action: function () { openInShell(fFull); } }
+            { label: '在文件夹中显示', action: function () { openInShell(fFull); } }
           ]);
         }
         return;
@@ -4389,7 +4389,7 @@
       var fr = e.target.closest('.mask-folder-row');
       if (fr) {
         var rd = maskState.rawDirs[parseInt(fr.getAttribute('data-rawfold'), 10)];
-        if (rd && rd.path) { e.preventDefault(); showMenu(e.clientX, e.clientY, [{ label: '打开路径', action: function () { openInShell(rd.path); } }]); }
+        if (rd && rd.path) { e.preventDefault(); showMenu(e.clientX, e.clientY, [{ label: '打开文件夹', action: function () { openInShell(rd.path); } }]); }
         return;
       }
     });
@@ -5048,7 +5048,7 @@
     }).catch(function () {});
   }
 
-  // 遮罩日志日期分支右键菜单：打开成片路径（找不到成片置灰禁用）/ 打开日志文件 / 迁移全部成片 / 重新定位 / 移除该日志
+  // 遮罩日志日期分支右键菜单：在文件夹中显示（找不到成片置灰禁用）/ 打开日志文件 / 迁移全部成片 / 重新定位 / 移除该日志
   function openMaskBranchMenu(x, y, mfp) {
     call('list_mask_logs', maskState.project.path).then(function (logs) {
       var lg = (Array.isArray(logs) ? logs : []).find(function (l) { return l.path === mfp; });
@@ -5058,7 +5058,7 @@
       var shown = false;
       var show = function (anyExists) {
         if (shown) return; shown = true;
-        var openOut = { label: '打开成片路径', disabled: !anyExists, title: anyExists ? '' : '找不到成片', action: function () {
+        var openOut = { label: '在文件夹中显示', disabled: !anyExists, title: anyExists ? '' : '找不到成片', action: function () {
             for (var i = 0; i < entries.length; i++) { if (entries[i].outPath) { openInShell(entries[i].outPath); return; } }
           } };
         showMenu(x, y, [
@@ -5166,7 +5166,7 @@
       var k = 0;
       (function next() {
         if (k >= missingNames.length) {
-          setStatus('重新定位完成：成功 ' + okN + ' / 失败 ' + failN + (failN ? '（失败可手动选择对应目录）' : ''));
+          setStatus('重新定位完成：成功 ' + okN + ' / 失败 ' + failN + (failN ? '（失败可手动选择对应文件夹）' : ''));
           buildMaskLogView();
           return;
         }
@@ -5194,9 +5194,9 @@
     var projPath = maskState.project ? maskState.project.path : '';
     var outPlaceholder = maskState.defaultOutDir || projPath || '必填，可直接输入或点击右侧选择';
     var html = '<div class="config-bar__left">' +
-      '<label class="config-bottombar__label">输出目录</label>' +
+      '<label class="config-bottombar__label">输出文件夹</label>' +
       '<input type="text" class="config-bottombar__input mask-bar__outdir" id="maskOutDir" value="' + escapeHtml(maskState.outputDir || '') + '" placeholder="' + escapeHtml(outPlaceholder) + '" spellcheck="false">' +
-      '<button type="button" class="mask-bar__pick" id="maskPickOutDir" title="选择成片输出目录">' + icon('folder', 14) + '</button>' +
+      '<button type="button" class="mask-bar__pick" id="maskPickOutDir" title="选择成片输出文件夹">' + icon('folder', 14) + '</button>' +
       '</div>';
     html += '<div class="config-bar__right">' +
       '<span class="config-bottombar__warn mask-bar__hint" id="maskStartHint" style="display:none"></span>' +
@@ -5216,7 +5216,7 @@
     });
     $('maskPickOutDir').addEventListener('click', function () {
       // 从占位符/默认目录路径打开选择对话框
-      call('pick_directory', '选择成片输出目录', maskEffectiveOutDir() || projPath).then(function (np) {
+      call('pick_directory', '选择成片输出文件夹', maskEffectiveOutDir() || projPath).then(function (np) {
         if (np) { maskState.outputDir = np; buildMaskConfigBar(); maskPersist(); }
       }).catch(function () {});
     });
@@ -5262,7 +5262,7 @@
       else if (maskRawSelCount() < 1) errs.push('未勾选原片');
       if (maskNeedMask() && !Object.keys(maskState.maskSel).length) errs.push('未选中遮罩');
       if (maskNeedWm() && !maskState.watermark) errs.push('未选水印');
-      if (!maskEffectiveOutDir()) errs.push('无输出目录');
+      if (!maskEffectiveOutDir()) errs.push('无输出文件夹');
       // 最终防线：已勾选的遮罩与原片两两时差必须 ≤1s（含组头全选/半选引入的所有勾选）
       var durErrs = maskDurMismatchErrs();
       if (durErrs.length) errs.push(durErrs[0] + (durErrs.length > 1 ? ' 等 ' + durErrs.length + ' 处' : ''));

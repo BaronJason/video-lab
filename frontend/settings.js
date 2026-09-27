@@ -353,6 +353,9 @@
         // 占位符直接显示实际默认地址（比文字解释更直观）
         if (s.backup_dir_effective) bd.placeholder = s.backup_dir_effective;
       }
+      // 「打开备份目录」行：显示备份实际落盘根（自定义目录时含「Video Lab 备份」层）
+      var bdp = $('backupDirPath');
+      if (bdp) bdp.textContent = s.backup_root_effective || '';
       var bac = $('backupAutoClean');
       if (bac) bac.checked = s.backup_auto_clean === true;
       var bkd = $('backupKeepDays');
@@ -553,7 +556,7 @@
         var cur = $(inputId).value.trim();
         // 输入框留空时，以 placeholder 显示的实际默认地址作为对话框初始位置（而非无关的工作路径）
         var startAt = cur || $(inputId).placeholder || undefined;
-        api.pick_directory('选择目录', startAt).then(function (p) { if (p) { $(inputId).value = p; recomputeDirty(); } });
+        api.pick_directory('选择文件夹', startAt).then(function (p) { if (p) { $(inputId).value = p; recomputeDirty(); } });
       });
     });
     // 遮罩固定水印：选择 mov 文件
@@ -793,17 +796,27 @@
       var isAppdata = sel && sel.value === 'appdata';
       var pp = document.getElementById('cfgPathProgram'), pa = document.getElementById('cfgPathAppdata');
       var dir = isAppdata ? (pa ? pa.textContent : '') : (pp ? pp.textContent : '');
-      if (!dir) { setStatus('尚未确定保存目录', false); return; }
+      if (!dir) { setStatus('尚未确定保存文件夹', false); return; }
       api.open_folder_select(dir).then(function (r) {
         if (!(r && r.ok)) toast('打开失败：' + ((r && r.error) || '路径不存在'), true);
       }).catch(function (e) { toast('打开失败：' + e.message, true); });
+    });
+    // 「默认备份目录」行：打开备份实际落盘目录（自定义目录时含其下的「Video Lab 备份」层）
+    var openBackup = document.getElementById('btnOpenBackupDir');
+    if (openBackup && api && api.open_folder_select) openBackup.addEventListener('click', function () {
+      var el = document.getElementById('backupDirPath');
+      var dir = el ? el.textContent : '';
+      if (!dir) { setStatus('备份文件夹尚未就绪', false); return; }
+      api.open_folder_select(dir).then(function (r) {
+        if (!(r && r.ok)) toast('打开失败：' + ((r && r.error) || '路径不存在'), true);
+      }).catch(function () { setStatus('打开失败', false); });
     });
     // 「运行日志」行：打开日志目录（排查时先找到文件）
     var openLog = document.getElementById('btnOpenLogDir');
     if (openLog && api && api.open_folder_select) openLog.addEventListener('click', function () {
       var el = document.getElementById('logDirPath');
       var dir = el ? el.textContent : '';
-      if (!dir) { setStatus('日志目录尚未就绪', false); return; }
+      if (!dir) { setStatus('日志文件夹尚未就绪', false); return; }
       api.open_folder_select(dir).then(function (r) {
         if (!(r && r.ok)) toast('打开失败：' + ((r && r.error) || '路径不存在'), true);
       }).catch(function () { setStatus('打开失败', false); });

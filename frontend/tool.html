@@ -182,15 +182,15 @@
     </div>
   </div>
 
-  <!-- 两 Tab 共享：目标目录与递归 -->
+  <!-- 两 Tab 共享：目标文件夹与递归 -->
   <div class="tl-input">
     <div class="tl-line">
-      <span class="tl-label">目标目录</span>
-      <input class="tl-text" id="inRoot" placeholder="可直接粘贴/输入目录路径，或点右侧按钮选择（留空则不处理）">
+      <span class="tl-label">目标文件夹</span>
+      <input class="tl-text" id="inRoot" placeholder="可直接粘贴/输入文件夹路径，或点右侧按钮选择（留空则不处理）">
       <button class="tl-btn" id="btnPickDir"><i data-icon="folder-open" data-size="14"></i>选择文件夹</button>
       <button class="tl-btn" id="btnPickFiles"><i data-icon="video" data-size="14"></i>选择视频</button>
       <button class="tl-btn" id="btnClearInput" title="清空已选输入"><i data-icon="x" data-size="14"></i>清空</button>
-      <label class="opt-check opt-check--sm"><input type="checkbox" id="inRecursive" checked><span class="opt-check__box"></span><span>递归子目录</span></label>
+      <label class="opt-check opt-check--sm"><input type="checkbox" id="inRecursive" checked><span class="opt-check__box"></span><span>递归子文件夹</span></label>
     </div>
     <div class="tl-hint" id="inputHint"></div>
   </div>
@@ -221,13 +221,13 @@
           <span class="tl-label">输出方式</span>
           <select class="tl-sel" id="outMode">
             <option value="overwrite">覆盖原视频</option>
-            <option value="directory">输出到指定目录</option>
+            <option value="directory">输出到指定文件夹</option>
           </select>
           <span class="tl-hint" id="outModeHint"></span>
         </div>
         <div class="tl-out__row tl-out__row--hide" id="outDirRow">
-          <span class="tl-label">目标目录</span>
-          <input class="tl-text" id="outDir" placeholder="选择输出目录">
+          <span class="tl-label">目标文件夹</span>
+          <input class="tl-text" id="outDir" placeholder="选择输出文件夹">
           <button class="tl-btn" id="btnPickOutDir"><i data-icon="folder-open" data-size="14"></i>选择</button>
         </div>
         <div class="tl-out__row tl-out__row--hide" id="outNameRow">
@@ -247,9 +247,9 @@
         <div class="tl-sep"></div>
         <div class="tl-out__row">
           <label class="opt-check opt-check--sm"><input type="checkbox" id="outBackup"><span class="opt-check__box"></span><span>处理前备份原文件</span></label>
-          <input class="tl-text" id="outBackupDir" placeholder="备份目录（留空 = 设置里的默认备份目录）" style="max-width:320px">
-          <button class="tl-btn" id="btnPickBackupDir"><i data-icon="folder-open" data-size="14"></i>选择备份目录</button>
-          <button class="tl-btn" id="btnOpenBackupDir" title="打开当前设定的备份目录（留空则打开默认备份目录）"><i data-icon="folder-open" data-size="14"></i>打开备份目录</button>
+          <input class="tl-text" id="outBackupDir" placeholder="备份文件夹（留空 = 设置里的默认备份文件夹）" style="max-width:320px">
+          <button class="tl-btn" id="btnPickBackupDir"><i data-icon="folder-open" data-size="14"></i>选择备份文件夹</button>
+          <button class="tl-btn" id="btnOpenBackupDir" title="打开当前设定的备份文件夹（留空则打开默认备份文件夹）"><i data-icon="folder-open" data-size="14"></i>打开备份文件夹</button>
         </div>
         <div class="tl-hint" id="outHint"></div>
       </div>

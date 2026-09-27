@@ -4319,6 +4319,13 @@ class Api {
     return { ok: true, total, regrouped: renamed.length, errors };
   }
 
+  // 实际备份根目录：与「备份落盘 / 过期清理 / 目录迁移」使用的一致
+  //（自定义目录时备份落在其下的「Video Lab 备份」层，未设置时用数据目录下的 backup）
+  getBackupRoot() {
+    const c = String(this.config.backup_dir || '').trim();
+    return c ? path.join(c, 'Video Lab 备份') : path.join(this.storageDir || process.cwd(), 'backup');
+  }
+
   // 更新日志（CHANGELOG.md 位于应用目录内，随 app.asar 打包）
   getChangelog() {
     try {
@@ -6528,10 +6535,11 @@ let themes = [];
       if (this.config.backup_auto_clean !== true) return;
       const days = parseInt(this.config.backup_keep_days, 10) || 7;
       // 与实际备份根一致：用户自选目录时同样落在其下的「Video Lab 备份」层（清理才清得到）
-      const customRoot = String(this.config.backup_dir || '').trim();
-      const root = customRoot ? path.join(customRoot, 'Video Lab 备份')
-        : path.join(this.storageDir || process.cwd(), 'backup');
+      const root = this.getBackupRoot();
       if (!fs.existsSync(root)) return;
+      // ⚠ 必须在此取 shell：本文件没有模块级引入 electron，直接用 `shell` 会得到 undefined，
+      //   条件恒假 → 只计数不删除（实测：保留 3 天，6 天前的备份一个都没清掉）。
+      const { shell } = require('electron');
       const expire = Date.now() - days * 24 * 60 * 60 * 1000;
       let n = 0;
       const walk = (d) => {
@@ -6549,6 +6557,102 @@ let themes = [];
       walk(root);
       if (n) this._lg('DEL', 'backup.cleanup', '清理过期备份 · ' + n + ' 个文件 · 保留 ' + days + ' 天');
     } catch (e) {}
+  }
+
+  // 备份自动清理（异步版）：供**启动后台**调用。
+  // 为什么需要：同步版只在「视频处理任务结束后」触发（见 _cleanupBackups 调用点）——
+  //   若用户此后不再跑视频处理任务，过期备份永远不会被清理（实测：设为保留 3 天，
+  //   6 天前的备份仍原样留在目录里）。启动路径也不能同步遍历（备份目录可能在机械盘），
+  //   故用 fs.promises 后台跑，与成片存在性预热同一模式。
+  async _cleanupBackupsAsync() {
+    try {
+      if (this.config.backup_auto_clean !== true) return 0;
+      const days = parseInt(this.config.backup_keep_days, 10) || 7;
+      const root = this.getBackupRoot();
+      let exists = false;
+      try { exists = (await fs.promises.stat(root)).isDirectory(); } catch (e) { exists = false; }
+      if (!exists) return 0;
+      // ⚠ 同上：本文件无模块级 electron 引入，必须在此取 shell，否则只是空转计数。
+      const { shell } = require('electron');
+      const expire = Date.now() - days * 24 * 60 * 60 * 1000;
+      let n = 0;
+      const walk = async (d) => {
+        let names = [];
+        try { names = await fs.promises.readdir(d); } catch (e) { return; }
+        for (const name of names) {
+          const p2 = path.join(d, name);
+          let st = null;
+          try { st = await fs.promises.stat(p2); } catch (e) { continue; }
+          if (st.isDirectory()) { await walk(p2); continue; }
+          if (st.mtimeMs < expire) {
+            if (shell && typeof shell.trashItem === 'function') { try { await shell.trashItem(p2); n++; } catch (e) {} }
+          }
+        }
+      };
+      await walk(root);
+      if (n) this._lg('DEL', 'backup.cleanup', '清理过期备份 · ' + n + ' 个文件 · 保留 ' + days + ' 天');
+      return n;
+    } catch (e) { return 0; }
+  }
+
+  // 备份目录变更时迁移旧备份：把旧备份根下的内容搬到新根（用户定案：改了路径，里面的备份一起迁移）。
+  // 逐文件移动（rename 优先，跨盘失败退回「复制 + 删源」）；同名文件保留新目录已有内容（不覆盖）。
+  // ⚠ 迁移完成后只删除**已空**的旧目录（绝不 rm -rf 有内容的目录），避免中途失败时丢备份。
+  // 异步执行（备份可能很多且跨盘），调用方不等待、不阻塞保存设置。
+  async migrateBackups(oldDir, newDir) {
+    try {
+      const rootOf = (d) => {
+        const c = String(d || '').trim();
+        return c ? path.join(c, 'Video Lab 备份')
+          : path.join(this.storageDir || process.cwd(), 'backup');
+      };
+      const from = rootOf(oldDir), to = rootOf(newDir);
+      if (path.resolve(from) === path.resolve(to)) return 0;   // 同一位置：无需迁移
+      let ok = false;
+      try { ok = (await fs.promises.stat(from)).isDirectory(); } catch (e) { ok = false; }
+      if (!ok) return 0;                                       // 旧目录不存在：无内容可迁
+      await fs.promises.mkdir(to, { recursive: true });
+      let n = 0;
+      const walk = async (rel) => {
+        const srcDir = path.join(from, rel);
+        let names = [];
+        try { names = await fs.promises.readdir(srcDir); } catch (e) { return; }
+        for (const name of names) {
+          const r = rel ? path.join(rel, name) : name;
+          const s = path.join(from, r), t = path.join(to, r);
+          let st = null;
+          try { st = await fs.promises.stat(s); } catch (e) { continue; }
+          if (st.isDirectory()) {
+            try { await fs.promises.mkdir(t, { recursive: true }); } catch (e) {}
+            await walk(r);
+            continue;
+          }
+          let exists = false;
+          try { exists = (await fs.promises.stat(t)).isFile(); } catch (e) { exists = false; }
+          if (exists) continue;                                // 目标已存在同名文件：保留目标的
+          try { await fs.promises.rename(s, t); n++; }
+          catch (e) {
+            try { await fs.promises.copyFile(s, t); await fs.promises.unlink(s); n++; } catch (e2) {}
+          }
+        }
+      };
+      await walk('');
+      // 只清理已空的旧目录壳（逐层判断，非空一律保留）
+      const pruneEmpty = async (d) => {
+        let names = [];
+        try { names = await fs.promises.readdir(d); } catch (e) { return; }
+        for (const nm of names) {
+          const p2 = path.join(d, nm);
+          let st = null;
+          try { st = await fs.promises.stat(p2); } catch (e) { continue; }
+          if (st.isDirectory()) await pruneEmpty(p2);
+        }
+        try { if (!(await fs.promises.readdir(d)).length) await fs.promises.rmdir(d); } catch (e) {}
+      };
+      await pruneEmpty(from);
+      if (n) this._lg('SYS', 'backup.migrate', '备份目录迁移 · ' + n + ' 个文件', { from, to });
+      return n;
+    } catch (e) { return 0; }
   }
 
   // 过期锁清理：进程被强杀（崩溃 / 任务管理器结束）时 finally 不执行，锁文件会残留下来；

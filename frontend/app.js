@@ -2868,57 +2868,57 @@
           });
           return;
         }
-        // 展开/切换：若有原展开项目，先播原项目收回（去底色）+ 配置区渐隐，随即重建展开新项目
-        var prevExpanded = state.expandedProject;   // 供「取消切换」时回滚
-        state.expandedProject = pname;
-        var oldHeader = $('sidebarTree').querySelector('.tree-project__name.is-filled');
-        var oldWrap = $('sidebarTree').querySelector('.tree-project__items');
-        if (oldHeader) {
-          oldHeader.classList.remove('is-filled');
-          var bdgOld = oldHeader.querySelector('.tree-project__badge');
-          if (bdgOld) {
-            // 与折叠分支一致：先摘除 --static 再播 --leave 收回动画
-            bdgOld.classList.remove('tree-project__badge--static');
-            bdgOld.classList.add('tree-project__badge--leave');
+        // 展开/切换：整个流程（状态变更 + 原项目收回动画 + 重建展开）都放到确认通过之后执行。
+        // ⚠ 必须先确认再动：此前状态与收回动画在确认前就跑，用户点「取消」会看到动画进行一半突然跳回
+        //（用户报障 2026-09-27）。
+        var doExpand = function () {
+          state.expandedProject = pname;
+          var oldHeader = $('sidebarTree').querySelector('.tree-project__name.is-filled');
+          var oldWrap = $('sidebarTree').querySelector('.tree-project__items');
+          if (oldHeader) {
+            oldHeader.classList.remove('is-filled');
+            var bdgOld = oldHeader.querySelector('.tree-project__badge');
+            if (bdgOld) {
+              // 与折叠分支一致：先摘除 --static 再播 --leave 收回动画
+              bdgOld.classList.remove('tree-project__badge--static');
+              bdgOld.classList.add('tree-project__badge--leave');
+            }
           }
-        }
-        if (oldWrap) oldWrap.classList.add('tree-project__items--leaving');
-        var applyExpand = function () {
-          buildSidebar(true); // 项目展开：强制 azbar 扫描动画（即使字母集合相同）
-          // 配置区整体淡入（仅在项目展开时触发，切换配置不重播）
-          var itemWrap2 = $('sidebarTree').querySelector('.tree-project__items');
-          if (itemWrap2) {
-            itemWrap2.classList.remove('tree-project__items--enter');
-            void itemWrap2.offsetWidth;
-            itemWrap2.classList.add('tree-project__items--enter');
-          }
-          // 点击项目名仅展开列表，不触发高亮判定（高亮由点击配置名/滚动/拖拽触发）
-          var newHeader = null;
-          var hs = $('sidebarTree').querySelectorAll('.tree-project__name');
-          for (var k = 0; k < hs.length; k++) {
-            if (hs[k].getAttribute('data-project') === pname) { newHeader = hs[k]; break; }
-          }
-          if (newHeader) {
-            // 一次性动画类驱动填充（remove 后重加即可重新播放），避免过渡触发时序导致部分项目直接变色
-            newHeader.classList.add('is-filled');
-            if (newHeader.classList.contains('is-filling')) newHeader.classList.remove('is-filling');
-            void newHeader.offsetWidth;
-            newHeader.classList.add('is-filling');
-            window.setTimeout(function () { newHeader.classList.remove('is-filling'); }, 400);
-          }
-        };
-        var runExpand = function () {
+          if (oldWrap) oldWrap.classList.add('tree-project__items--leaving');
+          var applyExpand = function () {
+            buildSidebar(true); // 项目展开：强制 azbar 扫描动画（即使字母集合相同）
+            // 配置区整体淡入（仅在项目展开时触发，切换配置不重播）
+            var itemWrap2 = $('sidebarTree').querySelector('.tree-project__items');
+            if (itemWrap2) {
+              itemWrap2.classList.remove('tree-project__items--enter');
+              void itemWrap2.offsetWidth;
+              itemWrap2.classList.add('tree-project__items--enter');
+            }
+            // 点击项目名仅展开列表，不触发高亮判定（高亮由点击配置名/滚动/拖拽触发）
+            var newHeader = null;
+            var hs = $('sidebarTree').querySelectorAll('.tree-project__name');
+            for (var k = 0; k < hs.length; k++) {
+              if (hs[k].getAttribute('data-project') === pname) { newHeader = hs[k]; break; }
+            }
+            if (newHeader) {
+              // 一次性动画类驱动填充（remove 后重加即可重新播放），避免过渡触发时序导致部分项目直接变色
+              newHeader.classList.add('is-filled');
+              if (newHeader.classList.contains('is-filling')) newHeader.classList.remove('is-filling');
+              void newHeader.offsetWidth;
+              newHeader.classList.add('is-filling');
+              window.setTimeout(function () { newHeader.classList.remove('is-filling'); }, 400);
+            }
+          };
           if (oldHeader || oldWrap) { window.setTimeout(applyExpand, 50); } else { applyExpand(); }
         };
-        // 切换项目：若已选中配置，中间栏一并复位（与「折叠项目」分支一致）——
-        // 否则原项目的日期分支与配置内容会残留显示（用户报障 2026-09-27）；未保存修改同样先弹窗确认。
+        // 切换项目：先做未保存修改确认（确认前不动状态、不播动画）；确认后再复位中栏并执行展开
         if (state.activeTxt) {
-          checkConfigModifiedBeforeLeave(
-            function () { if (state.activeTxt) resetCenterToLaunch(); runExpand(); },
-            function () { state.expandedProject = prevExpanded; buildSidebar(); }   // 取消切换：回滚展开态，与中栏保持一致
-          );
+          checkConfigModifiedBeforeLeave(function () {
+            if (state.activeTxt) resetCenterToLaunch();
+            doExpand();
+          });
         } else {
-          runExpand();
+          doExpand();
         }
         return;
       }

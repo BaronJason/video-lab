@@ -56,15 +56,18 @@ function ticksBigOfFile(videoPath) {
 
 /** video_cache 持久层：VL_CACHE_DB 指向的 cache.db，由主进程注入（backend 的 _spawnEngine）。
  *  库未注入或不可用时返回 null，缓存退化为内存态（不影响出片，只是每次重探）。
- *  收益：全量读为库内全表读（数千条约 3ms），写回只落本次新探测的条目而非重写全量。 */
+ *  收益：全量读为库内全表读（数千条约 3ms），写回只落本次新探测的条目而非重写全量。
+ *  ⚠ 不要求库"已存在"（2026-09-27 修正）：`CacheStore.open()` 自己会建目录与库文件，
+ *    此前多一道 `existsSync` 前置检查 → **库还没被创建时引擎直接放弃写库**，
+ *    使用计数与现场探测结果被静默丢弃（首次运行/新机器/隔离环境必现，只是常规路径下
+ *    主进程先建好了库才掩盖了它 —— 由 P5 端到端套件暴露）。 */
 function openVideoStore() {
   const dbPath = String(process.env.VL_CACHE_DB || '').trim();
   if (!dbPath) return null;
   try {
-    if (!fs.existsSync(dbPath)) return null;
     const CacheStore = require('../../base/cache');
     const store = new CacheStore(dbPath, { root: '' });
-    store.open();
+    store.open();   // 自动建目录 + 建表（库不存在即创建）
     return store;
   } catch (e) {
     return null; // 库不可用：静默降级，不影响任务

@@ -426,7 +426,7 @@ body {
 
 .opt-path {
   font-size: 11px;
-  /* 提示/路径文字：用次级文字色（不是三级）—— 深色皮肤下三级色偏暗（黑橙 #707070 on 近黑底）
+  /* 提示/路径文字：用次级文字色（不是三级）—— 深色皮肤下三级色偏暗（深色 #707070 on 近黑底）
      对比不足，看起来像"没跟随皮肤"；次级色三皮肤下都清晰 */
   color: var(--text-secondary);
   font-family: Consolas, "Courier New", monospace;

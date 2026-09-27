@@ -12,8 +12,8 @@
   }, { passive: false });
 
   var THEMES = [
-    { id: 'white_blue', label: '白蓝', bg: '#F5F5F5', theme: '#4B3FE3' },
-    { id: 'Black_Orange', label: '黑橙', bg: '#111113', theme: '#FF6600' },
+    { id: 'white_blue', label: '浅色', bg: '#F5F5F5', theme: '#4B3FE3' },
+    { id: 'Black_Orange', label: '深色', bg: '#111113', theme: '#FF6600' },
     { id: 'Maid_Atelier', label: '深海女仆', bg: '#0e1d49', theme: '#c5a468' }
   ];
   var state = {

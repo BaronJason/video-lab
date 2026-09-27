@@ -1,4 +1,4 @@
-/* 黑橙 —— 基于 Nerv 深色模板，深色背景 + 橙色品牌强调 */
+/* 深色 —— 基于 Nerv 深色模板，深色背景 + 橙色品牌强调 */
 html[data-skin="Black_Orange"] {
   /* 背景层：近黑深灰 */
   --bg-base-default: #0A0A0B;
@@ -65,7 +65,7 @@ html[data-skin="Black_Orange"] {
   --accent-amber: #FF9900;
   --accent-cyan: #FF8533;
 
-  /* 状态色：在黑橙主题下微调保持可读 */
+  /* 状态色：在深色主题下微调保持可读 */
   --status-primary-default: #FF6600;
   --status-primary-hover: #FF8533;
   --status-primary-active: #CC5200;

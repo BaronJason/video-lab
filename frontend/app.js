@@ -2535,10 +2535,10 @@
   }
 
   // ── 皮肤切换 ──
-  // 皮肤列表按下拉名拼音升序：白蓝 < 黑橙
+  // 皮肤列表按下拉名拼音升序：浅色 < 深色
   var SKINS = [
-    { id: 'white_blue', label: '白蓝', bg: '#F5F5F5', theme: '#4B3FE3' },
-    { id: 'Black_Orange', label: '黑橙', bg: '#111113', theme: '#FF6600' },
+    { id: 'white_blue', label: '浅色', bg: '#F5F5F5', theme: '#4B3FE3' },
+    { id: 'Black_Orange', label: '深色', bg: '#111113', theme: '#FF6600' },
     { id: 'Maid_Atelier', label: '深海女仆', bg: '#0e1d49', theme: '#c5a468' }
   ];
   function applySkin(id, persist) {

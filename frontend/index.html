@@ -213,8 +213,8 @@
         <span class="status-bar__version" id="versionTag"></span>
         <span class="status-bar__divider"></span>
         <span id="statusLeft">就绪</span>
-      </span>
-      <span class="status-bar__right">
+        <!-- 进度类反馈紧跟状态文字（用户 2026-09-28）：原先放在右侧，
+             导致同一次「扫描 / 预检测」的文字在左、进度在右，来回跳着看很割裂 -->
         <span class="probe-mini" id="probeMini" style="display:none">
           <span class="probe-mini__label" id="probeMiniLabel">预检测 0/0</span>
           <span class="probe-mini__track"><span class="probe-mini__fill" id="probeMiniFill" style="width:0%"></span></span>
@@ -225,6 +225,8 @@
           <span class="update-mini__track"><span class="update-mini__fill" id="updateMiniFill" style="width:0%"></span></span>
           <span class="update-mini__text" id="updateMiniText">0%</span>
         </span>
+      </span>
+      <span class="status-bar__right">
         <span id="envWarnMark" class="status-bar__envwarn" style="display:none"></span>
         <button class="status-bar__tasks-btn" id="btnOpenTasks" title="打开任务列表，查看脚本实时输出">
           <i data-icon="list" data-size="12"></i>任务<span class="status-bar__tasks-count" id="tasksCount" style="display:none"></span>

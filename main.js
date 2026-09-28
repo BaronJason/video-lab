@@ -648,12 +648,10 @@ const api = new Api(root, config, resolveEnginesDir(), storageDir());
   try { _configBaseline = JSON.parse(JSON.stringify(config)); } catch (e) {}
 })();
 // 扫描/重建环节进度：推送主窗口渲染层实时状态（walk/收集日志/重建成片索引/水印统计 一一对应）
-// 扫描小窗存在时也推给它（启动期全量扫描的进度反馈，见 scanning.html）
 api.onScanProgress = (p) => {
   try {
     const targets = [];
     if (mainWin && !mainWin.isDestroyed()) targets.push(mainWin);
-    if (scanWin && !scanWin.isDestroyed()) targets.push(scanWin);
     if (!targets.length) { const w = BrowserWindow.getAllWindows()[0] || null; if (w) targets.push(w); }
     for (const w of targets) { try { w.webContents.send('scan_progress', p); } catch (e) {} }
   } catch (e) {}
@@ -667,34 +665,8 @@ api.onFfmpegProgress = (p) => {
 
 // 主窗口与任务窗口：主窗口仅在原生模态对话框/载入遮罩时被禁用；任务列表窗口不随父窗口禁用
 let mainWin = null;
-// 扫描小窗：仅在「需要全量扫描工作目录」时出现（缓存未命中），扫描期间给用户即时反馈。
-// 缓存命中（常态）不创建 —— 避免每次启动都多闪一个窗口。
-let scanWin = null;
-
-// 创建扫描小窗：无边框、不可缩放、置于最前，居中于屏幕
-function openScanWindow() {
-  if (scanWin && !scanWin.isDestroyed()) { try { scanWin.focus(); } catch (e) {} return scanWin; }
-  try {
-    scanWin = new BrowserWindow({
-      width: 360, height: 132,
-      resizable: false, maximizable: false, minimizable: false, fullscreenable: false,
-      frame: false, show: false, skipTaskbar: false, alwaysOnTop: true,
-      title: 'Video Lab',
-      webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false }
-    });
-    scanWin.loadFile(path.join(__dirname, 'frontend', 'scanning.html'));
-    scanWin.once('ready-to-show', () => { try { if (scanWin && !scanWin.isDestroyed()) scanWin.show(); } catch (e) {} });
-    scanWin.on('closed', () => { scanWin = null; });
-    logTiming('扫描小窗已创建');
-  } catch (e) { scanWin = null; }
-  return scanWin;
-}
-
-// 关闭扫描小窗（扫描结束/主窗口即将显示时调用）
-function closeScanWindow() {
-  try { if (scanWin && !scanWin.isDestroyed()) scanWin.close(); } catch (e) {}
-  scanWin = null;
-}
+// 注：扫描小窗（scanWin / scanning.html）已移除 —— 扫描全程后台，不再需要独立的进度窗口
+//（用户 2026-09-28 定案：预检测与扫描均不弹前台窗，进度写状态栏与运行日志）。
 
 // 按需预热扫描：**只在用户主动唤起主窗口时调用**（托盘点击 / 再次双击图标 / 托盘菜单）。
 // 开机自启（--autostart）是静默常驻托盘形态，用户很可能根本不打开界面 ——
@@ -717,13 +689,8 @@ function warmScanOnDemand(reason) {
         logTiming('唤起检查：扫描缓存有效，无需扫描（' + reason + '，' + _elapsed() + 'ms）');
         return;
       }
-      // 唤起时同样后台扫描、不弹小窗（用户 2026-09-28）
-      const winTimer = setTimeout(() => {
-        logTiming('唤起需要全量扫描（后台进行，不弹小窗）');
-      }, 1200);
+      // 唤起时同样后台扫描（用户 2026-09-28）：不弹小窗、也不推迟窗口显示
       const finish = () => {
-        clearTimeout(winTimer);
-        closeScanWindow();
         _scanWarmBusy = false;
         logTiming('唤起预热扫描完成（' + reason + '，' + _elapsed() + 'ms）');
       };
@@ -2201,10 +2168,8 @@ function createWindow() {
       setImmediate(() => flushAfterWindowLoad('did-finish-load'));
     });
   } catch (e) {}
-  // 普通启动：页面就绪后显示；开机自启（--autostart）保持隐藏，仅托盘常驻
-  // ⚠ 若启动时需要全量扫描（缓存未命中），则**推迟到扫描完成后再显示**：
-  //    否则窗口先出现、内容区长时间空白（列表要等扫描完才有），体感更差。
-  //    扫描期间由独立的扫描小窗承担反馈（见 openScanWindow）。
+  // 普通启动：页面就绪后显示；开机自启（--autostart）保持隐藏，仅托盘常驻。
+  // 扫描（缓存未命中时）全程后台进行，不推迟显示、也不弹扫描小窗（用户 2026-09-28 定案）。
   mainWin.once('ready-to-show', () => {
     logTiming('主窗口 ready-to-show（首帧可显示）');
     // 冷启动定位用：把「回调返回」与 show() 各自夹出来。冷态曾出现 ready-to-show 之后
@@ -2212,7 +2177,8 @@ function createWindow() {
     // 卡点究竟在 show() 之内、还是其后的初始化里。
     setImmediate(() => logTiming('ready-to-show 回调后 setImmediate'));
     if (IS_AUTOSTART) return;
-    if (global.__vlWaitScanToShow) { global.__vlMainReadyToShow = true; return; }
+    // 不再因扫描而推迟显示（用户 2026-09-28）：扫描全程后台进行，窗口首帧就绪即显示，
+    // 列表由后台扫描完成后自动填充。"等扫描完再显示主窗口"正是此前启动冻结感的来源。
     logTiming('即将 show()');
     mainWin.show();
     logTiming('show() 返回');
@@ -2221,18 +2187,6 @@ function createWindow() {
     if (!isQuitting) { e.preventDefault(); handleMainWindowClose(); }
   });
   mainWin.on('closed', () => { mainWin = null; });
-}
-
-// 扫描结束后释放主窗口显示（若启动时因等待扫描而推迟 show）
-function showMainAfterScan() {
-  global.__vlWaitScanToShow = false;
-  try {
-    if (global.__vlMainReadyToShow && mainWin && !mainWin.isDestroyed() && !IS_AUTOSTART) {
-      logTiming('扫描完成：主窗口显示');
-      mainWin.show();
-    }
-  } catch (e) {}
-  global.__vlMainReadyToShow = false;
 }
 
 // 启动阶段计时落日志（app.timing）：冷启动排查的唯一数据来源，避免今后只能靠体感猜
@@ -2358,43 +2312,20 @@ app.whenReady().then(async () => {
   (() => {
     if (IS_AUTOSTART) return;                 // 自启形态静默，不打扰
     if (!getBatchRoot(config)) return;        // 未配置工作路径：无扫描可言
-    // 超过该时长仍未判定完（典型：工作目录所在盘休眠唤醒中），先弹小窗给反馈
-    const DECIDE_WIN_DELAY_MS = 1200;
-    let decided = false;
-    // 扫描判定超时也不再弹小窗（用户 2026-09-28）：扫描全程后台，主窗口照常立即显示、
-    // 界面可交互，进度只写运行日志，避免"弹窗 + 窗口等待"造成的冻结观感。
-    const winTimer = setTimeout(() => {
-      if (decided) return;
-      logTiming('扫描判定超时（后台继续，不再弹小窗）');
-    }, DECIDE_WIN_DELAY_MS);
-    const _t = process.hrtime.bigint();
-    const _ms = () => Math.round(Number(process.hrtime.bigint() - _t) / 1e6);
-    const _diag = () => { try { return api._lastFreshTiming ? JSON.stringify(api._lastFreshTiming) : ''; } catch (e) { return ''; } };
+    // 缓存未命中（首次启动 / 工作目录结构变化）时才预热全量扫描，实测冷态可达 20-30 秒。
+    // 扫描全程后台：主窗口立即显示、界面可交互 —— 不弹小窗、也不推迟显示
+    //（用户 2026-09-28 定案；此前"弹小窗 + 等扫描完才显示主窗口"正是启动冻结感的来源）。
+    // ⚠ 判定必须走**异步版**（isScanCacheFreshAsync）：同步版会在机械盘冷态首次访问时冻结主进程达 117 秒。
     const runWarmScan = () => {
-      // 后台扫描：不弹小窗、不拦主窗口显示（用户 2026-09-28）
-      logTiming('启动需要全量扫描（后台进行，不弹小窗）');
+      logTiming('启动需要全量扫描（后台进行）');
       const _s = process.hrtime.bigint();
-      api.listProjectsAsync().then(() => {
-        const ms = Math.round(Number(process.hrtime.bigint() - _s) / 1e6);
-        logTiming('启动预热扫描完成（耗时 ' + ms + 'ms）');
-        closeScanWindow();
-        showMainAfterScan();
-      }).catch(() => {
-        closeScanWindow();
-        showMainAfterScan();
-      });
+      api.listProjectsAsync()
+        .then(() => { logTiming('启动预热扫描完成（耗时 ' + Math.round(Number(process.hrtime.bigint() - _s) / 1e6) + 'ms）'); })
+        .catch(() => {});
     };
-    api.isScanCacheFreshAsync().then((fresh) => {
-      decided = true;
-      clearTimeout(winTimer);
-      logTiming('启动缓存判定完成（' + _ms() + 'ms，fresh=' + fresh + '，分解 ' + _diag() + '）');
-      if (fresh) { closeScanWindow(); showMainAfterScan(); return; }   // 缓存有效：连小窗都不必出现
-      runWarmScan();
-    }).catch(() => {
-      decided = true;
-      clearTimeout(winTimer);
-      runWarmScan();   // 判定异常按「需要扫描」处理，保证主窗口最终一定会显示
-    });
+    api.isScanCacheFreshAsync()
+      .then((fresh) => { if (!fresh) runWarmScan(); })
+      .catch(() => { runWarmScan(); });   // 判定异常按「需要扫描」处理
   })();
   // 开机自启（--autostart）：进程静默常驻托盘，窗口保持隐藏
   runAfterWindowLoad(() => {

@@ -53,6 +53,14 @@
   <!-- 工作路径扫描时的载入遮罩 -->
   <!-- 前台遮罩 busyOverlay 已移除：扫描/检测类等待改走底部状态栏，
        界面保持可交互；预检测进度由状态栏右侧的 probe-mini 承担 -->
+  <!-- 模式切换（批量 ↔ 遮罩叠加）的中间过渡：两种模式的中栏 / 侧栏结构完全不同，
+       切换必然整片重建；重建在遮罩之下进行，用户看到的是一次干净的切换而非中间态 -->
+  <div id="modeMask" class="mode-mask" style="display:none">
+    <div class="mode-mask__box">
+      <div class="busy-spinner"></div>
+      <span class="mode-mask__text" id="modeMaskText">正在切换…</span>
+    </div>
+  </div>
   <!-- 设置面板：改为在主窗口内以 iframe 内嵌设置页（原独立窗口已取消）——
        同源、共用 preload（主窗口已开 nodeIntegrationInSubFrames），打开即显示、关闭仅隐藏，
        避免独立窗口每次重建都重新加载整套皮肤资源（64KB CSS + 1.7MB 图片） -->

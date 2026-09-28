@@ -27,51 +27,6 @@
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
-  // 只在内容真正变化时才重写容器。切换配置/项目时大部分区域的结构并未改变（往往只变高亮、
-  // 徽章文案），整片 innerHTML 重写会让浏览器把旧节点全部销毁再建一遍 ——
-  // 表现为肉眼可见的中间态（列表闪一下），也会连带清掉皮肤行为层注入的装饰元素。
-  // 做法：以最后一次写入的 html 作为指纹，相同则完全不动 DOM。
-  function setHtmlIfChanged(el, html, animate) {
-    if (!el) return false;
-    // 哨兵校验：外部整片重写容器（模式切换等）时容器元素本身不变，仅比对 html 指纹察觉不到，
-    // 会误判「内容未变」而跳过重建 → 配置区空白。故同时校验上次写入的首个子节点是否仍在。
-    var intact = !!el.__vlFirst && el.__vlFirst.parentNode === el;
-    if (el.__vlLastHtml === html && intact) {
-      // 内容未变：不重建 DOM（复用）。但 animate 表示"这是用户主动切换"—— 切换需要视觉反馈，
-      // 若挂靠「内容是否变化」判定，复用生效时反而播不出过渡，故此时同样要播。
-      if (animate) playSwap(el);
-      return false;
-    }
-    el.__vlLastHtml = html;
-    el.innerHTML = html;
-    el.__vlFirst = el.firstElementChild;
-    // 首次渲染（尚无指纹）与静默场景不播，避免启动闪烁
-    if (animate) playSwap(el);
-    return true;
-  }
-  // 外部逻辑可能绕过 setHtmlIfChanged 直接改写容器（模式切换、清空视图等），
-  // 此时须丢弃指纹，避免下一次因"内容相同"而误跳过重建。
-  function resetHtmlCache(el) {
-    if (el) { el.__vlLastHtml = undefined; el.__vlFirst = null; }
-  }
-  // 模式切换（进入/退出遮罩）时统一丢弃指纹：遮罩模块整片重写这些容器而不走 setHtmlIfChanged，
-  // 残留指纹会让切回批量时误判「内容未变」而跳过重建 —— 表现为中间配置区空白；
-  // 空白又使 configSnapshot 读到空值，进一步误判配置已修改（切配置时弹「未保存」）。
-  var SWAP_CACHE_IDS = ['sidebarTree', 'centerTop', 'dateBranches', 'centerBottom', 'configBar', 'rightPanelContent'];
-  function resetSwapCaches() {
-    SWAP_CACHE_IDS.forEach(function (id) { resetHtmlCache(document.getElementById(id)); });
-  }
-  // 模式切换（批量 ↔ 遮罩）是用户主动发起的大变化，过渡必须无条件触发 ——
-  // 不能挂靠 setHtmlIfChanged 的「内容是否变化」判定：复用生效时内容可能完全一致而不播。
-  function playSwap(el) {
-    if (!el) return;
-    el.classList.remove('vl-swap');
-    void el.offsetWidth; // 强制回流以重启动画
-    el.classList.add('vl-swap');
-  }
-  function playSwapNow() {
-    SWAP_CACHE_IDS.forEach(function (id) { playSwap(document.getElementById(id)); });
-  }
   // 路径 → 文件名（不含扩展名）；用于水印栏简洁展示
   function baseNameNoExt(p) {
     var s = String(p || '').replace(/[\\/]+$/, '');
@@ -621,7 +576,7 @@
       }
       html += '</div>';
     });
-    setHtmlIfChanged(tree, html, true);
+    tree.innerHTML = html;
     buildAzIndex(forceAz);
     syncAzBar();
   }
@@ -892,7 +847,7 @@
     }
     if (state.mode === 'log') { buildLogDateBranches(c, silent); return; }
     if (!state.activeTxt || state.versions.length === 0) {
-      setHtmlIfChanged(c, '<div class="center-empty" style="padding:var(--spacer-16)">' + icon('arrow-left', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">从左侧选择一个 TXT</span></div>');
+      c.innerHTML = '<div class="center-empty" style="padding:var(--spacer-16)">' + icon('arrow-left', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">从左侧选择一个 TXT</span></div>';
       updateModeToggle();
       return;
     }
@@ -902,20 +857,20 @@
       html += '<button class="date-branch-btn' + (active ? ' date-branch-btn--active' : '') + (silent ? ' date-branch-btn--static' : '') + '" data-label="' + escapeHtml(v.label) + '" title="' + escapeHtml(v.path) + '">' + escapeHtml(v.label);
       html += '</button>';
     });
-    setHtmlIfChanged(c, html, true);
+    c.innerHTML = html;
     updateModeToggle();
   }
   // 日志模式下：顶部展示该配置的日志文件日期分支（每日期一个），按钮带 data-date 与 data-file
   function buildLogDateBranches(c, silent) {
-    if (!state.activeTxt || !state.activeVersion) { setHtmlIfChanged(c, ''); return; }
-    setHtmlIfChanged(c, '<span class="date-branch-btn">…</span>');
+    if (!state.activeTxt || !state.activeVersion) { c.innerHTML = ''; return; }
+    c.innerHTML = '<span class="date-branch-btn">…</span>';
     var token = state.activeProject + '\u0000' + state.activeTxt;
     state._logBranchToken = token;
     call('list_log_files', state.activeVersion.path, state.activeTxt).then(function (files) {
       if (state._logBranchToken !== token) return;
       files = files || [];
       state.logFiles = files;
-      if (!files.length) { state.activeLogDate = null; state.activeLogPath = null; setHtmlIfChanged(c, '<span class="date-branch-btn">无日志</span>'); updateModeToggle(); return; }
+      if (!files.length) { state.activeLogDate = null; state.activeLogPath = null; c.innerHTML = '<span class="date-branch-btn">无日志</span>'; updateModeToggle(); return; }
       // 定位当前选中分支：从配置切入时按配置文件版本定位当日对应日志；否则按残留定位
       var fromConfig = state._fromConfig; state._fromConfig = false;
       var active = fromConfig ? logTargetForVersion(files) : null;
@@ -929,7 +884,7 @@
       }
       // 无配置可定位：默认选中最新一天的日志（后端已按日期降序，首个即最新 —— 复刻与普通项目一致）
       if (!active) active = files.length ? files[0] : null;
-      if (!active) { state.activeLogDate = null; state.activeLogPath = null; setHtmlIfChanged(c, '<span class="date-branch-btn">无日志</span>'); updateModeToggle(); return; }
+      if (!active) { state.activeLogDate = null; state.activeLogPath = null; c.innerHTML = '<span class="date-branch-btn">无日志</span>'; updateModeToggle(); return; }
       var had = state.activeLogPath === active.path;
       state.activeLogDate = active.date;
       state.activeLogPath = active.path;
@@ -939,23 +894,23 @@
         var txt = f.label || f.date;
         html += '<button class="date-branch-btn' + (isActive ? ' date-branch-btn--active' : '') + (silent ? ' date-branch-btn--static' : '') + '" data-date="' + escapeHtml(f.date) + '" data-file="' + escapeHtml(f.path) + '" title="' + escapeHtml(f.path) + '">' + escapeHtml(txt) + '</button>';
       });
-      setHtmlIfChanged(c, html, true);
+      c.innerHTML = html;
       updateModeToggle();
       if (!had && state.mode === 'log' && state.activeTxt) buildCenterBottom();
-    }).catch(function () { setHtmlIfChanged(c, '<span class="date-branch-btn">无日志</span>'); updateModeToggle(); });
+    }).catch(function () { c.innerHTML = '<span class="date-branch-btn">无日志</span>'; updateModeToggle(); });
   }
   function buildCenterBottom(silent) {
     if (maskOn()) return; // 遮罩模式：批量中心内容渲染拒绝
     var cb = $('centerBottom');
     if (!cb) return; // 容器缺失时安全忽略（遮罩/恢复切换的窗口期）
     if (!state.activeTxt || !state.activeVersion) {
-      setHtmlIfChanged(cb, '<div class="center-empty">' + icon('file-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">请选择一个日期分支查看内容</span></div>');
+      cb.innerHTML = '<div class="center-empty">' + icon('file-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">请选择一个日期分支查看内容</span></div>';
       return;
     }
     if (state.mode === 'log') { buildLogConfigBar(); buildLogList(); return; }
     var container = cb;
     var data = state.configData;
-    if (!data) { setHtmlIfChanged(container, '<div class="center-empty">' + icon('file-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">正在加载配置…</span></div>'); return; }
+    if (!data) { container.innerHTML = '<div class="center-empty">' + icon('file-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">正在加载配置…</span></div>'; return; }
     var folders = data.folders || [];
     var excludes = data.excludes || [];
     var watermark = data.watermark || '';
@@ -999,7 +954,7 @@
     html += '<div class="config-editor__col-header">配置名</div>';
     html += '<div class="config-editor__wm-field"><input type="text" class="config-bottombar__input config-bottombar__input--name" id="inputConfigName" value="' + escapeHtml((data && data.name) || '') + '"></div></div>';
     html += '</div></div>';
-    setHtmlIfChanged(container, html, true);
+    container.innerHTML = html;
     buildConfigBar(); bindEditorEvents(); bindResizers(container); bindModifiedWatchers(container); runPrecheck();
     // 仅真正加载配置时（_configOrig 为 null）建立修改基线；局部重建（如水印变更）不重置，保证各部分修改相互独立
     if (state._configOrig === null || state._configOrig === undefined) {
@@ -1031,7 +986,7 @@
     html += '<button class="config-btn config-btn--save" id="btnSaveConfig">' + icon('save', 14) + '覆盖当前配置</button>';
     html += '<button class="config-btn config-btn--save-today" id="btnSaveToday">' + icon('calendar-plus', 14) + '保存为当日配置</button>';
     html += '<button class="config-btn config-btn--run" id="btnRunScript">' + icon('play', 14) + '开始制作</button></div>';
-    setHtmlIfChanged(bar, html, true);
+    bar.innerHTML = html;
     // 注意：不可直接传 saveConfig —— 它首参是 noConfirm，直接绑定会让 MouseEvent 顶替该参数（恒真）而跳过确认气泡
     $('btnSaveConfig').addEventListener('click', function () { saveConfig(); });
     $('btnSaveToday').addEventListener('click', saveConfigToday);
@@ -1181,7 +1136,7 @@
     html += '<button class="config-btn config-btn--replica-full" id="btnBatchReplica1" title="对所选成片执行完全复刻">' + icon('repeat', 14) + '完全复刻</button>';
     html += '<button class="config-btn config-btn--replica-dedup" id="btnBatchReplica2" title="对所选成片执行去重复刻">' + icon('copy', 14) + '去重复刻</button>';
     html += '</div>';
-    setHtmlIfChanged(bar, html, true);
+    bar.innerHTML = html;
     $('btnLogSelect').addEventListener('change', toggleLogSelectMode);
     var all = $('chkLogAll');
     if (all) all.addEventListener('change', function () { setLogAll(this.checked); });
@@ -1380,9 +1335,6 @@
     }
     var dragged = null;
     var container = $('centerBottom');
-    // 配置区未渲染（模式切换窗口期 / 内容被外部重写而复用判定跳过重建）时，
-    // 容器或路径列表可能不存在 —— 直接返回，避免 null.addEventListener 中断整个配置读取流程
-    if (!container || !pathList) return;
     function onContainerClick(e) {
       var t = e.target.closest('button, .config-path-row__open, .config-path-row__remove, .config-watermark__path');
       if (!t) return;
@@ -1861,7 +1813,7 @@
   }
   function buildLogList() {
     var container = $('centerBottom');
-    setHtmlIfChanged(container, '<div class="center-empty">' + icon('scroll-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">正在加载日志…</span></div>');
+    container.innerHTML = '<div class="center-empty">' + icon('scroll-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">正在加载日志…</span></div>';
     // 按当前选中的日志分支（精确到日志文件）定位查询目录，切换分支后取对应日志成片
     var probeLog = null;
     if (state.activeProject === REPLICA_PROJECT) {
@@ -1884,7 +1836,7 @@
       var q = state.logSearchQuery.trim().toLowerCase();
       if (q) entries = entries.filter(function (en) { return (en.video || '').toLowerCase().indexOf(q) >= 0; });
       if (entries.length === 0) {
-        setHtmlIfChanged(container, '<div class="center-empty">' + icon('scroll-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">' + (q ? '未找到匹配 "' + escapeHtml(state.logSearchQuery) + '" 的成片' : '暂无日志数据') + '</span></div>');
+        container.innerHTML = '<div class="center-empty">' + icon('scroll-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">' + (q ? '未找到匹配 "' + escapeHtml(state.logSearchQuery) + '" 的成片' : '暂无日志数据') + '</span></div>';
         return;
       }
       var sel = !!state.selectMode;
@@ -1907,7 +1859,7 @@
         html += '</div></div>';
       });
       html += '</div>';
-      setHtmlIfChanged(container, html, true);
+      container.innerHTML = html;
       bindLogListScroll(container);
       // 搜索跳转定位：列表可能被异步再次渲染覆盖展开，窗口期内反复维持展开（幂等），窗口结束才消费焦点
       (function retryFocus(cont, tries) {
@@ -2826,7 +2778,7 @@
     state.mode = 'filelist';
     state._configOrig = null; state._configOrigSnapshot = null;
     state._logBranchToken = null;
-    var bar = $('configBar'); if (bar) setHtmlIfChanged(bar, '');
+    var bar = $('configBar'); if (bar) bar.innerHTML = '';
     var act = $('sidebarTree').querySelector('.tree-txt-item--active');
     if (act) act.classList.remove('tree-txt-item--active');
     // 收回项目/品牌名片视为退出日志模式：进入日志时若折叠，此处恢复折叠
@@ -4042,35 +3994,56 @@
       if (cp && stage.parentNode !== cp) cp.prepend(stage);
     }
   }
+  // 模式切换（批量 ↔ 遮罩叠加）的中间过渡：两种模式的中栏 / 侧栏结构完全不同，切换必然整片重建，
+  // 让重建发生在遮罩之下，用户看到的是一次干净的切换，而不是重建过程的中间态。
+  var modeMaskShownAt = 0;
+  function showModeMask(text) {
+    var el = $('modeMask'); if (!el) return;
+    var t = $('modeMaskText'); if (t) t.textContent = text || '正在切换…';
+    el.style.display = 'flex';
+    modeMaskShownAt = Date.now();
+  }
+  // 切换极快时遮罩一闪而过反而晃眼，故至少显示 180ms
+  function hideModeMask() {
+    var el = $('modeMask'); if (!el) return;
+    var wait = Math.max(0, 180 - (Date.now() - modeMaskShownAt));
+    setTimeout(function () { el.style.display = 'none'; }, wait);
+  }
+  // 遮罩必须先上屏：重建是同步的，同一帧内 show → 重建 → hide 浏览器不会绘制遮罩
+  function afterModeMask(fn) {
+    requestAnimationFrame(function () { requestAnimationFrame(fn); });
+  }
   function enterMaskMode() {
-    resetSwapCaches();
-    maskState.on = true; maskResetSession(); maskState.view = 'config';
-    document.body.classList.add('mask-mode');
-    updateWinModeLabel(); // 标题栏模式按钮 → 遮罩叠加
-    // 遮罩模式不使用右侧预览栏：记录进入前展开状态，进入即强制折叠
-    maskState._sideBefore = !document.body.hasAttribute('data-preview-collapsed');
-    document.body.setAttribute('data-preview-collapsed', '');
-    state.previewCollapsed = true;
-    var cc = $('previewCollapseRound'); if (cc) cc.style.display = 'none';
-    var az = $('azIndexBar'); if (az) az.style.display = 'none';
-    buildMaskSidebar();
-    buildMaskCenterHeader();
-    buildMaskCenter();
-    buildMaskConfigBar();
-    refreshMaskProjects();
-    // 读取设置里的固定水印与透明度作为默认（界面不提供临时更换；读取后同步刷新底栏提示）
-    call('get_settings').then(function (cfg) {
-      if (cfg && cfg.mask) {
-        if (cfg.mask.watermark_mov) maskState.watermark = cfg.mask.watermark_mov;
-        maskState.watermarkAlpha = (cfg.mask.watermark_alpha != null && String(cfg.mask.watermark_alpha).trim() !== '') ? String(cfg.mask.watermark_alpha).trim() : '';
-        if (maskState.on) {
-          if (maskState.view === 'config') buildMaskCenter();
-          buildMaskConfigBar(); // 刷新「未选水印」等提示
+    showModeMask('正在进入遮罩叠加模式…');
+    afterModeMask(function () {
+      maskState.on = true; maskResetSession(); maskState.view = 'config';
+      document.body.classList.add('mask-mode');
+      updateWinModeLabel(); // 标题栏模式按钮 → 遮罩叠加
+      // 遮罩模式不使用右侧预览栏：记录进入前展开状态，进入即强制折叠
+      maskState._sideBefore = !document.body.hasAttribute('data-preview-collapsed');
+      document.body.setAttribute('data-preview-collapsed', '');
+      state.previewCollapsed = true;
+      var cc = $('previewCollapseRound'); if (cc) cc.style.display = 'none';
+      var az = $('azIndexBar'); if (az) az.style.display = 'none';
+      buildMaskSidebar();
+      buildMaskCenterHeader();
+      buildMaskCenter();
+      buildMaskConfigBar();
+      refreshMaskProjects();
+      // 读取设置里的固定水印与透明度作为默认（界面不提供临时更换；读取后同步刷新底栏提示）
+      call('get_settings').then(function (cfg) {
+        if (cfg && cfg.mask) {
+          if (cfg.mask.watermark_mov) maskState.watermark = cfg.mask.watermark_mov;
+          maskState.watermarkAlpha = (cfg.mask.watermark_alpha != null && String(cfg.mask.watermark_alpha).trim() !== '') ? String(cfg.mask.watermark_alpha).trim() : '';
+          if (maskState.on) {
+            if (maskState.view === 'config') buildMaskCenter();
+            buildMaskConfigBar(); // 刷新「未选水印」等提示
+          }
         }
-      }
-    }).catch(function () {});
-    setStatus('遮罩叠加模式：左侧选项目，中间配置素材/查看日志，底部设模式与输出后开始制作');
-    playSwapNow();
+      }).catch(function () {});
+      setStatus('遮罩叠加模式：左侧选项目，中间配置素材/查看日志，底部设模式与输出后开始制作');
+      hideModeMask();
+    });
   }
   // 中间区顶部：标题 + 配置/日志模式切换（遮罩模式隐藏全局成片搜索栏，退出时恢复批量）
   function buildMaskCenterHeader() {
@@ -4079,14 +4052,14 @@
     if (gs) gs.style.display = 'none'; // 遮罩模式不使用全局成片搜索栏
     var top = $('centerTop');
     if (top) {
-      setHtmlIfChanged(top, '<div class="center-top__header">' +
+      top.innerHTML = '<div class="center-top__header">' +
         '<span class="center-top__title">遮罩叠加</span>' +
         '<div class="center-top__toggles">' +
         '<button class="mode-toggle' + (maskState.view === 'config' ? ' mode-toggle--active' : '') + '" data-maskview="config" id="maskViewConfig">' + icon('list', 12) + '配置</button>' +
         '<button class="mode-toggle' + (maskState.view === 'log' ? ' mode-toggle--active' : '') + '" data-maskview="log" id="maskViewLog">' + icon('scroll-text', 12) + '日志</button>' +
         '</div></div>' +
         '<div class="center-top__dates" id="maskDateBranches"></div>' +
-        '<div class="center-top__ornament-host" id="maskOrnamentHost" aria-hidden="true"></div>');
+        '<div class="center-top__ornament-host" id="maskOrnamentHost" aria-hidden="true"></div>';
       // 日期分支栏仅在日志视图显示（配置视图不占位）
       var mb = $('maskDateBranches');
       if (mb) mb.style.display = (maskState.view === 'log') ? '' : 'none';
@@ -4122,20 +4095,20 @@
   function restoreBatchCenterTop() {
     var top = $('centerTop');
     if (!top) return;
-    setHtmlIfChanged(top, '<div class="center-top__header">' +
+    top.innerHTML = '<div class="center-top__header">' +
       '<span class="center-top__title">日期分支</span>' +
       '<div class="center-top__toggles">' +
       '<button class="mode-toggle mode-toggle--active" data-mode="filelist" id="modeFilelist">' + icon('list', 12) + '配置列表</button>' +
       '<button class="mode-toggle" data-mode="log" id="modeLog">' + icon('scroll-text', 12) + '日志</button>' +
       '</div></div>' +
-      '<div class="center-top__dates" id="dateBranches"></div>');
+      '<div class="center-top__dates" id="dateBranches"></div>';
     // 恢复右侧预览结构（遮罩模式重写过 rightPanelContent，行号/代码容器需重建）
     var rc = $('rightPanelContent');
     if (rc && !$('rightLineNumbers')) {
-      setHtmlIfChanged(rc, '<div class="right-panel__line-numbers" id="rightLineNumbers"></div><div class="right-panel__code" id="rightCode"></div>');
+      rc.innerHTML = '<div class="right-panel__line-numbers" id="rightLineNumbers"></div><div class="right-panel__code" id="rightCode"></div>';
     }
     // 底栏留给批量流程填充：退出时清空遮罩残留
-    var bar = $('configBar'); if (bar) setHtmlIfChanged(bar, '');
+    var bar = $('configBar'); if (bar) bar.innerHTML = '';
     var mf2 = $('modeFilelist'), ml2 = $('modeLog');
     if (mf2) mf2.addEventListener('click', function () {
       state.mode = 'filelist'; mf2.classList.add('mode-toggle--active'); if (ml2) ml2.classList.remove('mode-toggle--active');
@@ -4159,34 +4132,36 @@
     buildMaskRight(true);
   }
   function exitMaskMode() {
-    resetSwapCaches();
-    maskState.on = false; maskResetSession();
-    document.body.classList.remove('mask-mode');
-    updateWinModeLabel(); // 标题栏模式按钮 → 配置管理
-    // 还原进入遮罩前右栏的展开状态（遮罩模式强制折叠，退出恢复）
-    if (maskState._sideBefore) {
-      var rp0 = $('rightPanel');
-      document.body.removeAttribute('data-preview-collapsed');
-      state.previewCollapsed = false;
-      if (rp0) { rp0.style.display = ''; rp0.style.width = Math.max(240, state.previewLastWidth || 320) + 'px'; }
-    }
-    maskState._sideBefore = false;
-    var cc = $('previewCollapseRound'); if (cc) cc.style.display = '';
-    var gs0 = $('centerGlobalSearch'); if (gs0) gs0.style.display = ''; // 恢复批量全局成片搜索栏
-    restoreBatchCenterTop();
-    refreshData(true, '正在恢复视图…', function () {
-      var az = $('azIndexBar'); if (az) az.style.display = '';
-      var si = $('logSearchInput'); if (si) si.value = '';
-      bindBatchLogSearch(true); // 搜索框曾被遮罩 clone：强制恢复批量成片搜索监听
-      // 对称还原：批量模式原本未选中配置时（refreshData 不会自动重绘中心区），
-      // 需显式重建批量空视图，避免残留遮罩的中间内容
-      if (!state.activeTxt) {
-        buildDateBranches();
-        buildCenterBottom();
-        buildRightPanel();
+    showModeMask('正在返回配置管理模式…');
+    afterModeMask(function () {
+      maskState.on = false; maskResetSession();
+      document.body.classList.remove('mask-mode');
+      updateWinModeLabel(); // 标题栏模式按钮 → 配置管理
+      // 还原进入遮罩前右栏的展开状态（遮罩模式强制折叠，退出恢复）
+      if (maskState._sideBefore) {
+        var rp0 = $('rightPanel');
+        document.body.removeAttribute('data-preview-collapsed');
+        state.previewCollapsed = false;
+        if (rp0) { rp0.style.display = ''; rp0.style.width = Math.max(240, state.previewLastWidth || 320) + 'px'; }
       }
-      setStatus('已退出遮罩叠加模式');
-      playSwapNow();
+      maskState._sideBefore = false;
+      var cc = $('previewCollapseRound'); if (cc) cc.style.display = '';
+      var gs0 = $('centerGlobalSearch'); if (gs0) gs0.style.display = ''; // 恢复批量全局成片搜索栏
+      restoreBatchCenterTop();
+      refreshData(true, '正在恢复视图…', function () {
+        var az = $('azIndexBar'); if (az) az.style.display = '';
+        var si = $('logSearchInput'); if (si) si.value = '';
+        bindBatchLogSearch(true); // 搜索框曾被遮罩 clone：强制恢复批量成片搜索监听
+        // 对称还原：批量模式原本未选中配置时（refreshData 不会自动重绘中心区），
+        // 需显式重建批量空视图，避免残留遮罩的中间内容
+        if (!state.activeTxt) {
+          buildDateBranches();
+          buildCenterBottom();
+          buildRightPanel();
+        }
+        setStatus('已退出遮罩叠加模式');
+        hideModeMask();
+      });
     });
   }
   function refreshMaskProjects() {
@@ -4210,7 +4185,7 @@
         '<span class="mask-proj-item__name">' + escapeHtml(p.name) + '</span>' +
         '<span class="mask-proj-item__badge">' + (p.themeCount != null ? p.themeCount : (p.themes ? p.themes.length : 0)) + '种遮罩</span></div>';
     });
-    setHtmlIfChanged(tree, html, true);
+    tree.innerHTML = html;
     tree.querySelectorAll('.mask-proj-item').forEach(function (el) {
       el.addEventListener('click', function () { selectMaskProject(el.getAttribute('data-maskproj')); });
       // 项目行右键：打开项目文件夹 / 项目设置（样式参考批量模式）
@@ -5056,7 +5031,7 @@
     if (!c) return;
     var branches = maskLogBranchList(allLogs);
     if (!(allLogs || []).length) {
-      setHtmlIfChanged(c, '<span class="date-branch-btn">无日志</span>');
+      c.innerHTML = '<span class="date-branch-btn">无日志</span>';
       maskState.maskLogBranch = '';
       maskState._branchSetSig = '';
       return;
@@ -5074,7 +5049,7 @@
       var active = b.path === maskState.maskLogBranch;
       html += '<button class="date-branch-btn' + (active ? ' date-branch-btn--active' : '') + (silent ? ' date-branch-btn--static' : '') + '" data-masklog="' + escapeHtml(b.path) + '" title="' + escapeHtml(b.path) + '">' + escapeHtml(b.label) + '</button>';
     });
-    setHtmlIfChanged(c, html, true);
+    c.innerHTML = html;
   }
   // 迁移某日期分支（日志文件）下全部成片到同一新文件夹（逐个迁移，同步更新日志 @out）；
   // 由日期分支按钮右键菜单触发，每次按最新日志数据执行
@@ -5261,7 +5236,7 @@
       '<option value="2"' + (maskState.mode === 2 ? ' selected' : '') + '>仅水印</option>' +
       '<option value="3"' + (maskState.mode === 3 ? ' selected' : '') + '>仅遮罩</option></select>' +
       '<button type="button" class="config-btn config-btn--run" id="btnMaskStart">' + icon('play', 14) + '开始制作</button></div>';
-    setHtmlIfChanged(bar, html, true);
+    bar.innerHTML = html;
     $('maskModeSel').addEventListener('change', function () {
       maskState.mode = parseInt(this.value, 10) || 1;
       buildMaskCenter(); buildMaskConfigBar(); maskPersist();

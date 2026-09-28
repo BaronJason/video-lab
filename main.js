@@ -865,6 +865,16 @@ async function showTrayMenu() {
   if (x < bd.x) x = bd.x;
   if (y < bd.y) y = bd.y;
   trayMenuWin.setPosition(Math.round(x), Math.round(y));
+  // ⚠ 关键：上面刚注入皮肤变量、显隐「检查更新」项、setContentSize 都改动了 DOM 与窗口尺寸 ——
+  //   ready-to-show 给的"首帧"当场作废，此刻直接 show 会先显示改动前的那一帧再重排（表现为闪烁）。
+  //   耗时不同就会「偶尔正常」（注入快时改动赶在 show 之前），故此处等两帧重绘完成再显示。
+  try {
+    await Promise.race([
+      trayMenuWin.webContents.executeJavaScript(
+        "new Promise(function(r){requestAnimationFrame(function(){requestAnimationFrame(function(){r(true);});});})"),
+      new Promise(function (r) { setTimeout(r, 120); }),   // 兜底：隐藏窗口的 rAF 可能被节流不触发
+    ]);
+  } catch (e) {}
   trayMenuWin.show();
   trayMenuWin.focus();
 }

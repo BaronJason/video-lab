@@ -925,7 +925,7 @@ async function run(ctx, env = process.env) {
     }
     // ★ 通知主进程「配置的归属位置已改变」：主进程据此立刻失效配置树缓存并广播前端。
     //   这一步只可能发生在引擎进程内（主进程 spawn 时文件还在原处），所以必须由引擎主动上报；
-    //   否则界面会继续显示已失效的旧条目（用户报障 2026-09-27：开始任务后列表仍是「0927*」外部配置，
+    //   否则界面会继续显示已失效的旧条目（开始任务后列表仍是「0927*」外部配置，
     //   点进去是空的，要等低频轮询或手动刷新才恢复）。
     logger.info('配置正本就位：' + path.basename(txtDest));
 
@@ -965,7 +965,7 @@ async function run(ctx, env = process.env) {
 
     const dPrefix = datePrefix(taskDate(cfg.submitTs));
     const parentFolder = path.basename(baseDir);
-    // ★ 分级降级（用户定案 2026-09-24）：先按用户设置跑足重试轮数（100 轮足够），
+    // ★ 分级降级：先按用户设置跑足重试轮数（100 轮足够），
     //   仍凑不出组合再逐级加大加速倍率；倍率设硬顶，避免画面加速过狠。
     //   红线：输出时长始终以 maxTotalDuration 封顶（平台规则，超出无法过审）——
     //   加大倍率只放宽「允许的组合时长」，不改输出上限。
@@ -1153,7 +1153,7 @@ async function run(ctx, env = process.env) {
         const userMsg = failReason || `重试 ${rounds} 轮仍无法找到满足时长的组合（时长上限 ${cfg.maxTotalDuration} 秒）`;
         // 面向排查的完整诊断：只进诊断通道（后端日志），不出现在任务窗口
         let diagText = userMsg;
-        // ★ 可操作诊断（用户定案 2026-09-24）：只给「用尽」这类结论时，人不知道补素材还是调参数、
+        // ★ 可操作诊断：只给「用尽」这类结论时，人不知道补素材还是调参数、
         //   程序也无从选择修复方式。这里把「能凑出多少 / 缺口多少 / 哪些源耗尽 / 可调什么」一并写进
         //   错误详情 —— 人照着提示就能动手，也为后续「分级自动修复」留下决策数据。
         try {
@@ -1219,14 +1219,14 @@ async function run(ctx, env = process.env) {
       // 整串再合并连续 `--`，消除 txtNameSuffix 为空时出现的 `--序号`
       let finalOutName = `${nameItems.join('-')}-${suffixStr}${outIndex}.mp4`.replace(/-{2,}/g, '-');
       let finalOut = path.join(outDir, finalOutName);
-      // ★ 先写临时名，编码成功后再原子改名（用户方案 2026-09-27）：
+      // ★ 先写临时名，编码成功后再原子改名：
       //   此前 ffmpeg 直接写正式名，一旦「编码到一半意外停止」（进程被杀 / 断电 / 编码器崩溃），
       //   磁盘上会留下**正式名的半截文件** —— 后果有两层：
       //     ① 用户会把它当成品拿走，但根本放不出来；
       //     ② 续跑按产物反推「还缺哪些序号」时会把它算作已完成 → 该序号被永久跳过且不报错。
       //   改为临时名后：**正式名 ⇔ 完整可播放产物**，反推逻辑不必再猜。
       // 临时名 = 正式名去掉扩展后接 `.tmp.mp4`（末尾仍是 .mp4 供 ffmpeg 识别容器；
-      // 此前直接追加会得到 `xxx.mp4.tmp.mp4`，扩展名重复、名字过长 —— 用户 2026-09-27 指出）
+      // 此前直接追加会得到 `xxx.mp4.tmp.mp4`，扩展名重复、名字过长 ——指出）
       const tmpOut = finalOut.replace(/\.mp4$/i, '') + '.tmp.mp4';
 
       // ── 输入文件存在性 ──
@@ -1297,7 +1297,7 @@ async function run(ctx, env = process.env) {
       }
       // ★ 编码成功 → 原子改名到正式名；改名前不得有任何"正式名"产物出现
       // 带重试：Windows 上杀软 / 索引服务会瞬时占用刚写完的大文件，单次失败即把成片误判为失败
-      //（用户 2026-09-27：合成完成后要确保改名能完成，不被其他软件影响）
+      //（合成完成后要确保改名能完成，不被其他软件影响）
       const rnErr = await renameWithRetry(tmpOut, finalOut);
       if (rnErr) {
         logger.error(`第 ${outIndex} 个成片`, '产物改名失败：' + ((rnErr && rnErr.message) || rnErr));

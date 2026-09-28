@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS meta (
 
 -- 通用校验缓存：任何「需要访问磁盘才能确认的事实」都可以把结论存这里，
 -- 启动只读本表（一次查询、零文件 IO），校验交给「用到时」或空闲批处理。
--- 这是把冷启动从「每次重算」改成「复用 + 懒校验」的关键（用户指示 2026-09-26）。
+-- 这是把冷启动从「每次重算」改成「复用 + 懒校验」的关键。
 CREATE TABLE IF NOT EXISTS verify_cache (
   key         TEXT PRIMARY KEY,          -- 语义键：'hasoutput:<taskId>' / 'env:ffmpeg' / 'path:<abs>'
   fp          TEXT NOT NULL DEFAULT '',  -- 指纹：外部依赖变了（如文件 size/mtime）才失效
@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS verify_cache (
   ttl_ms      INTEGER NOT NULL DEFAULT 0 -- 有效期；过期后仍可读（标 stale），进入待刷新队列
 );
 
--- 配置 TXT **内容**缓存（用户指示 2026-09-26：「将需要 io 的部分全部缓存化，txt 路径以及里面的全部内容」）。
+-- 配置 TXT **内容**缓存（「将需要 io 的部分全部缓存化，txt 路径以及里面的全部内容」）。
 -- 打开配置 / 版本预览不再读磁盘：整份原文 + 解析结果都在这里；外部改动由空闲队列校验 fp 并自愈。
 CREATE TABLE IF NOT EXISTS txt_content (
   path       TEXT PRIMARY KEY,

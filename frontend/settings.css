@@ -338,14 +338,14 @@ body {
 .settings-view::-webkit-scrollbar-thumb { background: var(--border-neutral-l2); border-radius: 4px; }
 
 /* toast 位置：共享的 styles.css 里为避免遮挡主窗口右下角三按钮设了 bottom:84px；
-   设置页没有底部操作栏（用户 2026-09-28 已移除），这里覆盖到底部常规位置 */
+   设置页没有底部操作栏，这里覆盖到底部常规位置 */
 .toast-host { bottom: 16px; }
 
 /* ─── 更新 / 配置保存位置（勾选与单选） ─── */
 .opt-row { display: flex; align-items: center; padding: 4px 0; gap: 8px; }
 /* 数值输入框（如复刻「重复度下限/上限」）需显式定宽：
    原先它被 JS 包的 .field-row 限制宽度，取消包裹层后 .form-input 的 width:100% 会撑满整行、
-   把右侧「默认启用」复选框挤到换行（用户报障 2026-09-28）。 */
+   把右侧「默认启用」复选框挤到换行。 */
 .opt-num-input { width: 88px; flex-shrink: 0; }
 /* 并排单选组（更新方式 / 仓库选择）：加大行内间距与行距，避免拥挤 */
 .opt-row--spaced { padding: 8px 0; gap: 24px; }

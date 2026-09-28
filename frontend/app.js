@@ -1031,7 +1031,7 @@
     }
     state.configModified = modified;
     var b1 = $('btnSaveConfig'), b2 = $('btnSaveToday');
-    // ★ 保存类按钮放宽（用户定案 2026-09-22）：保存配置只是写盘（原子写），
+    // ★ 保存类按钮放宽：保存配置只是写盘（原子写），
     //   与预检测、FFmpeg 环境都无关 —— 允许用户在任务运行/排队期间先"暂存配置"备用
     if (b1) { b1.disabled = !modified; setBtnHint(b1, modified ? null : '配置未发生改变'); }
     if (b2) { b2.disabled = false; setBtnHint(b2, null); }
@@ -1095,7 +1095,7 @@
     var invalid = state.precheckInvalid || state.watermarkMissing;
     var run = $('btnRunScript');
     if (run) {
-      // ★ 提交类按钮放宽（用户定案 2026-09-22）：环境缺失仍硬拦（必然失败），
+      // ★ 提交类按钮放宽：环境缺失仍硬拦（必然失败），
       //   预检测不合格 / 水印缺失改为**提交时列清问题并二次确认** —— 允许先排队占位
       run.disabled = _envBad();
       setBtnHint(run, _envBad() ? '运行环境缺失' : ((invalid || state.watermarkMissing) ? '存在问题项，提交时会再次确认' : null));
@@ -1245,7 +1245,7 @@
     var watermark = state.configData ? (state.configData.watermark || '') : '';
     return { folders: folders, excludes: excludes, watermark: watermark };
   }
-  // 预检测：输入防抖后执行；不再弹前台遮罩（用户 2026-09-28），
+  // 预检测：输入防抖后执行；不再弹前台遮罩，
   // 检测进度与结果仍写回每行的预检测徽章，用户随时可看。
   var precheckDebounceTimer = null;
   var precheckOverlayCount = 0;
@@ -2399,7 +2399,7 @@
   function setStatusDone(msg) { var el = $('statusLeft'); if (!el) return; el.classList.add('status-bar__success'); el.textContent = msg; }
 
   // 载入遮罩：工作路径扫描时提示用户
-  // 已取消前台遮罩（用户 2026-09-28）：所有「扫描 / 检测」类等待改为底部状态栏提示，
+  // 已取消前台遮罩：所有「扫描 / 检测」类等待改为底部状态栏提示，
   // 界面保持可交互 —— 原先的遮罩带 backdrop-filter 模糊，是"窗口冻结一会儿"的观感来源。
   function showBusy(text) { setStatus(text || '请稍候…'); }
   function hideBusy() { setStatus(''); }
@@ -2407,7 +2407,7 @@
   function showSettingsDim() { var o = $('settingsDim'); if (o) { hideBusy(); o.style.display = 'block'; } }
   function hideSettingsDim() { var o = $('settingsDim'); if (o) o.style.display = 'none'; }
   // 带进度条的等待窗口：重置预检测全量检测期间使用；提供「缩到后台」入口
-  // 预检测一律后台进行（用户 2026-09-28 定案）：原先会弹前台遮罩且带模糊背景，
+  // 预检测一律后台进行：原先会弹前台遮罩且带模糊背景，
   // 切换窗口时肉眼可见卡顿；而预检测不需要用户做任何选择（原「后台检测」按钮已成冗余），
   // 故不再显示遮罩，直接进入状态栏右下角的 probe-mini 进度显示（内含取消按钮）。
   function showBusyProgress() {
@@ -2554,7 +2554,7 @@
     clip: '重建成片索引', mark: '统计水印归属', done: '检测完成'
   };
   function refreshData(force, busyText, done, skipReflow) {
-    // 扫描 / 检测不再弹前台遮罩（用户 2026-09-28）：该流程不需要用户做任何选择，
+    // 扫描 / 检测不再弹前台遮罩：该流程不需要用户做任何选择，
     // 而遮罩带 backdrop-filter 模糊，会让人感觉窗口"冻结一会儿"。
     // 改为只在底部状态栏显示当前环节，界面其余部分保持可交互。
     var dismissScan = null;
@@ -2788,7 +2788,7 @@
   }
   function bindStaticEvents() {
     // 预检测一律后台：只保留状态栏 probe-mini 上的取消按钮
-    //（原遮罩的「后台检测」与「取消预检测」按钮已随遮罩移除 —— 用户 2026-09-28）
+    //（原遮罩的「后台检测」与「取消预检测」按钮已随遮罩移除）
     var probeCancel = $('probeMiniCancel');
     if (probeCancel) probeCancel.addEventListener('click', function () { setStatus('正在取消后台预检测…'); call('cancel_precheck'); });
     document.addEventListener('vl:reset-center', function () {
@@ -2856,7 +2856,7 @@
         }
         // 展开/切换：整个流程（状态变更 + 原项目收回动画 + 重建展开）都放到确认通过之后执行。
         // ⚠ 必须先确认再动：此前状态与收回动画在确认前就跑，用户点「取消」会看到动画进行一半突然跳回
-        //（用户报障 2026-09-27）。
+        //。
         var doExpand = function () {
           state.expandedProject = pname;
           var oldHeader = $('sidebarTree').querySelector('.tree-project__name.is-filled');
@@ -3179,7 +3179,7 @@
       refreshData(true, '正在重新扫描工作路径…', function () {
         // 第二步：**增量**刷新预缓存（不删缓存、只更新变化/缺失的视频并顺带清理失效缓存）。
         // 全量重建（清空后重新检测全部素材）属低频兜底操作，只在 设置-维护 提供「重建预检测缓存」——
-        // 切换工作路径不该顺带做全量重建（用户定案 2026-09-26）。
+        // 切换工作路径不该顺带做全量重建。
         refreshPrecacheFlow();
       }, false);
     }).catch(function (e) { hideBusy(); setStatus('选择路径失败：' + e.message); });
@@ -3726,7 +3726,7 @@
     var rawDirs = (maskState.rawDirs || []).slice();
     var themes = (maskState.themes || []).slice();
     if (!rawDirs.length && !themes.length) return;
-    // 原片目录校验分两类（用户定案 2026-09-23）：
+    // 原片目录校验分两类：
     //  · 项目内扫描源：沿用「为空即移除」（扫描会重新给出，移除安全）；
     //  · 手动添加的外部路径 / 单文件：只校验「是否还存在」——外部路径是用户主动添加的，
     //    不能因为「暂时读不到素材」或「接口调用失败」就被移除（否则会随会话落盘永久丢失）。

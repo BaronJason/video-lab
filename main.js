@@ -666,7 +666,7 @@ api.onFfmpegProgress = (p) => {
 // 主窗口与任务窗口：主窗口仅在原生模态对话框/载入遮罩时被禁用；任务列表窗口不随父窗口禁用
 let mainWin = null;
 // 注：扫描小窗（scanWin / scanning.html）已移除 —— 扫描全程后台，不再需要独立的进度窗口
-//（用户 2026-09-28 定案：预检测与扫描均不弹前台窗，进度写状态栏与运行日志）。
+//（预检测与扫描均不弹前台窗，进度写状态栏与运行日志）。
 
 // 按需预热扫描：**只在用户主动唤起主窗口时调用**（托盘点击 / 再次双击图标 / 托盘菜单）。
 // 开机自启（--autostart）是静默常驻托盘形态，用户很可能根本不打开界面 ——
@@ -689,7 +689,7 @@ function warmScanOnDemand(reason) {
         logTiming('唤起检查：扫描缓存有效，无需扫描（' + reason + '，' + _elapsed() + 'ms）');
         return;
       }
-      // 唤起时同样后台扫描（用户 2026-09-28）：不弹小窗、也不推迟窗口显示
+      // 唤起时同样后台扫描：不弹小窗、也不推迟窗口显示
       const finish = () => {
         _scanWarmBusy = false;
         logTiming('唤起预热扫描完成（' + reason + '，' + _elapsed() + 'ms）');
@@ -792,7 +792,7 @@ async function showTrayMenu() {
   const fresh = !trayMenuWin || trayMenuWin.isDestroyed();
   if (fresh) {
     // ⚠ 不用透明窗口（transparent）：Windows 上透明窗口每次 show 都要重新合成，
-    //   表现为"打开必闪一帧"，且等重绘也治不好（用户报障 2026-09-28，已实测两轮）。
+    //   表现为"打开必闪一帧"，且等重绘也治不好。
     //   改用不透明窗口 + 系统圆角（Win11 默认 roundedCorners），窗口背景色在注入皮肤变量后
     //   用 setBackgroundColor 对齐 --bg-base-default，圆角外不会露出杂色。
     trayMenuWin = new BrowserWindow({ width: TRAY_MENU_W, height: 60, show: false, frame: false, transparent: false, roundedCorners: true, resizable: false, movable: false, skipTaskbar: true, alwaysOnTop: true, fullscreenable: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
@@ -801,7 +801,7 @@ async function showTrayMenu() {
     trayMenuWin.on('blur', () => { if (trayMenuWin && !trayMenuWin.isDestroyed()) trayMenuWin.hide(); });
     trayMenuWin.on('closed', () => { trayMenuWin = null; });
     // 等 ready-to-show（首帧已绘制）而非 did-finish-load：后者只代表文档加载完，
-    // 此时 show 仍可能先出现空白/半透明窗再刷出内容 —— 表现为托盘菜单"闪一下"（用户报障 2026-09-28）
+    // 此时 show 仍可能先出现空白/半透明窗再刷出内容 —— 表现为托盘菜单"闪一下"
     await new Promise((res) => { const t = setTimeout(res, 300); trayMenuWin.webContents.once('ready-to-show', () => { clearTimeout(t); res(); }); });
   }
   // 注入当前皮肤变量（从主窗口 computed style 读取，与界面完全一致）
@@ -899,7 +899,7 @@ function createTaskWindow() {
   taskWin.on('closed', () => { taskWin = null; });
   return taskWin;
 }
-// 设置面板：改为在主窗口内以 iframe 显示（原独立设置窗口已取消，用户 2026-09-28 定案）。
+// 设置面板：改为在主窗口内以 iframe 显示（原独立设置窗口已取消）。
 // 为什么：设置页带整套皮肤资源（女仆皮肤 64KB CSS + 1.7MB 图片），独立窗口每次打开都要
 // 重新创建窗口并重新加载解码 —— 这是"每次打开都有刷新感"的来源；内嵌后打开即显示、关闭仅隐藏。
 // 附带收益：少一套窗口生命周期管理（关闭拦截/失焦关闭/未保存提醒一并不再需要）。
@@ -2022,7 +2022,7 @@ function registerIpc() {
   ipcMain.handle('open_folder_select', async (e, p, opts) => {
     const target = path.resolve(String(p || '').replace(/^"|"$/g, ''));
     // opts.create：调用方明确知道该目录「按需生成」（如备份目录要等首次备份才落盘）——
-    // 此时先按需创建，避免点「打开」直接报「路径不存在」（用户报障 2026-09-28）
+    // 此时先按需创建，避免点「打开」直接报「路径不存在」
     if (opts && opts.create && target) {
       try { fs.mkdirSync(target, { recursive: true }); } catch (e3) { /* 创建失败仍走下方判定，返回真实错误 */ }
     }
@@ -2169,7 +2169,7 @@ function createWindow() {
     });
   } catch (e) {}
   // 普通启动：页面就绪后显示；开机自启（--autostart）保持隐藏，仅托盘常驻。
-  // 扫描（缓存未命中时）全程后台进行，不推迟显示、也不弹扫描小窗（用户 2026-09-28 定案）。
+  // 扫描（缓存未命中时）全程后台进行，不推迟显示、也不弹扫描小窗。
   mainWin.once('ready-to-show', () => {
     logTiming('主窗口 ready-to-show（首帧可显示）');
     // 冷启动定位用：把「回调返回」与 show() 各自夹出来。冷态曾出现 ready-to-show 之后
@@ -2177,7 +2177,7 @@ function createWindow() {
     // 卡点究竟在 show() 之内、还是其后的初始化里。
     setImmediate(() => logTiming('ready-to-show 回调后 setImmediate'));
     if (IS_AUTOSTART) return;
-    // 不再因扫描而推迟显示（用户 2026-09-28）：扫描全程后台进行，窗口首帧就绪即显示，
+    // 不再因扫描而推迟显示：扫描全程后台进行，窗口首帧就绪即显示，
     // 列表由后台扫描完成后自动填充。"等扫描完再显示主窗口"正是此前启动冻结感的来源。
     logTiming('即将 show()');
     mainWin.show();
@@ -2314,7 +2314,7 @@ app.whenReady().then(async () => {
     if (!getBatchRoot(config)) return;        // 未配置工作路径：无扫描可言
     // 缓存未命中（首次启动 / 工作目录结构变化）时才预热全量扫描，实测冷态可达 20-30 秒。
     // 扫描全程后台：主窗口立即显示、界面可交互 —— 不弹小窗、也不推迟显示
-    //（用户 2026-09-28 定案；此前"弹小窗 + 等扫描完才显示主窗口"正是启动冻结感的来源）。
+    //（此前"弹小窗 + 等扫描完才显示主窗口"正是启动冻结感的来源）。
     // ⚠ 判定必须走**异步版**（isScanCacheFreshAsync）：同步版会在机械盘冷态首次访问时冻结主进程达 117 秒。
     const runWarmScan = () => {
       logTiming('启动需要全量扫描（后台进行）');
@@ -2418,7 +2418,7 @@ process.on('unhandledRejection', (reason) => {
 // ── 窗口内容就绪等待 ──
 // 女仆皮肤带 64KB CSS + 多张 webp 装饰图（sidebar-corner / maid-swag / top-trim-tile / maid-chibi …），
 // 首帧必须等这些资源解码完成，否则会「先出空框、再刷出装饰」—— 正是设置页（每次重建）与
-// 切换皮肤后的托盘菜单（首次注入新变量）出现的刷新感（用户报障 2026-09-28）。
+// 切换皮肤后的托盘菜单（首次注入新变量）出现的刷新感。
 // 这里统一等：字体就绪 → 图片解码完成（含 <img>）→ 两帧重绘；超时兜底避免卡住不显示。
 async function waitForWindowContent(win, timeoutMs) {
   if (!win || (win.isDestroyed && win.isDestroyed())) return;
@@ -2441,7 +2441,7 @@ async function waitForWindowContent(win, timeoutMs) {
 }
 
 // 渲染进程 / 子进程异常退出（主进程仍在运行，但往往正是故障现场）
-// ★ 自愈（用户报障 2026-09-28：偶发白屏且显示源码，托盘菜单同样异常，只能强制结束重开）：
+// ★ 自愈（偶发白屏且显示源码，托盘菜单同样异常，只能强制结束重开）：
 //   原先这里**只记日志、不做任何恢复** —— 所以一旦渲染进程异常，界面就永久白屏，必须手动重启。
 //   现补「自动重载」：崩溃后重建页面；带次数限制（5 分钟内最多 3 次），避免真正性崩溃时无限循环。
 const _renderGoneAt = [];

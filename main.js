@@ -830,7 +830,9 @@ async function showTrayMenu() {
     trayMenuWin.loadFile(path.join(__dirname, 'frontend', 'trayMenu.html'));
     trayMenuWin.on('blur', () => { if (trayMenuWin && !trayMenuWin.isDestroyed()) trayMenuWin.hide(); });
     trayMenuWin.on('closed', () => { trayMenuWin = null; });
-    await new Promise((res) => { const t = setTimeout(res, 3000); trayMenuWin.webContents.once('did-finish-load', () => { clearTimeout(t); res(); }); });
+    // 等 ready-to-show（首帧已绘制）而非 did-finish-load：后者只代表文档加载完，
+    // 此时 show 仍可能先出现空白/半透明窗再刷出内容 —— 表现为托盘菜单"闪一下"（用户报障 2026-09-28）
+    await new Promise((res) => { const t = setTimeout(res, 300); trayMenuWin.webContents.once('ready-to-show', () => { clearTimeout(t); res(); }); });
   }
   // 注入当前皮肤变量（从主窗口 computed style 读取，与界面完全一致）
   try {
@@ -874,7 +876,7 @@ function createToolWindow() {
   // 尺寸=主窗口（1360×860）同比例缩小到 0.75：1020×645 —— 一眼看出是同一套界面的小窗
   toolWin = new BrowserWindow({
     title: 'Video Lab - 视频处理', width: 1020, height: 645, minWidth: 760, minHeight: 520,
-    resizable: true, frame: false,
+    resizable: true, frame: false, show: false,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false },
   });
   if (mainWin && !mainWin.isDestroyed()) {
@@ -884,6 +886,8 @@ function createToolWindow() {
     const y = Math.max(wa.y, Math.round(pb.y + (pb.height - 645) / 2));
     toolWin.setPosition(Math.min(x, wa.x + wa.width - 1020), Math.min(y, wa.y + wa.height - 645));
   }
+  // 首帧就绪后再显示（与主窗口一致）：避免「先出现空白窗、再刷出内容」的闪烁观感
+  toolWin.once('ready-to-show', () => { try { if (toolWin && !toolWin.isDestroyed()) { toolWin.show(); toolWin.focus(); } } catch (e) {} });
   toolWin.loadFile(path.join(__dirname, 'frontend', 'tool.html'));
   toolWin.on('closed', () => { toolWin = null; });
   return toolWin;
@@ -892,7 +896,9 @@ function createToolWindow() {
 let taskWin = null;
 function createTaskWindow() {
   if (taskWin && !taskWin.isDestroyed()) { taskWin.focus(); return taskWin; }
-  taskWin = new BrowserWindow({ title: 'Video Lab - 任务', width: 760, height: 620, resizable: false, maximizable: false, minimizable: false, frame: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
+  taskWin = new BrowserWindow({ title: 'Video Lab - 任务', width: 760, height: 620, resizable: false, maximizable: false, minimizable: false, frame: false, show: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
+  // 首帧就绪后再显示：避免「先出现空白窗、再刷出内容」的闪烁观感
+  taskWin.once('ready-to-show', () => { try { if (taskWin && !taskWin.isDestroyed()) { taskWin.show(); taskWin.focus(); } } catch (e) {} });
   taskWin.loadFile(path.join(__dirname, 'frontend', 'task.html'));
   taskWin.on('closed', () => { taskWin = null; });
   return taskWin;
@@ -904,7 +910,7 @@ function openSettingsWindow() {
   // 点击设置按钮时立即让主窗口显示模糊遮罩，与设置窗口出现同步，避免突兀
   // 浏览器端自身打开内嵌模态时会自行添加遮罩，不需要这里广播（否则浏览器网页也会被遮罩）
   if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('settings_window_opened');
-  settingsWin = new BrowserWindow({ title: 'Video Lab - 设置', width: 680, height: 640, resizable: false, maximizable: false, minimizable: false, parent: mainWin, frame: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
+  settingsWin = new BrowserWindow({ title: 'Video Lab - 设置', width: 680, height: 640, resizable: false, maximizable: false, minimizable: false, parent: mainWin, frame: false, show: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
   // 打开即相对主窗口几何居中：子窗口默认落点常偏右/偏下，手动定位并钳制到所在显示器工作区，
   // 主窗口贴显示器边缘时设置窗口也不会跑出屏幕
   if (mainWin && !mainWin.isDestroyed()) {
@@ -919,6 +925,8 @@ function openSettingsWindow() {
       Math.min(y, wa.y + wa.height - 640)
     );
   }
+  // 首帧就绪后再显示：避免「空白窗先出现、再刷出内容」的闪烁（与主窗口一致）
+  settingsWin.once('ready-to-show', () => { try { if (settingsWin && !settingsWin.isDestroyed()) { settingsWin.show(); settingsWin.focus(); } } catch (e) {} });
   settingsWin.loadFile(path.join(__dirname, 'frontend', 'settings.html'));
   settingsWin.on('blur', handleSettingsBlur);
   // 关闭按钮/X：有未保存修改时拦截，通知设置页在关闭按钮上方弹「取消/确认退出」二级菜单（应用退出路径不受此限制）
@@ -1843,9 +1851,11 @@ function registerIpc() {
   ipcMain.handle('tray_menu_click', (e, action) => {
     hideTrayMenu();
     if (action === 'show_main') showMainWindow();
-    else if (action === 'open_tasks') { showMainWindow(); const w = createTaskWindow(); if (w && !w.isDestroyed()) { w.show(); w.focus(); } }
+    // 窗口显示统一交给各自的 ready-to-show（首帧就绪才出现）；
+    // 这里只在「已加载完且被隐藏」时补 show，防止首次打开抢先显示空白窗。
+    else if (action === 'open_tasks') { showMainWindow(); const w = createTaskWindow(); if (w && !w.isDestroyed()) { if (w.webContents.isLoading()) w.once('ready-to-show', () => { try { w.show(); w.focus(); } catch (e) {} }); else { w.show(); w.focus(); } } }
     else if (action === 'open_settings') openSettingsWindow();
-    else if (action === 'open_tools') { const w = createToolWindow(); if (w && !w.isDestroyed()) { w.show(); w.focus(); } }
+    else if (action === 'open_tools') { const w = createToolWindow(); if (w && !w.isDestroyed()) { if (w.webContents.isLoading()) w.once('ready-to-show', () => { try { w.show(); w.focus(); } catch (e) {} }); else { w.show(); w.focus(); } } }
     else if (action === 'open_browser') {
       const url = httpUrl();
       if (url) { shell.openExternal(url); return { ok: true }; }
@@ -2273,7 +2283,9 @@ let guideWin = null;
 function openGuideWindow() {
   return new Promise((resolve) => {
     if (guideWin && !guideWin.isDestroyed()) { guideWin.focus(); return; }
-    guideWin = new BrowserWindow({ title: 'Video Lab - 首次设置', width: 620, height: 420, resizable: false, maximizable: false, minimizable: false, frame: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
+    guideWin = new BrowserWindow({ title: 'Video Lab - 首次设置', width: 620, height: 420, resizable: false, maximizable: false, minimizable: false, frame: false, show: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
+    // 首帧就绪后再显示：避免「先出现空白窗、再刷出内容」的闪烁（与主窗口一致）
+    guideWin.once('ready-to-show', () => { try { if (guideWin && !guideWin.isDestroyed()) { guideWin.show(); guideWin.focus(); } } catch (e) {} });
     guideWin.loadFile(path.join(__dirname, 'frontend', 'guide.html'));
     guideWin.on('closed', () => { guideWin = null; resolve(); });
   });

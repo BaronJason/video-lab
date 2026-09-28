@@ -224,6 +224,10 @@ body {
 .field-row .form-input { width: 100%; }
 
 .dir-row { display: flex; gap: 8px; }
+/* 与左侧内联标签并排的输入框需撑满剩余宽度。
+   原先由 JS 给每个输入框包一层 .field-row、再靠 `.dir-row .field-row { flex: 1 }` 实现；
+   取消未保存星号后不再需要包层，故此规则直接作用于输入框本身（否则输入框收窄、文字超框）。 */
+.dir-row > .form-input { flex: 1; min-width: 0; }
 /* 浏览器访问区块（端口/令牌/链接三行）：行间距拉开，避免贴在一起 */
 .form-group--http .dir-row { margin-bottom: 10px; }
 .form-group--http .dir-row:last-of-type { margin-bottom: 0; }
@@ -334,10 +338,14 @@ body {
 
 /* ─── 更新 / 配置保存位置（勾选与单选） ─── */
 .opt-row { display: flex; align-items: center; padding: 4px 0; gap: 8px; }
+/* 数值输入框（如复刻「重复度下限/上限」）需显式定宽：
+   原先它被 JS 包的 .field-row 限制宽度，取消包裹层后 .form-input 的 width:100% 会撑满整行、
+   把右侧「默认启用」复选框挤到换行（用户报障 2026-09-28）。 */
+.opt-num-input { width: 88px; flex-shrink: 0; }
 /* 并排单选组（更新方式 / 仓库选择）：加大行内间距与行距，避免拥挤 */
 .opt-row--spaced { padding: 8px 0; gap: 24px; }
 /* 每日定时检查更新下拉框：紧凑宽度，与左侧勾选间隔 8px */
-.opt-time-select { width: 80px; flex-shrink: 0; height: 30px; padding: 0 6px; cursor: pointer; }
+.opt-time-select { width: 100px; flex-shrink: 0; height: 30px; padding: 0 6px; cursor: pointer; }
 .opt-radio__dot {
   flex-shrink: 0;
   width: 16px;

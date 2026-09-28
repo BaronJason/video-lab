@@ -876,15 +876,8 @@ async function showTrayMenu() {
   if (y < bd.y) y = bd.y;
   trayMenuWin.setPosition(Math.round(x), Math.round(y));
   // ⚠ 关键：上面刚注入皮肤变量、显隐「检查更新」项、setContentSize 都改动了 DOM 与窗口尺寸 ——
-  //   ready-to-show 给的"首帧"当场作废，此刻直接 show 会先显示改动前的那一帧再重排（表现为闪烁）。
-  //   耗时不同就会「偶尔正常」（注入快时改动赶在 show 之前），故此处等两帧重绘完成再显示。
-  try {
-    await Promise.race([
-      trayMenuWin.webContents.executeJavaScript(
-        "new Promise(function(r){requestAnimationFrame(function(){requestAnimationFrame(function(){r(true);});});})"),
-      new Promise(function (r) { setTimeout(r, 120); }),   // 兜底：隐藏窗口的 rAF 可能被节流不触发
-    ]);
-  } catch (e) {}
+  //   ready-to-show 给的"首帧"当场作废（切换皮肤后第一次尤其明显），故此处统一等资源就绪 + 重绘再显示。
+  await waitForWindowContent(trayMenuWin);
   trayMenuWin.show();
   trayMenuWin.focus();
 }
@@ -907,7 +900,7 @@ function createToolWindow() {
     toolWin.setPosition(Math.min(x, wa.x + wa.width - 1020), Math.min(y, wa.y + wa.height - 645));
   }
   // 首帧就绪后再显示（与主窗口一致）：避免「先出现空白窗、再刷出内容」的闪烁观感
-  toolWin.once('ready-to-show', () => { try { if (toolWin && !toolWin.isDestroyed()) { toolWin.show(); toolWin.focus(); } } catch (e) {} });
+  toolWin.once('ready-to-show', async () => { await waitForWindowContent(toolWin); try { if (toolWin && !toolWin.isDestroyed()) { toolWin.show(); toolWin.focus(); } } catch (e) {} });
   toolWin.loadFile(path.join(__dirname, 'frontend', 'tool.html'));
   toolWin.on('closed', () => { toolWin = null; });
   return toolWin;
@@ -918,7 +911,7 @@ function createTaskWindow() {
   if (taskWin && !taskWin.isDestroyed()) { taskWin.focus(); return taskWin; }
   taskWin = new BrowserWindow({ title: 'Video Lab - 任务', width: 760, height: 620, resizable: false, maximizable: false, minimizable: false, frame: false, show: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
   // 首帧就绪后再显示：避免「先出现空白窗、再刷出内容」的闪烁观感
-  taskWin.once('ready-to-show', () => { try { if (taskWin && !taskWin.isDestroyed()) { taskWin.show(); taskWin.focus(); } } catch (e) {} });
+  taskWin.once('ready-to-show', async () => { await waitForWindowContent(taskWin); try { if (taskWin && !taskWin.isDestroyed()) { taskWin.show(); taskWin.focus(); } } catch (e) {} });
   taskWin.loadFile(path.join(__dirname, 'frontend', 'task.html'));
   taskWin.on('closed', () => { taskWin = null; });
   return taskWin;
@@ -946,7 +939,7 @@ function openSettingsWindow() {
     );
   }
   // 首帧就绪后再显示：避免「空白窗先出现、再刷出内容」的闪烁（与主窗口一致）
-  settingsWin.once('ready-to-show', () => { try { if (settingsWin && !settingsWin.isDestroyed()) { settingsWin.show(); settingsWin.focus(); } } catch (e) {} });
+  settingsWin.once('ready-to-show', async () => { await waitForWindowContent(settingsWin); try { if (settingsWin && !settingsWin.isDestroyed()) { settingsWin.show(); settingsWin.focus(); } } catch (e) {} });
   settingsWin.loadFile(path.join(__dirname, 'frontend', 'settings.html'));
   settingsWin.on('blur', handleSettingsBlur);
   // 关闭按钮/X：有未保存修改时拦截，通知设置页在关闭按钮上方弹「取消/确认退出」二级菜单（应用退出路径不受此限制）
@@ -2305,7 +2298,7 @@ function openGuideWindow() {
     if (guideWin && !guideWin.isDestroyed()) { guideWin.focus(); return; }
     guideWin = new BrowserWindow({ title: 'Video Lab - 首次设置', width: 620, height: 420, resizable: false, maximizable: false, minimizable: false, frame: false, show: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
     // 首帧就绪后再显示：避免「先出现空白窗、再刷出内容」的闪烁（与主窗口一致）
-    guideWin.once('ready-to-show', () => { try { if (guideWin && !guideWin.isDestroyed()) { guideWin.show(); guideWin.focus(); } } catch (e) {} });
+    guideWin.once('ready-to-show', async () => { await waitForWindowContent(guideWin); try { if (guideWin && !guideWin.isDestroyed()) { guideWin.show(); guideWin.focus(); } } catch (e) {} });
     guideWin.loadFile(path.join(__dirname, 'frontend', 'guide.html'));
     guideWin.on('closed', () => { guideWin = null; resolve(); });
   });
@@ -2501,6 +2494,31 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason) => {
   try { runLog.err('app.unhandledRejection', reason); } catch (e) {}
 });
+// ── 窗口内容就绪等待 ──
+// 女仆皮肤带 64KB CSS + 多张 webp 装饰图（sidebar-corner / maid-swag / top-trim-tile / maid-chibi …），
+// 首帧必须等这些资源解码完成，否则会「先出空框、再刷出装饰」—— 正是设置页（每次重建）与
+// 切换皮肤后的托盘菜单（首次注入新变量）出现的刷新感（用户报障 2026-09-28）。
+// 这里统一等：字体就绪 → 图片解码完成（含 <img>）→ 两帧重绘；超时兜底避免卡住不显示。
+async function waitForWindowContent(win, timeoutMs) {
+  if (!win || (win.isDestroyed && win.isDestroyed())) return;
+  try {
+    await Promise.race([
+      win.webContents.executeJavaScript(
+        '(function(){' +
+        ' var done=[];' +
+        ' try{ if(document.fonts&&document.fonts.ready) done.push(document.fonts.ready); }catch(e){}' +
+        ' var imgs=Array.prototype.slice.call(document.images).filter(function(i){return !i.complete;});' +
+        ' if(imgs.length) done.push(Promise.all(imgs.map(function(i){return new Promise(function(r){i.onload=i.onerror=r;});})));' +
+        // CSS 背景图不在 document.images 中：额外等两帧，给解码/合成留出时间
+        ' return Promise.all(done).then(function(){return new Promise(function(r){' +
+        '   requestAnimationFrame(function(){requestAnimationFrame(function(){requestAnimationFrame(function(){r(true);});});});' +
+        ' });});' +
+        '})()'),
+      new Promise(function (r) { setTimeout(r, timeoutMs || 500); }),   // 兜底：隐藏窗口 rAF 可能被节流
+    ]);
+  } catch (e) {}
+}
+
 // 渲染进程 / 子进程异常退出（主进程仍在运行，但往往正是故障现场）
 // ★ 自愈（用户报障 2026-09-28：偶发白屏且显示源码，托盘菜单同样异常，只能强制结束重开）：
 //   原先这里**只记日志、不做任何恢复** —— 所以一旦渲染进程异常，界面就永久白屏，必须手动重启。

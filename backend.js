@@ -291,12 +291,15 @@ function dedupeByDir(list) {
   return out;
 }
 
-// 任务总用时（秒）：未开始为 0；已结束取 endedAt；运行中取当前时间
+// 任务总用时（秒）：未开始为 0；已结束取 endedAt；运行中取当前时间。
+// 暂停期间不计入：暂停开始记 t.pausedAt，继续时并入 t.totalPausedMs，这里一并扣除。
 function taskElapsed(t) {
   if (!t || !t.startedAt) return 0;
   const ended = t.status === 'done' || t.status === 'stopped' || t.status === 'error' || t.status === 'interrupted';
   const end = ended ? (t.endedAt || Date.now()) : Date.now();
-  return Math.max(0, Math.round((end - t.startedAt) / 1000));
+  let pausedMs = t.totalPausedMs || 0;
+  if (t.pausedAt) pausedMs += Date.now() - t.pausedAt;   // 当前正在暂停的这段
+  return Math.max(0, Math.round((end - t.startedAt - pausedMs) / 1000));
 }
 // 时间格式跟随实际用时：几十秒只显秒；1m1s / 10m10s / 1h0m10s（分秒含 0 亦保留）
 function zhDuration(sec) {
@@ -3590,7 +3593,7 @@ class Api {
         t.status = 'interrupted'; t.paused = false; t.endedAt = now;
         t.log.push('[应用退出，任务已中断]'); changed = true;
       } else if (t.status === 'queued') {
-        t.status = 'paused'; t.paused = true;
+        t.status = 'paused'; t.paused = true; t.pausedAt = Date.now();
         t.log.push('[应用退出，排队任务转为暂停]'); changed = true;
       }
     }
@@ -3624,6 +3627,8 @@ class Api {
       .sort((a, b) => (a.resumeIdx ?? 1e9) - (b.resumeIdx ?? 1e9));
     if (!paused.length) return { ok: false, error: '没有暂停的任务' };
     for (const t of paused) {
+      if (t.pausedAt) { t.totalPausedMs = (t.totalPausedMs || 0) + (Date.now() - t.pausedAt); }
+      t.pausedAt = null;
       t.status = 'queued'; t.paused = false; delete t.resumeIdx;
       this._taskQueue.push(t.id);
       t.log.push('[全部继续]');
@@ -3641,7 +3646,7 @@ class Api {
     for (const t of queued) {
       const i = this._taskQueue.indexOf(t.id);
       if (i >= 0) this._taskQueue.splice(i, 1);
-      t.status = 'paused'; t.paused = true;
+      t.status = 'paused'; t.paused = true; t.pausedAt = Date.now();
       const waiting = [...this.tasks.values()].filter((x) => x.status === 'queued' || x.status === 'paused')
         .sort((a, b) => (a.planPos || 1e9) - (b.planPos || 1e9));
       t.resumeIdx = Math.max(0, waiting.indexOf(t));

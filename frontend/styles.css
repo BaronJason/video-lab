@@ -10962,3 +10962,14 @@ button.is-vl-disabled {
 /* 紧凑变体：工具页沿用原 .tl-check 的视觉密度（小字号、窄间距），勾选框样式仍与全局一致 */
 .opt-check--sm { gap: 5px; font-size: var(--body-sm-font-size); }
 .opt-check:hover .opt-check__box { border-color: var(--brand-500); }
+
+/* 切换配置/项目时内容区的淡入过渡：DOM 复用后，仅当内容真正变化（setHtmlIfChanged）
+   才加 .vl-swap 触发；首次渲染与静默场景不加，避免启动闪烁。 */
+.vl-swap { animation: vl-swap-in 180ms ease-out; }
+@keyframes vl-swap-in {
+  from { opacity: 0.25; transform: translateY(2px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vl-swap { animation: none; }
+}

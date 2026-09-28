@@ -27,6 +27,29 @@
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
+  // 只在内容真正变化时才重写容器。切换配置/项目时大部分区域的结构并未改变（往往只变高亮、
+  // 徽章文案），整片 innerHTML 重写会让浏览器把旧节点全部销毁再建一遍 ——
+  // 表现为肉眼可见的中间态（列表闪一下），也会连带清掉皮肤行为层注入的装饰元素。
+  // 做法：以最后一次写入的 html 作为指纹，相同则完全不动 DOM。
+  function setHtmlIfChanged(el, html, animate) {
+    if (!el) return false;
+    if (el.__vlLastHtml === html) return false;
+    el.__vlLastHtml = html;
+    el.innerHTML = html;
+    // 内容真的变了才触发过渡：remove 后重加 class 可重启动画；首次渲染（尚无指纹）
+    // 或调用方未要求动画时不加，避免启动 / 静默场景闪烁。
+    if (animate) {
+      el.classList.remove('vl-swap');
+      void el.offsetWidth;
+      el.classList.add('vl-swap');
+    }
+    return true;
+  }
+  // 外部逻辑可能绕过 setHtmlIfChanged 直接改写容器（模式切换、清空视图等），
+  // 此时须丢弃指纹，避免下一次因"内容相同"而误跳过重建。
+  function resetHtmlCache(el) {
+    if (el) el.__vlLastHtml = undefined;
+  }
   // 路径 → 文件名（不含扩展名）；用于水印栏简洁展示
   function baseNameNoExt(p) {
     var s = String(p || '').replace(/[\\/]+$/, '');
@@ -576,7 +599,7 @@
       }
       html += '</div>';
     });
-    tree.innerHTML = html;
+    setHtmlIfChanged(tree, html, true);
     buildAzIndex(forceAz);
     syncAzBar();
   }
@@ -847,7 +870,7 @@
     }
     if (state.mode === 'log') { buildLogDateBranches(c, silent); return; }
     if (!state.activeTxt || state.versions.length === 0) {
-      c.innerHTML = '<div class="center-empty" style="padding:var(--spacer-16)">' + icon('arrow-left', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">从左侧选择一个 TXT</span></div>';
+      setHtmlIfChanged(c, '<div class="center-empty" style="padding:var(--spacer-16)">' + icon('arrow-left', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">从左侧选择一个 TXT</span></div>');
       updateModeToggle();
       return;
     }
@@ -857,20 +880,20 @@
       html += '<button class="date-branch-btn' + (active ? ' date-branch-btn--active' : '') + (silent ? ' date-branch-btn--static' : '') + '" data-label="' + escapeHtml(v.label) + '" title="' + escapeHtml(v.path) + '">' + escapeHtml(v.label);
       html += '</button>';
     });
-    c.innerHTML = html;
+    setHtmlIfChanged(c, html, true);
     updateModeToggle();
   }
   // 日志模式下：顶部展示该配置的日志文件日期分支（每日期一个），按钮带 data-date 与 data-file
   function buildLogDateBranches(c, silent) {
-    if (!state.activeTxt || !state.activeVersion) { c.innerHTML = ''; return; }
-    c.innerHTML = '<span class="date-branch-btn">…</span>';
+    if (!state.activeTxt || !state.activeVersion) { setHtmlIfChanged(c, ''); return; }
+    setHtmlIfChanged(c, '<span class="date-branch-btn">…</span>');
     var token = state.activeProject + '\u0000' + state.activeTxt;
     state._logBranchToken = token;
     call('list_log_files', state.activeVersion.path, state.activeTxt).then(function (files) {
       if (state._logBranchToken !== token) return;
       files = files || [];
       state.logFiles = files;
-      if (!files.length) { state.activeLogDate = null; state.activeLogPath = null; c.innerHTML = '<span class="date-branch-btn">无日志</span>'; updateModeToggle(); return; }
+      if (!files.length) { state.activeLogDate = null; state.activeLogPath = null; setHtmlIfChanged(c, '<span class="date-branch-btn">无日志</span>'); updateModeToggle(); return; }
       // 定位当前选中分支：从配置切入时按配置文件版本定位当日对应日志；否则按残留定位
       var fromConfig = state._fromConfig; state._fromConfig = false;
       var active = fromConfig ? logTargetForVersion(files) : null;
@@ -884,7 +907,7 @@
       }
       // 无配置可定位：默认选中最新一天的日志（后端已按日期降序，首个即最新 —— 复刻与普通项目一致）
       if (!active) active = files.length ? files[0] : null;
-      if (!active) { state.activeLogDate = null; state.activeLogPath = null; c.innerHTML = '<span class="date-branch-btn">无日志</span>'; updateModeToggle(); return; }
+      if (!active) { state.activeLogDate = null; state.activeLogPath = null; setHtmlIfChanged(c, '<span class="date-branch-btn">无日志</span>'); updateModeToggle(); return; }
       var had = state.activeLogPath === active.path;
       state.activeLogDate = active.date;
       state.activeLogPath = active.path;
@@ -894,23 +917,23 @@
         var txt = f.label || f.date;
         html += '<button class="date-branch-btn' + (isActive ? ' date-branch-btn--active' : '') + (silent ? ' date-branch-btn--static' : '') + '" data-date="' + escapeHtml(f.date) + '" data-file="' + escapeHtml(f.path) + '" title="' + escapeHtml(f.path) + '">' + escapeHtml(txt) + '</button>';
       });
-      c.innerHTML = html;
+      setHtmlIfChanged(c, html, true);
       updateModeToggle();
       if (!had && state.mode === 'log' && state.activeTxt) buildCenterBottom();
-    }).catch(function () { c.innerHTML = '<span class="date-branch-btn">无日志</span>'; updateModeToggle(); });
+    }).catch(function () { setHtmlIfChanged(c, '<span class="date-branch-btn">无日志</span>'); updateModeToggle(); });
   }
   function buildCenterBottom(silent) {
     if (maskOn()) return; // 遮罩模式：批量中心内容渲染拒绝
     var cb = $('centerBottom');
     if (!cb) return; // 容器缺失时安全忽略（遮罩/恢复切换的窗口期）
     if (!state.activeTxt || !state.activeVersion) {
-      cb.innerHTML = '<div class="center-empty">' + icon('file-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">请选择一个日期分支查看内容</span></div>';
+      setHtmlIfChanged(cb, '<div class="center-empty">' + icon('file-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">请选择一个日期分支查看内容</span></div>');
       return;
     }
     if (state.mode === 'log') { buildLogConfigBar(); buildLogList(); return; }
     var container = cb;
     var data = state.configData;
-    if (!data) { container.innerHTML = '<div class="center-empty">' + icon('file-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">正在加载配置…</span></div>'; return; }
+    if (!data) { setHtmlIfChanged(container, '<div class="center-empty">' + icon('file-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">正在加载配置…</span></div>'); return; }
     var folders = data.folders || [];
     var excludes = data.excludes || [];
     var watermark = data.watermark || '';
@@ -954,7 +977,7 @@
     html += '<div class="config-editor__col-header">配置名</div>';
     html += '<div class="config-editor__wm-field"><input type="text" class="config-bottombar__input config-bottombar__input--name" id="inputConfigName" value="' + escapeHtml((data && data.name) || '') + '"></div></div>';
     html += '</div></div>';
-    container.innerHTML = html;
+    setHtmlIfChanged(container, html, true);
     buildConfigBar(); bindEditorEvents(); bindResizers(container); bindModifiedWatchers(container); runPrecheck();
     // 仅真正加载配置时（_configOrig 为 null）建立修改基线；局部重建（如水印变更）不重置，保证各部分修改相互独立
     if (state._configOrig === null || state._configOrig === undefined) {
@@ -986,7 +1009,7 @@
     html += '<button class="config-btn config-btn--save" id="btnSaveConfig">' + icon('save', 14) + '覆盖当前配置</button>';
     html += '<button class="config-btn config-btn--save-today" id="btnSaveToday">' + icon('calendar-plus', 14) + '保存为当日配置</button>';
     html += '<button class="config-btn config-btn--run" id="btnRunScript">' + icon('play', 14) + '开始制作</button></div>';
-    bar.innerHTML = html;
+    setHtmlIfChanged(bar, html, true);
     // 注意：不可直接传 saveConfig —— 它首参是 noConfirm，直接绑定会让 MouseEvent 顶替该参数（恒真）而跳过确认气泡
     $('btnSaveConfig').addEventListener('click', function () { saveConfig(); });
     $('btnSaveToday').addEventListener('click', saveConfigToday);
@@ -1136,7 +1159,7 @@
     html += '<button class="config-btn config-btn--replica-full" id="btnBatchReplica1" title="对所选成片执行完全复刻">' + icon('repeat', 14) + '完全复刻</button>';
     html += '<button class="config-btn config-btn--replica-dedup" id="btnBatchReplica2" title="对所选成片执行去重复刻">' + icon('copy', 14) + '去重复刻</button>';
     html += '</div>';
-    bar.innerHTML = html;
+    setHtmlIfChanged(bar, html, true);
     $('btnLogSelect').addEventListener('change', toggleLogSelectMode);
     var all = $('chkLogAll');
     if (all) all.addEventListener('change', function () { setLogAll(this.checked); });
@@ -1813,7 +1836,7 @@
   }
   function buildLogList() {
     var container = $('centerBottom');
-    container.innerHTML = '<div class="center-empty">' + icon('scroll-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">正在加载日志…</span></div>';
+    setHtmlIfChanged(container, '<div class="center-empty">' + icon('scroll-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">正在加载日志…</span></div>');
     // 按当前选中的日志分支（精确到日志文件）定位查询目录，切换分支后取对应日志成片
     var probeLog = null;
     if (state.activeProject === REPLICA_PROJECT) {
@@ -1836,7 +1859,7 @@
       var q = state.logSearchQuery.trim().toLowerCase();
       if (q) entries = entries.filter(function (en) { return (en.video || '').toLowerCase().indexOf(q) >= 0; });
       if (entries.length === 0) {
-        container.innerHTML = '<div class="center-empty">' + icon('scroll-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">' + (q ? '未找到匹配 "' + escapeHtml(state.logSearchQuery) + '" 的成片' : '暂无日志数据') + '</span></div>';
+        setHtmlIfChanged(container, '<div class="center-empty">' + icon('scroll-text', 24, 'center-empty__icon') + '<span style="font-size:var(--body-sm-font-size)">' + (q ? '未找到匹配 "' + escapeHtml(state.logSearchQuery) + '" 的成片' : '暂无日志数据') + '</span></div>');
         return;
       }
       var sel = !!state.selectMode;
@@ -1859,7 +1882,7 @@
         html += '</div></div>';
       });
       html += '</div>';
-      container.innerHTML = html;
+      setHtmlIfChanged(container, html, true);
       bindLogListScroll(container);
       // 搜索跳转定位：列表可能被异步再次渲染覆盖展开，窗口期内反复维持展开（幂等），窗口结束才消费焦点
       (function retryFocus(cont, tries) {
@@ -4158,7 +4181,7 @@
         '<span class="mask-proj-item__name">' + escapeHtml(p.name) + '</span>' +
         '<span class="mask-proj-item__badge">' + (p.themeCount != null ? p.themeCount : (p.themes ? p.themes.length : 0)) + '种遮罩</span></div>';
     });
-    tree.innerHTML = html;
+    setHtmlIfChanged(tree, html, true);
     tree.querySelectorAll('.mask-proj-item').forEach(function (el) {
       el.addEventListener('click', function () { selectMaskProject(el.getAttribute('data-maskproj')); });
       // 项目行右键：打开项目文件夹 / 项目设置（样式参考批量模式）
@@ -5004,7 +5027,7 @@
     if (!c) return;
     var branches = maskLogBranchList(allLogs);
     if (!(allLogs || []).length) {
-      c.innerHTML = '<span class="date-branch-btn">无日志</span>';
+      setHtmlIfChanged(c, '<span class="date-branch-btn">无日志</span>');
       maskState.maskLogBranch = '';
       maskState._branchSetSig = '';
       return;
@@ -5022,7 +5045,7 @@
       var active = b.path === maskState.maskLogBranch;
       html += '<button class="date-branch-btn' + (active ? ' date-branch-btn--active' : '') + (silent ? ' date-branch-btn--static' : '') + '" data-masklog="' + escapeHtml(b.path) + '" title="' + escapeHtml(b.path) + '">' + escapeHtml(b.label) + '</button>';
     });
-    c.innerHTML = html;
+    setHtmlIfChanged(c, html, true);
   }
   // 迁移某日期分支（日志文件）下全部成片到同一新文件夹（逐个迁移，同步更新日志 @out）；
   // 由日期分支按钮右键菜单触发，每次按最新日志数据执行
@@ -5209,7 +5232,7 @@
       '<option value="2"' + (maskState.mode === 2 ? ' selected' : '') + '>仅水印</option>' +
       '<option value="3"' + (maskState.mode === 3 ? ' selected' : '') + '>仅遮罩</option></select>' +
       '<button type="button" class="config-btn config-btn--run" id="btnMaskStart">' + icon('play', 14) + '开始制作</button></div>';
-    bar.innerHTML = html;
+    setHtmlIfChanged(bar, html, true);
     $('maskModeSel').addEventListener('change', function () {
       maskState.mode = parseInt(this.value, 10) || 1;
       buildMaskCenter(); buildMaskConfigBar(); maskPersist();

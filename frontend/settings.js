@@ -811,6 +811,21 @@
         api.save_settings({ backup_dir: bdInput.value.trim() }).catch(function () {});
       });
     }
+    // 「关闭行为」「任务结束通知」：同属「改完立刻影响当前行为」的开关 → 即时保存
+    //（与皮肤 / 开机自启 / 备份目录 口径一致；用户 2026-09-28 定案）
+    if (api && api.save_settings) {
+      document.querySelectorAll('input[name="closeBehavior"]').forEach(function (r) {
+        r.addEventListener('change', function () {
+          if (r.checked) api.save_settings({ close_behavior: r.value }).catch(function () {});
+        });
+      });
+      var nteInput = document.getElementById('notifyTaskEnd');
+      if (nteInput) {
+        nteInput.addEventListener('change', function () {
+          api.save_settings({ notify_task_end: !!nteInput.checked }).catch(function () {});
+        });
+      }
+    }
     var openBackup = document.getElementById('btnOpenBackupDir');
     if (openBackup && api && api.open_folder_select) openBackup.addEventListener('click', function () {
       var el = document.getElementById('backupDirPath');

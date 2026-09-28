@@ -885,7 +885,8 @@ async function showTrayMenu() {
 // 关掉窗口不影响正在跑的任务；任务结果回主窗口任务列表查看 —— 计划 §七）
 let toolWin = null;
 function createToolWindow() {
-  if (toolWin && !toolWin.isDestroyed()) { toolWin.focus(); return toolWin; }
+  // 复用已有窗口：关闭时只 hide 不销毁，这里需显式 show 回前台（focus 不会让隐藏窗口出现）
+  if (toolWin && !toolWin.isDestroyed()) { try { if (!toolWin.isVisible()) toolWin.show(); } catch (e) {} toolWin.focus(); return toolWin; }
   // 尺寸=主窗口（1360×860）同比例缩小到 0.75：1020×645 —— 一眼看出是同一套界面的小窗
   toolWin = new BrowserWindow({
     title: 'Video Lab - 视频处理', width: 1020, height: 645, minWidth: 760, minHeight: 520,
@@ -902,17 +903,33 @@ function createToolWindow() {
   // 首帧就绪后再显示（与主窗口一致）：避免「先出现空白窗、再刷出内容」的闪烁观感
   toolWin.once('ready-to-show', async () => { await waitForWindowContent(toolWin); try { if (toolWin && !toolWin.isDestroyed()) { toolWin.show(); toolWin.focus(); } } catch (e) {} });
   toolWin.loadFile(path.join(__dirname, 'frontend', 'tool.html'));
+  // 关闭只隐藏、不销毁：工具窗带整套皮肤资源（女仆皮肤 64KB CSS + 1.7MB 图片），
+  // 每次重建都要重新加载解码 —— 正是"每次打开都有刷新感"的来源；hide 复用后再次打开瞬时显示。
+  // 仅在应用真正退出（isQuitting）时才允许销毁。
+  toolWin.on('close', (e) => {
+    if (isQuitting) return;
+    e.preventDefault();
+    try { toolWin.hide(); } catch (err) {}
+  });
   toolWin.on('closed', () => { toolWin = null; });
   return toolWin;
 }
 // 任务窗口：显示所有生成任务的状态与实时日志
 let taskWin = null;
 function createTaskWindow() {
-  if (taskWin && !taskWin.isDestroyed()) { taskWin.focus(); return taskWin; }
+  // 复用已有窗口：同工具窗，需显式 show 回前台
+  if (taskWin && !taskWin.isDestroyed()) { try { if (!taskWin.isVisible()) taskWin.show(); } catch (e) {} taskWin.focus(); return taskWin; }
   taskWin = new BrowserWindow({ title: 'Video Lab - 任务', width: 760, height: 620, resizable: false, maximizable: false, minimizable: false, frame: false, show: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
   // 首帧就绪后再显示：避免「先出现空白窗、再刷出内容」的闪烁观感
   taskWin.once('ready-to-show', async () => { await waitForWindowContent(taskWin); try { if (taskWin && !taskWin.isDestroyed()) { taskWin.show(); taskWin.focus(); } } catch (e) {} });
   taskWin.loadFile(path.join(__dirname, 'frontend', 'task.html'));
+  // 关闭只隐藏、不销毁（同工具窗）：任务窗常开常看，重建同样要重新加载整套皮肤资源。
+  // 应用真正退出时才销毁。
+  taskWin.on('close', (e) => {
+    if (isQuitting) return;
+    e.preventDefault();
+    try { taskWin.hide(); } catch (err) {}
+  });
   taskWin.on('closed', () => { taskWin = null; });
   return taskWin;
 }

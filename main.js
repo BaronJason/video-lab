@@ -2470,11 +2470,56 @@ process.on('unhandledRejection', (reason) => {
   try { runLog.err('app.unhandledRejection', reason); } catch (e) {}
 });
 // 渲染进程 / 子进程异常退出（主进程仍在运行，但往往正是故障现场）
+// ★ 自愈（用户报障 2026-09-28：偶发白屏且显示源码，托盘菜单同样异常，只能强制结束重开）：
+//   原先这里**只记日志、不做任何恢复** —— 所以一旦渲染进程异常，界面就永久白屏，必须手动重启。
+//   现补「自动重载」：崩溃后重建页面；带次数限制（5 分钟内最多 3 次），避免真正性崩溃时无限循环。
+const _renderGoneAt = [];
+function _shouldAutoReload() {
+  const now = Date.now();
+  while (_renderGoneAt.length && now - _renderGoneAt[0] > 5 * 60 * 1000) _renderGoneAt.shift();
+  if (_renderGoneAt.length >= 3) return false;   // 频繁崩溃 → 不再重载，保留现场供排查
+  _renderGoneAt.push(now);
+  return true;
+}
 app.on('render-process-gone', (e, contents, details) => {
+  const reason = String((details && details.reason) || '');
   try {
-    runLog.err('app.renderGone',
-      '渲染进程退出 · ' + String((details && details.reason) || ''),
+    runLog.err('app.renderGone', '渲染进程退出 · ' + reason,
       { exitCode: details && details.exitCode, url: contents && contents.getURL && contents.getURL() });
+  } catch (err) {}
+  // clean-exit / killed 属正常关闭路径，不重载
+  if (reason === 'clean-exit' || reason === 'killed') return;
+  try {
+    if (!contents || contents.isDestroyed || contents.isDestroyed()) return;
+    if (!_shouldAutoReload()) {
+      try { runLog.err('app.renderGone', '渲染进程反复崩溃，已停止自动重载（保留现场）'); } catch (err) {}
+      return;
+    }
+    const url = contents.getURL && contents.getURL();
+    try { runLog.err('app.renderGone', '尝试自动重载渲染进程 · ' + String(url || '')); } catch (err) {}
+    // 走 reload：正常页面重载即恢复；极端情况（连 reload 都失败）留给下方 did-fail-load 兜底
+    contents.reload();
+  } catch (err) {}
+});
+// 页面加载失败（含渲染失败后 reload 仍失败）→ 记录并延时重试一次，避免停在白屏/源码页
+app.on('web-contents-created', (e, contents) => {
+  try {
+    contents.on('did-fail-load', (ev, errorCode, errorDesc, validatedURL, isMainFrame) => {
+      if (!isMainFrame) return;
+      try { runLog.err('app.didFailLoad', '页面加载失败 · ' + errorDesc + '(' + errorCode + ')', { url: validatedURL }); } catch (err) {}
+      setTimeout(() => {
+        try {
+          if (contents.isDestroyed && contents.isDestroyed()) return;
+          if (_shouldAutoReload()) contents.reload();
+        } catch (err) {}
+      }, 800);
+    });
+    contents.on('unresponsive', () => {
+      try { runLog.err('app.unresponsive', '渲染进程无响应 · ' + String(contents.getURL && contents.getURL() || '')); } catch (err) {}
+    });
+    contents.on('responsive', () => {
+      try { runLog.err('app.responsive', '渲染进程已恢复响应 · ' + String(contents.getURL && contents.getURL() || '')); } catch (err) {}
+    });
   } catch (err) {}
 });
 app.on('child-process-gone', (e, details) => {

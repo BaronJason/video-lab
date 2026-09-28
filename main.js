@@ -825,7 +825,11 @@ function hideTrayMenu() { if (trayMenuWin && !trayMenuWin.isDestroyed()) trayMen
 async function showTrayMenu() {
   const fresh = !trayMenuWin || trayMenuWin.isDestroyed();
   if (fresh) {
-    trayMenuWin = new BrowserWindow({ width: TRAY_MENU_W, height: 60, show: false, frame: false, transparent: true, backgroundColor: '#00000000', resizable: false, movable: false, skipTaskbar: true, alwaysOnTop: true, fullscreenable: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
+    // ⚠ 不用透明窗口（transparent）：Windows 上透明窗口每次 show 都要重新合成，
+    //   表现为"打开必闪一帧"，且等重绘也治不好（用户报障 2026-09-28，已实测两轮）。
+    //   改用不透明窗口 + 系统圆角（Win11 默认 roundedCorners），窗口背景色在注入皮肤变量后
+    //   用 setBackgroundColor 对齐 --bg-base-default，圆角外不会露出杂色。
+    trayMenuWin = new BrowserWindow({ width: TRAY_MENU_W, height: 60, show: false, frame: false, transparent: false, roundedCorners: true, resizable: false, movable: false, skipTaskbar: true, alwaysOnTop: true, fullscreenable: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
     trayMenuWin.setMenu(null);
     trayMenuWin.loadFile(path.join(__dirname, 'frontend', 'trayMenu.html'));
     trayMenuWin.on('blur', () => { if (trayMenuWin && !trayMenuWin.isDestroyed()) trayMenuWin.hide(); });
@@ -842,7 +846,13 @@ async function showTrayMenu() {
       var p=names.map(function(n){var v=s.getPropertyValue(n).trim();return v?(n+':'+v):null;}).filter(Boolean).join(';');
       return p;
     })()`);
-    if (cssText) await trayMenuWin.webContents.executeJavaScript("document.getElementById('skinVars').textContent=':root{" + cssText + "}';");
+    if (cssText) {
+      await trayMenuWin.webContents.executeJavaScript("document.getElementById('skinVars').textContent=':root{" + cssText + "}';");
+      // 窗口已改为不透明：取皮肤的 --bg-base-default 作为窗口背景色，
+      // 使圆角外的矩形角落与菜单底色一致（否则会露出默认白/黑角）
+      const mBg = /--bg-base-default:\s*([^;]+)/.exec(cssText);
+      if (mBg) { try { trayMenuWin.setBackgroundColor(mBg[1].trim()); } catch (e) {} }
+    }
   } catch (e) {}
   // 检查更新项仅 UPDATE_ENABLED 时显示
   const updJs = "(function(){var on=" + (UPDATE_ENABLED ? 'true' : 'false') + ";var b=document.getElementById('btnUpdate'),s=document.getElementById('sepUpdate');if(b)b.style.display=on?'':'none';if(s)s.style.display=on?'':'none';})();";

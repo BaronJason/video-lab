@@ -4186,6 +4186,13 @@
         '<span class="mask-proj-item__badge">' + (p.themeCount != null ? p.themeCount : (p.themes ? p.themes.length : 0)) + '种遮罩</span></div>';
     });
     tree.innerHTML = html;
+    // 列表重建后选中项一出生就带 active，::before 的 transition 无从触发（没有 0→1 的变化），
+    // 补一次性 az-fill 划入动画 —— 与批量项目名（.is-filling）同款处理
+    var maskActiveEl = tree.querySelector('.mask-proj-item--active');
+    if (maskActiveEl) {
+      maskActiveEl.classList.add('is-filling');
+      window.setTimeout(function () { maskActiveEl.classList.remove('is-filling'); }, 400);
+    }
     tree.querySelectorAll('.mask-proj-item').forEach(function (el) {
       el.addEventListener('click', function () { selectMaskProject(el.getAttribute('data-maskproj')); });
       // 项目行右键：打开项目文件夹 / 项目设置（样式参考批量模式）

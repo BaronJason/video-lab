@@ -4866,13 +4866,34 @@ body.mask-mode .right-panel__subtitle { display: none; }
   /* 左右内缩与批量项目容器(.tree-project padding 0 12px)对齐，避免项目行顶满侧栏两侧 */
   margin: 0 var(--spacer-12) var(--spacer-4);
   position: relative;
+  isolation: isolate; /* 让 ::before 负 z-index 局限于本元素：背景之上、文字之下 */
+  transition: background 0.1s ease;
+}
+/* 填充层：选中时主题色从左划入填满（与批量 .tree-project__name::before 同款） */
+.mask-proj-item::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--brand-500);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 0.32s ease;
 }
 .mask-proj-item:hover { background: var(--bg-base-tertiary); }
 /* 选中项目：品牌色填充整行（与配置管理模式展开填充一致的视觉） */
-.mask-proj-item--active { background: var(--brand-500); }
+/* 选中项目：与批量项目名（.tree-project__name.is-filled）一致 ——
+   主题色填满整行 + 文字/图标反色；填充本身由 ::before 的 scaleX 过渡完成 */
+.mask-proj-item--active { color: var(--text-onaccent); }
+.mask-proj-item--active::before { transform: scaleX(1); }
+/* 一次性划入：列表重建后选中项一出生就带 active，transition 无从触发 ——
+   与批量项目名（.is-filling）同款，改用 az-fill 动画补上。
+   切换选中时侧栏不重建，走上面 ::before 的 transition（旧行反向收回、新行划入）。 */
+.mask-proj-item.is-filling::before { animation: az-fill 0.32s ease both; }
 .mask-proj-item--active .mask-proj-item__name { color: var(--text-onaccent); }
 .mask-proj-item--active .mask-proj-item__icon { color: var(--text-onaccent); }
-.mask-proj-item__icon { color: var(--text-secondary); flex-shrink: 0; }
+.mask-proj-item__icon { color: var(--text-tertiary); flex-shrink: 0; }
 .mask-proj-item__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--body-base-font-size); color: var(--text-default); }
 /* 徽章：与「共 N 个配置」同款（白底品牌蓝字胶囊 + az-badge-in 入场动画） */
 .mask-proj-item__badge {
@@ -4889,7 +4910,6 @@ body.mask-mode .right-panel__subtitle { display: none; }
   color: var(--brand-500);
   animation: az-badge-in 0.25s ease both;
 }
-.mask-proj-item--active .mask-proj-item__badge { background: rgba(255, 255, 255, 0.15); color: var(--text-onaccent); }
 
 /* 右侧配置区（左右双栏：左原片 / 右遮罩，并排独立滚动） */
 .mask-config { padding: 0 0 20px; height: 100%; min-height: 0; box-sizing: border-box; display: flex; flex-direction: column; }
@@ -10322,13 +10342,34 @@ body.mask-mode .right-panel__subtitle { display: none; }
   /* 左右内缩与批量项目容器(.tree-project padding 0 12px)对齐，避免项目行顶满侧栏两侧 */
   margin: 0 var(--spacer-12) var(--spacer-4);
   position: relative;
+  isolation: isolate; /* 让 ::before 负 z-index 局限于本元素：背景之上、文字之下 */
+  transition: background 0.1s ease;
+}
+/* 填充层：选中时主题色从左划入填满（与批量 .tree-project__name::before 同款） */
+.mask-proj-item::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--brand-500);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 0.32s ease;
 }
 .mask-proj-item:hover { background: var(--bg-base-tertiary); }
 /* 选中项目：品牌色填充整行（与配置管理模式展开填充一致的视觉） */
-.mask-proj-item--active { background: var(--brand-500); }
+/* 选中项目：与批量项目名（.tree-project__name.is-filled）一致 ——
+   主题色填满整行 + 文字/图标反色；填充本身由 ::before 的 scaleX 过渡完成 */
+.mask-proj-item--active { color: var(--text-onaccent); }
+.mask-proj-item--active::before { transform: scaleX(1); }
+/* 一次性划入：列表重建后选中项一出生就带 active，transition 无从触发 ——
+   与批量项目名（.is-filling）同款，改用 az-fill 动画补上。
+   切换选中时侧栏不重建，走上面 ::before 的 transition（旧行反向收回、新行划入）。 */
+.mask-proj-item.is-filling::before { animation: az-fill 0.32s ease both; }
 .mask-proj-item--active .mask-proj-item__name { color: var(--text-onaccent); }
 .mask-proj-item--active .mask-proj-item__icon { color: var(--text-onaccent); }
-.mask-proj-item__icon { color: var(--text-secondary); flex-shrink: 0; }
+.mask-proj-item__icon { color: var(--text-tertiary); flex-shrink: 0; }
 .mask-proj-item__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--body-base-font-size); color: var(--text-default); }
 /* 徽章：与「共 N 个配置」同款（白底品牌蓝字胶囊 + az-badge-in 入场动画） */
 .mask-proj-item__badge {
@@ -10345,7 +10386,6 @@ body.mask-mode .right-panel__subtitle { display: none; }
   color: var(--brand-500);
   animation: az-badge-in 0.25s ease both;
 }
-.mask-proj-item--active .mask-proj-item__badge { background: rgba(255, 255, 255, 0.15); color: var(--text-onaccent); }
 
 /* 右侧配置区（左右双栏：左原片 / 右遮罩，并排独立滚动） */
 .mask-config { padding: 0 0 20px; height: 100%; min-height: 0; box-sizing: border-box; display: flex; flex-direction: column; }

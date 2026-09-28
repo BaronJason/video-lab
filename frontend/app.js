@@ -2769,6 +2769,26 @@
   }
   // ── 中间配置栏复位到"刚启动"样式 ──
   // 触发点：点击侧栏品牌名片、或选中配置后收回项目名；无选中时调用为无害空操作。
+  // 收起当前展开的项目：与点击项目名折叠同款 —— 填充层反向收回、徽章滑出、azbar 收回、
+  // 配置区整体淡出；动画结束后重建侧栏（下方项目渐显）。品牌名片复位时使用。
+  function collapseExpandedProject() {
+    var pname = state.expandedProject;
+    if (!pname) return;
+    var tree = $('sidebarTree');
+    var header = tree && tree.querySelector('.tree-project__name.is-filled');
+    state.expandedProject = null;
+    var azBar = $('azIndexBar'); if (azBar) azBar.classList.remove('is-show');
+    if (!header) return;
+    header.classList.remove('is-filled');
+    var bdg = header.querySelector('.tree-project__badge');
+    if (bdg) {
+      bdg.classList.remove('tree-project__badge--static');
+      bdg.classList.add('tree-project__badge--leave');
+    }
+    var wrap = header.parentElement ? header.parentElement.querySelector('.tree-project__items') : null;
+    if (wrap) wrap.classList.add('tree-project__items--leaving');
+    window.setTimeout(function () { buildSidebar(); }, 200);
+  }
   function resetCenterToLaunch() {
     state.activeProject = null; state.activeTxt = null;
     state.versions = []; state.activeVersion = null; state.configData = null;
@@ -2796,11 +2816,19 @@
         // 遮罩叠加模式：名片点击退出当前项目选择，回到「请选择项目」初始态（不退出模式）。
         // 不重建中间顶部栏：data-maid-chat-active 移除后 header/装饰的退场入场动画自然播放
         maskResetSession();
-        buildMaskSidebar(); buildMaskCenter(); buildMaskConfigBar();
+        // 不重建侧栏：只摘掉选中态，让填充层 / 缎带走 scaleX(1→0) 反向收回动画 ——
+        // 重建会让旧行 DOM 直接销毁，动画根本没机会播放
+        var mTree = $('sidebarTree');
+        if (mTree) mTree.querySelectorAll('.mask-proj-item--active').forEach(function (el) {
+          el.classList.remove('mask-proj-item--active');
+        });
+        buildMaskCenter(); buildMaskConfigBar();
         setStatus('已返回遮罩叠加项目列表');
         return;
       }
-      collapsePreviewPanel(); checkConfigModifiedBeforeLeave(resetCenterToLaunch);
+      collapsePreviewPanel();
+      // 复位到启动态时一并收起已展开的项目（含收回动画），否则项目列表展开着不动
+      checkConfigModifiedBeforeLeave(function () { collapseExpandedProject(); resetCenterToLaunch(); });
     });
     $('sidebarTree').addEventListener('scroll', syncAzHighlight);
     // 右键项目名：打开项目文件夹 / 项目设置（复刻虚拟项目无配置水印，不提供）

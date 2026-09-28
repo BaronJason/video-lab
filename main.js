@@ -1982,6 +1982,11 @@ function registerIpc() {
   });
   // 关闭设置面板（渲染层点击面板外 / Esc 调用）
   ipcMain.handle('close_settings_panel', () => { closeSettingsPanel(); return { ok: true }; });
+  // 内嵌面板标题栏的关闭按钮（设置页 / 引导页共用）：按当前打开的面板分派
+  ipcMain.handle('close_embed_panel', () => {
+    if (guidePanelOpen) closeGuidePanel(); else closeSettingsPanel();
+    return { ok: true };
+  });
   // 设置页：通用「选择目录」对话框（parent 取调用方窗口，引导窗口/设置窗口/主窗口通用）
   ipcMain.handle('pick_directory', async (e, title, defaultPath) => {
     settingsPickingDir = true;
@@ -2260,16 +2265,35 @@ function runAfterWindowLoad(fn) {
 
 // 首次引导窗口：工作路径缺失时打开（仿设置页样式），用户主动点按钮才弹资源管理器；
 // 可保存并关闭，也可直接点右上角关闭跳过（跳过时主窗口进入"空列表 + 中央选择路径"引导态）
-let guideWin = null;
+// 首次引导：改为在主窗口内以 iframe 显示（与设置页同一模式，独立窗口已取消）。
+// 返回 Promise：保存成功或被跳过（关闭）后 resolve，调用方 await 语义保持不变。
+let guidePanelOpen = false;
+let guidePanelResolve = null;
 function openGuideWindow() {
   return new Promise((resolve) => {
-    if (guideWin && !guideWin.isDestroyed()) { guideWin.focus(); return; }
-    guideWin = new BrowserWindow({ title: 'Video Lab - 首次设置', width: 620, height: 420, resizable: false, maximizable: false, minimizable: false, frame: false, show: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
-    // 首帧就绪后再显示：避免「先出现空白窗、再刷出内容」的闪烁（与主窗口一致）
-    guideWin.once('ready-to-show', async () => { await waitForWindowContent(guideWin); try { if (guideWin && !guideWin.isDestroyed()) { guideWin.show(); guideWin.focus(); } } catch (e) {} });
-    guideWin.loadFile(path.join(__dirname, 'frontend', 'guide.html'));
-    guideWin.on('closed', () => { guideWin = null; resolve(); });
+    if (guidePanelOpen) { resolve(); return; }
+    guidePanelOpen = true;
+    guidePanelResolve = resolve;
+    try {
+      if (mainWin && !mainWin.isDestroyed() && mainWin.webContents && !mainWin.webContents.isDestroyed()) {
+        mainWin.webContents.send('guide_window_opened');
+      }
+      if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('guide_window_opened', null);
+    } catch (e) { guidePanelOpen = false; guidePanelResolve = null; resolve(); }
   });
+}
+// 关闭引导面板（保存成功 / 用户跳过 / 标题栏关闭）
+function closeGuidePanel() {
+  if (!guidePanelOpen) return;
+  guidePanelOpen = false;
+  try {
+    if (mainWin && !mainWin.isDestroyed() && mainWin.webContents && !mainWin.webContents.isDestroyed()) {
+      mainWin.webContents.send('guide_window_closed');
+    }
+    if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('guide_window_closed', null);
+  } catch (e) {}
+  const r = guidePanelResolve; guidePanelResolve = null;
+  if (r) { try { r(); } catch (e) {} }
 }// 首次（或配置缺失）时：若有工作路径直接继续；否则打开引导窗口由用户保存或跳过。
 // 跳过（root 仍无效）时保持 root 为空：主窗口进入「空项目列表 + 居中选择路径」引导态
 async function ensureConfig() {

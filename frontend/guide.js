@@ -26,7 +26,14 @@
     if (!root) { setStatus('请先选择工作路径', false); return; }
     $('guideSave').disabled = true;
     api.save_guide({ root: root }).then(function (r) {
-      if (r && r.ok) { window.close(); return; }
+      // 引导页已内嵌为主窗口面板（iframe）：关闭需通知父窗口；window.close() 在 iframe 内无效
+      if (r && r.ok) {
+        try {
+          if (window.self !== window.top) window.parent.postMessage({ type: 'vl-close-guide' }, '*');
+          else window.close();
+        } catch (e) { try { window.close(); } catch (e2) {} }
+        return;
+      }
       $('guideSave').disabled = false;
       setStatus('保存失败：' + ((r && r.error) || '未知错误'), false);
     }).catch(function () { $('guideSave').disabled = false; setStatus('保存失败', false); });

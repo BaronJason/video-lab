@@ -143,6 +143,10 @@ contextBridge.exposeInMainWorld('txapi', {
   notify_dirty: (d) => { try { ipcRenderer.send('settings_dirty', !!d); } catch (e) {} },
   // 关闭设置面板（面板内点击外部 / Esc）：统一走主进程，保持「设置是否打开」的状态一致
   close_settings_panel: () => invoke('close_settings_panel'),
+  // 内嵌面板标题栏关闭按钮（设置页/引导页共用）：主进程按当前面板分派
+  close_embed_panel: () => invoke('close_embed_panel'),
+  on_guide_window_opened: (cb) => { ipcRenderer.on('guide_window_opened', () => { try { cb(); } catch (e) {} }); },
+  on_guide_window_closed: (cb) => { ipcRenderer.on('guide_window_closed', () => { try { cb(); } catch (e) {} }); },
   on_settings_window_opened: (cb) => { ipcRenderer.on('settings_window_opened', () => { try { cb(); } catch (e) {} }); },
   on_settings_window_closed: (cb) => { ipcRenderer.on('settings_window_closed', () => { try { cb(); } catch (e) {} }); },
   on_task_update: (cb) => { ipcRenderer.on('task_update', (e, tasks) => { try { cb(tasks); } catch (err) {} }); },
@@ -174,7 +178,7 @@ contextBridge.exposeInMainWorld('txapi', {
   window_caps: () => (IN_SUBFRAME ? Promise.resolve({ minimizable: false, maximizable: false, closable: true }) : invoke('window_caps')),
   window_minimize: () => (IN_SUBFRAME ? Promise.resolve({ ok: true }) : invoke('window_minimize')),
   window_toggle_maximize: () => (IN_SUBFRAME ? Promise.resolve({ ok: true }) : invoke('window_toggle_maximize')),
-  window_close: () => (IN_SUBFRAME ? invoke('close_settings_panel') : invoke('window_close')),
+  window_close: () => (IN_SUBFRAME ? invoke('close_embed_panel') : invoke('window_close')),
   listen_window_max: () => { try { ipcRenderer.send('window_max_changed_listen'); } catch (e) {} },
   on_window_max_changed: (cb) => { ipcRenderer.on('window_max_changed', (e, m) => { try { cb(!!m); } catch (err) {} }); },
 });

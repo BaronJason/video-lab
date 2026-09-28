@@ -2561,6 +2561,15 @@
     // 内嵌设置面板的关闭交互：点击面板外空白处 或 按 Esc ——
     // 统一走主进程 close_settings_panel，再由 settings_window_closed 广播收尾，
     // 保证主进程"设置是否打开"的状态与界面一致（托盘/快捷键都依赖它）
+    // 引导面板（首次设置，工作路径缺失时）：同为内嵌 iframe
+    if (window.txapi && window.txapi.on_guide_window_opened) window.txapi.on_guide_window_opened(function () { var g = $('guideDim'); if (g) g.style.display = 'block'; });
+    if (window.txapi && window.txapi.on_guide_window_closed) window.txapi.on_guide_window_closed(function () { var g = $('guideDim'); if (g) g.style.display = 'none'; });
+    // 内嵌 iframe（设置页 / 引导页）内请求关闭：统一走主进程 close_embed_panel，
+    // 由主进程按当前打开的面板分派，并广播 closed 事件收尾
+    window.addEventListener('message', function (e) {
+      var t = e && e.data && e.data.type;
+      if (t === 'vl-close-guide' && window.txapi && window.txapi.close_embed_panel) window.txapi.close_embed_panel();
+    });
     var dimEl = $('settingsDim');
     if (dimEl) dimEl.addEventListener('mousedown', function (e) {
       if (e.target !== dimEl) return;   // 点在 iframe 面板上不关闭

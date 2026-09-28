@@ -1160,6 +1160,12 @@ html[data-skin="Maid_Atelier"] .mask-proj-item--active .mask-proj-item__name { c
 html[data-skin="Maid_Atelier"] .mask-proj-item::before {
   content: '';
   position: absolute;
+  /* 与批量 .tree-project__name::before 同款：清掉全局的主题色底与圆角，
+     缎带完全由 border-image 绘制 —— 否则选中时缎带下会透出主题色底色 */
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
   inset: -3px 0 -3px -12px;
   z-index: -1;
   transform: scaleX(0);

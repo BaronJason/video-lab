@@ -446,9 +446,10 @@
       if (e.target.closest('.task-card__continue')) return;
       if (e.target.closest('.task-card__pause')) return;
       if (e.target.closest('.task-card__handle')) return;
-      // 排队中任务尚未开始，日志无有用信息，点击不展开
+      // 只有「真正从未运行过」的任务（排队中且从未启动过）日志无有用信息，点击不展开；
+      // 软暂停的任务已跑过一部分，续跑后排队等待时也带着既有日志 —— 这些都应允许展开
       var curT = card.__task || t;
-      if (curT.status === 'queued') return;
+      if (curT.status === 'queued' && !curT.startedAt) return;
       record.expanded = !record.expanded;
       body.style.display = record.expanded ? '' : 'none';
       if (record.expanded) { record.following = true; record._progScroll = true; scrollLogBottom(log); requestAnimationFrame(function () { record._progScroll = true; scrollLogBottom(log); }); }
@@ -507,6 +508,9 @@
         });
         return;
       }
+      // 软暂停的任务已产出部分成片：删除会牵连文件，与已结束任务同款走「清除方式」三按钮大窗。
+      // （真正从未运行过的任务在上面已按轻量气泡处理，不会走到这里）
+      if (cur.status === 'paused') { openClearDialog(null, { ids: [cur.id], statuses: ['paused'] }); return; }
       if (cur.status === 'stopped' || cur.status === 'error' || cur.status === 'interrupted') {
         openClearDialog(null, { ids: [cur.id], statuses: ['stopped', 'error', 'interrupted'] });
         return;
@@ -704,10 +708,13 @@
     stopBtn.style.display = showOps ? '' : 'none';
     stopBtn.disabled = !canStop;
     stopBtn.title = t.status === 'running' ? '终止运行中的任务进程' : (canStop ? '取消该任务，不再执行' : '任务已结束');
-    // 单行删除按钮：仅已结束任务（完成/停止/失败/已中断）且在已完成/已停止列表显示
+    // 单行删除按钮：已结束任务（完成/停止/失败/已中断）在已完成/已停止列表显示；
+    // 软暂停任务已产出部分成片，在「正在运行」列表同样要能删除（走三按钮大窗确认）。
+    // 真正从未运行过的任务（排队中且从未启动）不在此列 —— 它没有产物，用「取消」即可。
     var delBtn = rec.header.querySelector('.task-card__del');
     var isEnded = t.status === 'done' || t.status === 'stopped' || t.status === 'error' || t.status === 'interrupted';
-    delBtn.style.display = (isEnded && state.tab !== 'running') ? '' : 'none';
+    var isSoftPaused = t.status === 'paused' && !!t.startedAt;
+    delBtn.style.display = ((isEnded && state.tab !== 'running') || (isSoftPaused && state.tab === 'running')) ? '' : 'none';
     // 重新开始按钮：仅失败/中断/停止任务（已停止 tab）显示，点击按原配置重制
     var rerunBtn = rec.header.querySelector('.task-card__rerun');
     var canRerun = t.status === 'error' || t.status === 'interrupted' || t.status === 'stopped';

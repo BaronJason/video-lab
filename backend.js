@@ -5581,12 +5581,28 @@ class Api {
     return found;
   }
 
-  // 归档配置三级查找：成片目录下同名 → 原目录下同名 → 成片目录内唯一非日志 TXT
+  // 归档配置查找（按优先级叠加多个查找源，任一命中即返回）：
+  //   ① 任务自身记录的目录（done 任务经 _verifyBatchOutDirs 重算过，最可靠）；
+  //   ② 运行时写入标记的权威输出目录 marker.batchOutDir —— 软暂停/停止/中断等非 done 任务
+  //      也一定有（引擎启动即上报输出目录），但此时 t.outDir 尚未被重算，必须用标记兜底；
+  //   ③ 按「提交时刻 + 配置名」确定性推算目录（覆盖标记缺失/被清理的极端情形）；
+  //   ④ 原 TXT 所在目录（配置未被移走的常规路径）。
+  // 此前只用了 ① 与 ④：非 done 任务 t.outDir 缺失 → 找不到被引擎移入输出目录的 TXT 正本 →
+  //   软暂停「继续」续跑报「未通过环境变量 REPLICA_TXT 提供 TXT 文件」，而先「停止」再续跑却正常
+  //   （停止态偶然能命中 ④ 或曾短暂拥有 t.outDir）。补齐 ②③ 后两条路径行为一致。
   _findArchivedConfig(oldPath, t) {
     const cur = String(oldPath || '');
     const base = cur ? path.basename(cur) : '';
     const dirs = [];
     if (t && t.outDir) dirs.push(t.outDir);
+    try {
+      const marker = this._loadMarker(t);
+      if (marker && marker.batchOutDir) dirs.push(marker.batchOutDir);
+    } catch (e) {}
+    try {
+      const detail = this._batchTaskOutDetail(t, true);
+      if (detail && detail.outDir) dirs.push(detail.outDir);
+    } catch (e) {}
     if (cur) dirs.push(path.dirname(cur));
     for (const d of dirs) {
       if (!d) continue;

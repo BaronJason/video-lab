@@ -33,22 +33,44 @@
   // 做法：以最后一次写入的 html 作为指纹，相同则完全不动 DOM。
   function setHtmlIfChanged(el, html, animate) {
     if (!el) return false;
-    if (el.__vlLastHtml === html) return false;
+    // 哨兵校验：外部整片重写容器（模式切换等）时容器元素本身不变，仅比对 html 指纹察觉不到，
+    // 会误判「内容未变」而跳过重建 → 配置区空白。故同时校验上次写入的首个子节点是否仍在。
+    var intact = !!el.__vlFirst && el.__vlFirst.parentNode === el;
+    if (el.__vlLastHtml === html && intact) {
+      // 内容未变：不重建 DOM（复用）。但 animate 表示"这是用户主动切换"—— 切换需要视觉反馈，
+      // 若挂靠「内容是否变化」判定，复用生效时反而播不出过渡，故此时同样要播。
+      if (animate) playSwap(el);
+      return false;
+    }
     el.__vlLastHtml = html;
     el.innerHTML = html;
-    // 内容真的变了才触发过渡：remove 后重加 class 可重启动画；首次渲染（尚无指纹）
-    // 或调用方未要求动画时不加，避免启动 / 静默场景闪烁。
-    if (animate) {
-      el.classList.remove('vl-swap');
-      void el.offsetWidth;
-      el.classList.add('vl-swap');
-    }
+    el.__vlFirst = el.firstElementChild;
+    // 首次渲染（尚无指纹）与静默场景不播，避免启动闪烁
+    if (animate) playSwap(el);
     return true;
   }
   // 外部逻辑可能绕过 setHtmlIfChanged 直接改写容器（模式切换、清空视图等），
   // 此时须丢弃指纹，避免下一次因"内容相同"而误跳过重建。
   function resetHtmlCache(el) {
-    if (el) el.__vlLastHtml = undefined;
+    if (el) { el.__vlLastHtml = undefined; el.__vlFirst = null; }
+  }
+  // 模式切换（进入/退出遮罩）时统一丢弃指纹：遮罩模块整片重写这些容器而不走 setHtmlIfChanged，
+  // 残留指纹会让切回批量时误判「内容未变」而跳过重建 —— 表现为中间配置区空白；
+  // 空白又使 configSnapshot 读到空值，进一步误判配置已修改（切配置时弹「未保存」）。
+  var SWAP_CACHE_IDS = ['sidebarTree', 'centerTop', 'dateBranches', 'centerBottom', 'configBar', 'rightPanelContent'];
+  function resetSwapCaches() {
+    SWAP_CACHE_IDS.forEach(function (id) { resetHtmlCache(document.getElementById(id)); });
+  }
+  // 模式切换（批量 ↔ 遮罩）是用户主动发起的大变化，过渡必须无条件触发 ——
+  // 不能挂靠 setHtmlIfChanged 的「内容是否变化」判定：复用生效时内容可能完全一致而不播。
+  function playSwap(el) {
+    if (!el) return;
+    el.classList.remove('vl-swap');
+    void el.offsetWidth; // 强制回流以重启动画
+    el.classList.add('vl-swap');
+  }
+  function playSwapNow() {
+    SWAP_CACHE_IDS.forEach(function (id) { playSwap(document.getElementById(id)); });
   }
   // 路径 → 文件名（不含扩展名）；用于水印栏简洁展示
   function baseNameNoExt(p) {
@@ -1358,6 +1380,9 @@
     }
     var dragged = null;
     var container = $('centerBottom');
+    // 配置区未渲染（模式切换窗口期 / 内容被外部重写而复用判定跳过重建）时，
+    // 容器或路径列表可能不存在 —— 直接返回，避免 null.addEventListener 中断整个配置读取流程
+    if (!container || !pathList) return;
     function onContainerClick(e) {
       var t = e.target.closest('button, .config-path-row__open, .config-path-row__remove, .config-watermark__path');
       if (!t) return;
@@ -2801,7 +2826,7 @@
     state.mode = 'filelist';
     state._configOrig = null; state._configOrigSnapshot = null;
     state._logBranchToken = null;
-    var bar = $('configBar'); if (bar) bar.innerHTML = '';
+    var bar = $('configBar'); if (bar) setHtmlIfChanged(bar, '');
     var act = $('sidebarTree').querySelector('.tree-txt-item--active');
     if (act) act.classList.remove('tree-txt-item--active');
     // 收回项目/品牌名片视为退出日志模式：进入日志时若折叠，此处恢复折叠
@@ -4018,6 +4043,7 @@
     }
   }
   function enterMaskMode() {
+    resetSwapCaches();
     maskState.on = true; maskResetSession(); maskState.view = 'config';
     document.body.classList.add('mask-mode');
     updateWinModeLabel(); // 标题栏模式按钮 → 遮罩叠加
@@ -4044,6 +4070,7 @@
       }
     }).catch(function () {});
     setStatus('遮罩叠加模式：左侧选项目，中间配置素材/查看日志，底部设模式与输出后开始制作');
+    playSwapNow();
   }
   // 中间区顶部：标题 + 配置/日志模式切换（遮罩模式隐藏全局成片搜索栏，退出时恢复批量）
   function buildMaskCenterHeader() {
@@ -4052,14 +4079,14 @@
     if (gs) gs.style.display = 'none'; // 遮罩模式不使用全局成片搜索栏
     var top = $('centerTop');
     if (top) {
-      top.innerHTML = '<div class="center-top__header">' +
+      setHtmlIfChanged(top, '<div class="center-top__header">' +
         '<span class="center-top__title">遮罩叠加</span>' +
         '<div class="center-top__toggles">' +
         '<button class="mode-toggle' + (maskState.view === 'config' ? ' mode-toggle--active' : '') + '" data-maskview="config" id="maskViewConfig">' + icon('list', 12) + '配置</button>' +
         '<button class="mode-toggle' + (maskState.view === 'log' ? ' mode-toggle--active' : '') + '" data-maskview="log" id="maskViewLog">' + icon('scroll-text', 12) + '日志</button>' +
         '</div></div>' +
         '<div class="center-top__dates" id="maskDateBranches"></div>' +
-        '<div class="center-top__ornament-host" id="maskOrnamentHost" aria-hidden="true"></div>';
+        '<div class="center-top__ornament-host" id="maskOrnamentHost" aria-hidden="true"></div>');
       // 日期分支栏仅在日志视图显示（配置视图不占位）
       var mb = $('maskDateBranches');
       if (mb) mb.style.display = (maskState.view === 'log') ? '' : 'none';
@@ -4095,20 +4122,20 @@
   function restoreBatchCenterTop() {
     var top = $('centerTop');
     if (!top) return;
-    top.innerHTML = '<div class="center-top__header">' +
+    setHtmlIfChanged(top, '<div class="center-top__header">' +
       '<span class="center-top__title">日期分支</span>' +
       '<div class="center-top__toggles">' +
       '<button class="mode-toggle mode-toggle--active" data-mode="filelist" id="modeFilelist">' + icon('list', 12) + '配置列表</button>' +
       '<button class="mode-toggle" data-mode="log" id="modeLog">' + icon('scroll-text', 12) + '日志</button>' +
       '</div></div>' +
-      '<div class="center-top__dates" id="dateBranches"></div>';
+      '<div class="center-top__dates" id="dateBranches"></div>');
     // 恢复右侧预览结构（遮罩模式重写过 rightPanelContent，行号/代码容器需重建）
     var rc = $('rightPanelContent');
     if (rc && !$('rightLineNumbers')) {
-      rc.innerHTML = '<div class="right-panel__line-numbers" id="rightLineNumbers"></div><div class="right-panel__code" id="rightCode"></div>';
+      setHtmlIfChanged(rc, '<div class="right-panel__line-numbers" id="rightLineNumbers"></div><div class="right-panel__code" id="rightCode"></div>');
     }
     // 底栏留给批量流程填充：退出时清空遮罩残留
-    var bar = $('configBar'); if (bar) bar.innerHTML = '';
+    var bar = $('configBar'); if (bar) setHtmlIfChanged(bar, '');
     var mf2 = $('modeFilelist'), ml2 = $('modeLog');
     if (mf2) mf2.addEventListener('click', function () {
       state.mode = 'filelist'; mf2.classList.add('mode-toggle--active'); if (ml2) ml2.classList.remove('mode-toggle--active');
@@ -4132,6 +4159,7 @@
     buildMaskRight(true);
   }
   function exitMaskMode() {
+    resetSwapCaches();
     maskState.on = false; maskResetSession();
     document.body.classList.remove('mask-mode');
     updateWinModeLabel(); // 标题栏模式按钮 → 配置管理
@@ -4158,6 +4186,7 @@
         buildRightPanel();
       }
       setStatus('已退出遮罩叠加模式');
+      playSwapNow();
     });
   }
   function refreshMaskProjects() {

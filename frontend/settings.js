@@ -21,10 +21,6 @@
     replica: { max_duration: '', speed_limit: '', dedup_ratio: '', dedup_ratio_max: '', dedup_ratio_on: true, dedup_ratio_max_on: true },
     mask: { root: '', watermark_mov: '', watermark_alpha: '' }
   };
-  // 保存按钮启用跟踪：记录加载后的原始值，任意一行变动即高亮该行并启用保存
-  var origValues = {};
-  var originalSkin = null;
-
   // 轻量 Markdown 渲染（标题 / 有序无序列表 / 表格 / 引用 / 行内链接与粗体 / 代码块 / 空行）
   function renderMd(text) {
     var esc = function (s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
@@ -88,78 +84,31 @@
     return html;
   }
 
-  // 为每个输入框左侧插入红色 *（未保存时显示）
+  // 绑定「变更即保存」：原先 wrapAllInputs 同时负责插红色 *（未保存标记）与绑定变更事件；
+  // 取消「未保存」概念后星号与包裹层都不要了，只保留事件绑定（即时保存靠它触发）。
   function wrapAllInputs() {
     document.querySelectorAll('.form-input').forEach(function (input) {
       if (input.dataset.wrapped) return;
-      // 端口/令牌输入框不参与包裹：无必填 *、不被场行强制整行宽（保持自定义宽度）
-      if (input.id === 'httpPort' || input.id === 'httpToken') {
-        input.dataset.wrapped = '1';
-        input.addEventListener('input', recomputeDirty);
-        input.addEventListener('change', recomputeDirty);
-        return;
-      }
       input.dataset.wrapped = '1';
-      var wrap = document.createElement('div');
-      wrap.className = 'field-row';
-      var mark = document.createElement('span');
-      mark.className = 'field-row__mark';
-      mark.textContent = '*';
-      input.parentNode.insertBefore(wrap, input);
-      wrap.appendChild(mark);
-      wrap.appendChild(input);
       input.addEventListener('input', recomputeDirty);
       input.addEventListener('change', recomputeDirty);
     });
   }
 
-  function captureOriginals() {
-    origValues = {};
-    document.querySelectorAll('.form-input').forEach(function (input) { origValues[input.id] = String(input.value); });
-    document.querySelectorAll('input[type=checkbox]').forEach(function (input) { origValues[input.id] = input.checked; });
-    // 同名 radio 视为一组，只记录组内当前选中值，避免后项覆盖导致误判
-    var seenRadios = {};
-    document.querySelectorAll('input[type=radio]').forEach(function (input) {
-      if (seenRadios[input.name]) return;
-      seenRadios[input.name] = true;
-      var checked = document.querySelector('input[type=radio][name="' + input.name + '"]:checked');
-      origValues['radio:' + input.name] = checked ? checked.value : '';
-    });
-    originalSkin = document.documentElement.getAttribute('data-skin');
+  // ── 全即时保存（用户 2026-09-28 定案）──
+  // 设置页取消「保存」按钮与「未保存」概念：任何改动都在防抖后直接落库。
+  // 依据：① 设置项都是开关与标量，不存在"编辑半成品"的语义（那是配置编辑器的场景）；
+  //      ② 「未保存」状态在本项目反复引发时序类故障（切项目/切配置/关闭时的拦截弹窗）。
+  // 做法：沿用 recomputeDirty 这个名字 —— 它原本就挂在所有输入/复选/单选/标签变更上（13 处），
+  //      内部改为「排一次防抖保存」，于是全部改动点自动升级为即时保存。
+  var _saveTimer = null;
+  function scheduleSave() {
+    if (_saveTimer) clearTimeout(_saveTimer);
+    _saveTimer = setTimeout(function () { _saveTimer = null; collectAndSave(true); }, 400);
   }
 
   function recomputeDirty() {
-    var dirty = false;
-    document.querySelectorAll('.form-input').forEach(function (input) {
-      var group = input.closest('.form-group');
-      var changed = origValues[input.id] !== undefined && String(input.value) !== origValues[input.id];
-      if (changed) dirty = true;
-      if (group) group.classList.toggle('is-dirty', changed);
-    });
-    document.querySelectorAll('input[type=checkbox]').forEach(function (input) {
-      var group = input.closest('.form-group');
-      var changed = origValues[input.id] !== undefined && input.checked !== origValues[input.id];
-      if (changed) dirty = true;
-      if (group) group.classList.toggle('is-dirty', changed);
-    });
-    var seenRadios = {};
-    document.querySelectorAll('input[type=radio]').forEach(function (input) {
-      if (seenRadios[input.name]) return;
-      seenRadios[input.name] = true;
-      var group = input.closest('.form-group');
-      var checked = document.querySelector('input[type=radio][name="' + input.name + '"]:checked');
-      var changed = origValues['radio:' + input.name] !== undefined && (checked ? checked.value : '') !== origValues['radio:' + input.name];
-      if (changed) dirty = true;
-      if (group) group.classList.toggle('is-dirty', changed);
-    });
-    var themeGroup = $('themeRow') ? $('themeRow').closest('.form-group') : null;
-    if (themeGroup) {
-      var skinChanged = document.documentElement.getAttribute('data-skin') !== originalSkin;
-      if (skinChanged) dirty = true;
-      themeGroup.classList.toggle('is-dirty', skinChanged);
-    }
-    $('btnSave').disabled = false; // 保存按钮任何时候可用
-    if (api && api.notify_dirty) api.notify_dirty(dirty);
+    scheduleSave();
   }
 
   function setSkin(id) {
@@ -445,8 +394,7 @@
       $('maskAlpha').value = mk.watermark_alpha != null && String(mk.watermark_alpha).trim() !== '' ? mk.watermark_alpha : '';
       setupMultiTags('batchTxtPrefix', 'batchTxtPrefixTags', function () { return state.batch.txt_prefix; }, onBatchTagsChanged, 'batchTxtPrefixCaret');
       updatePreview();
-      captureOriginals();
-      recomputeDirty();
+      // 读取设置完毕：不再需要记录原始值（已无「未保存」概念），也不触发保存
     }).catch(function (e) { setStatus('读取设置失败：' + ((e && e.message) || e), false); });
   }
 
@@ -474,25 +422,18 @@
       setTimeout(function () { try { el.remove(); } catch (e) {} }, 300);
     }, 3200);
   }
+  // 底部状态栏已移除（用户 2026-09-28：那个栏除了一行平时空着的状态没别的内容，
+  // 关闭由标题栏右上角按钮承接）→ 进度与结果提示统一走 toast。
   function setStatus(msg, ok) {
-    var el = $('settingsStatus');
     var s = String(msg || '');
-    // 过程提示（「正在…」）只写状态栏小字；结果提示只走 toast —— 同一件事不再双份提示
+    if (!s) return;
     var isProgress = /^正在/.test(s) || /…$/.test(s) || /\.\.\.$/.test(s);
-    if (isProgress) {
-      el.textContent = s;
-      el.classList.toggle('is-error', !ok);
-      return;
-    }
-    el.textContent = '';
-    el.classList.remove('is-error');
+    // 过程提示用 info 样式；结果提示用 ok / error
+    if (isProgress) { toast(s, ok === false ? 'error' : 'info'); return; }
     // ⚠ ok 必须显式传：省略会被当作成功（走 'ok' 样式），错误提示务必传 false
-    if (s) toast(s, ok === false ? 'error' : 'ok');
+    toast(s, ok === false ? 'error' : 'ok');
   }
   function statusTimer() { setStatus('', true); }
-
-  var btnSave = $('btnSave');
-  if (btnSave) btnSave.disabled = false; // 保存按钮任何时候可用
 
   function bindNav() {
     var changelogLoaded = false;
@@ -569,8 +510,10 @@
     });
   }
 
-  function bindSave() {
-    $('btnSave').addEventListener('click', function () {
+  // 收集全部设置项并落库。silent=true 表示由即时保存触发：
+  // 此时必填项可能正被用户改写，校验失败只静默跳过，不弹「参数未设置」打扰输入。
+  function collectAndSave(silent) {
+    {
       state.batch.root = $('cfgRoot').value.trim();
       state.batch.max_duration = $('batchMaxDuration').value.trim();
       state.batch.max_retry = $('batchMaxRetry').value.trim();
@@ -599,7 +542,8 @@
       var rdMin = parseFloat(state.replica.dedup_ratio), rdMax = parseFloat(state.replica.dedup_ratio_max);
       if (state.replica.dedup_ratio_max_on && !(rdMax > 0)) missing.push('视频复刻·重复度上限');
       if (state.replica.dedup_ratio_max_on && rdMax > 0 && rdMin > 0 && rdMax < rdMin) missing.push('视频复刻·重复度上限（不能小于下限）');
-      if (missing.length) { setStatus('参数未设置：' + missing.join('、'), false); return; }
+      // 即时保存（silent）时必填项可能正被用户改写 → 只跳过，不弹「参数未设置」打扰输入
+      if (missing.length) { if (!silent) setStatus('参数未设置：' + missing.join('、'), false); return; }
 
       var skin = document.documentElement.getAttribute('data-skin') || THEMES[0].id;
       var storageEl = document.querySelector('input[name="configStorage"]:checked');
@@ -627,12 +571,13 @@
         mask: state.mask
       }).then(function (res) {
         if (res && res.ok) {
-          setStatus('已保存', true); setTimeout(statusTimer, 2000); captureOriginals(); recomputeDirty();
+          // 即时保存给一个轻量反馈（不再有「保存」按钮，用户需要知道改动已落库）
+          setStatus(silent ? '已自动保存' : '已保存', true); setTimeout(statusTimer, 1500);
           if (res.config_moved) setStatus('配置和数据位置已切换并生效，配置与缓存库已自动迁移', true);
         }
-        else setStatus('保存失败', false);
-      }).catch(function () { setStatus('保存失败', false); });
-    });
+        else if (!silent) setStatus('保存失败', false);
+      }).catch(function () { if (!silent) setStatus('保存失败', false); });
+    }
 
     // 手动检查更新：发现新版本时在设置页内弹二次确认（是否下载）；下载进度/完成在主窗口体现
     var cu = $('btnCheckUpdate');
@@ -686,25 +631,8 @@
     var mConfirmMask = $('updateConfirmMask');
     if (mConfirmMask) mConfirmMask.addEventListener('click', function (e) { if (e.target === mConfirmMask) hideUpdateConfirm(); });
 
-    $('btnClose').addEventListener('click', function () {
-      // iframe 内嵌模态（浏览器侧打开设置）：通知父窗口关闭模态；本体直接关窗口
-      if (window.self !== window.top) { try { window.parent.postMessage({ type: 'vl-close-settings' }, '*'); } catch (e) {} return; }
-      window.close();
-    });
-    // 未保存修改时关闭的二级确认浮层：取消返回设置，确认放弃修改直接关闭
-    var discardPop = $('discardPop');
-    var btnDiscardCancel = $('discardCancel');
-    var btnDiscardConfirm = $('discardConfirm');
-    function showDiscardPop() { if (discardPop) discardPop.style.display = ''; }
-    function hideDiscardPop() { if (discardPop) discardPop.style.display = 'none'; }
-    if (btnDiscardCancel) btnDiscardCancel.addEventListener('click', hideDiscardPop);
-    if (btnDiscardConfirm) btnDiscardConfirm.addEventListener('click', function () {
-      if (api && api.force_close_settings) api.force_close_settings();
-    });
-    if (api && api.on_confirm_discard) api.on_confirm_discard(showDiscardPop);
-    document.addEventListener('mousedown', function (e) {
-      if (discardPop && discardPop.style.display !== 'none' && !discardPop.contains(e.target)) hideDiscardPop();
-    });
+    // 关闭按钮已移除：设置页的退出由外层控制
+    // （独立窗口：失焦且主窗口获焦时自动关闭；内嵌为主窗口面板后：由面板显隐控制）
     setupMultiTags('batchTxtPrefix', 'batchTxtPrefixTags', function () { return state.batch.txt_prefix; }, onBatchTagsChanged, 'batchTxtPrefixCaret');
     // 后缀/创作者改动需先同步 state 再刷新预览 —— updatePreview 读的是 state，
     // 只调刷新不回写 state 的话，预览永远不包含刚输入的内容
@@ -716,16 +644,6 @@
       state.batch.producer = $('batchProducer').value.trim();
       updatePreview();
     });
-  }
-
-  function flashCloseButton() {
-    var s = $('settingsStatus');
-    if (!s) return;
-    s.textContent = '有未保存的修改，请先保存';
-    s.classList.remove('is-flash');
-    void s.offsetWidth;
-    s.classList.add('is-flash');
-    setTimeout(function () { s.classList.remove('is-flash'); s.textContent = ''; }, 1600);
   }
 
   // 全局错误兜底：未捕获异常 / 未处理的 Promise 拒绝一律弹提示 ——
@@ -752,14 +670,12 @@
 
   function init() {
     wrapAllInputs();
-    // 勾选框/单选切换也参与未保存修改标记（保存按钮始终可用，此项用于关闭确认与高亮）
+    // 勾选 / 单选切换同样触发即时保存；已无「未保存」标记概念
     document.querySelectorAll('input[type=checkbox], input[type=radio]').forEach(function (input) {
       input.addEventListener('change', recomputeDirty);
     });
     buildThemeRow();
     bindNav();
-    bindSave();
-    if (api && api.on_settings_flash_close) api.on_settings_flash_close(flashCloseButton);
     // 右上角 GitHub 按钮：打开主仓库主页
     var gh = document.getElementById('btnGitHub');
     if (gh && api && api.open_external) gh.addEventListener('click', function () {

@@ -219,29 +219,11 @@ body {
 .multi-tags__caret:hover { color: var(--text-default); background: var(--bg-base-hover); }
 .form-group.is-tags-open .multi-tags__caret { transform: translateY(-50%) rotate(180deg); color: var(--text-default); }
 
-/* 输入框行：* 绝对定位叠加在输入框内部右侧，不移动框体、不改各框尺寸 */
+/* 输入框行容器（已取消「未保存」星号标记，仅保留基础定位） */
 .field-row { position: relative; }
-.field-row .form-input {
-  width: 100%;
-  padding: 7px 26px 7px 10px; /* 右侧预留 * 位置，框体尺寸恒一致 */
-}
-.field-row__mark {
-  position: absolute;
-  right: 9px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: none;
-  color: var(--status-error-default, #E5484D);
-  font-weight: 700;
-  line-height: 1;
-  z-index: 2;
-  pointer-events: none;
-}
-.form-group.is-dirty .form-input { border-color: var(--status-error-default, #E5484D); }
-.form-group.is-dirty .field-row__mark { display: inline; }
+.field-row .form-input { width: 100%; }
 
 .dir-row { display: flex; gap: 8px; }
-.dir-row .field-row { flex: 1; }
 /* 浏览器访问区块（端口/令牌/链接三行）：行间距拉开，避免贴在一起 */
 .form-group--http .dir-row { margin-bottom: 10px; }
 .form-group--http .dir-row:last-of-type { margin-bottom: 0; }
@@ -288,16 +270,6 @@ body {
   color: var(--text-disabled);
   cursor: not-allowed;
 }
-/* 失焦且未保存时的保存提醒：关闭按钮左侧状态文字闪红 */
-.settings-footer__status.is-flash {
-  color: var(--status-error-default, #E5484D) !important;
-  animation: settingsCloseFlash 0.5s ease-in-out 4;
-}
-@keyframes settingsCloseFlash {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
-}
-
 /* ─── 主题选择 ─── */
 .theme-row { display: flex; gap: 10px; }
 .theme-item {
@@ -352,27 +324,13 @@ body {
   user-select: text;
 }
 
-/* ─── 底部操作栏 ─── */
-.settings-footer {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  justify-content: flex-end;
-  padding: 12px 16px;
-  border-top: 1px solid var(--border-neutral-l1);
-  background: var(--bg-base-secondary);
-}
-.settings-footer__status {
-  flex: 1;
-  font-size: 12px;
-  color: var(--status-success-default, #15A877);
-}
-.settings-footer__status.is-error { color: var(--status-error-default, #E5484D); }
-
 /* 微调滚动条 */
 .settings-view::-webkit-scrollbar { width: 8px; }
 .settings-view::-webkit-scrollbar-thumb { background: var(--border-neutral-l2); border-radius: 4px; }
+
+/* toast 位置：共享的 styles.css 里为避免遮挡主窗口右下角三按钮设了 bottom:84px；
+   设置页没有底部操作栏（用户 2026-09-28 已移除），这里覆盖到底部常规位置 */
+.toast-host { bottom: 16px; }
 
 /* ─── 更新 / 配置保存位置（勾选与单选） ─── */
 .opt-row { display: flex; align-items: center; padding: 4px 0; gap: 8px; }
@@ -433,62 +391,6 @@ body {
   word-break: break-all;
 }
 .opt-actions { margin-top: 8px; }
-
-/* ─── 未保存修改时点关闭的二级确认浮层（锚定在关闭按钮上方） ─── */
-.discard-pop {
-  position: fixed;
-  right: 70px;
-  bottom: 62px;
-  z-index: 120;
-  min-width: 232px;
-  padding: 12px 14px;
-  background: var(--bg-base-default);
-  border: 1px solid var(--border-neutral-l2);
-  border-radius: 8px;
-  box-shadow: 0 12px 32px color-mix(in srgb, var(--text-default) 16%, transparent);
-  animation: discard-pop-in 0.16s ease-out;
-  transform-origin: right bottom;
-}
-@keyframes discard-pop-in {
-  from { opacity: 0; transform: translateY(8px) scale(0.98); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
-.discard-pop__arrow {
-  position: absolute;
-  right: 56px;
-  bottom: -6px;
-  width: 10px;
-  height: 10px;
-  background: var(--bg-base-default);
-  border-right: 1px solid var(--border-neutral-l2);
-  border-bottom: 1px solid var(--border-neutral-l2);
-  transform: rotate(45deg);
-}
-.discard-pop__title {
-  font-family: var(--font-family-default);
-  font-size: 14px;
-  font-weight: var(--font-weight-strong);
-  color: var(--text-default);
-}
-.discard-pop__desc {
-  margin-top: 2px;
-  font-family: var(--font-family-default);
-  font-size: 12px;
-  color: var(--text-tertiary);
-}
-.discard-pop__actions {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-  margin-top: 10px;
-}
-.discard-pop__btn { padding: 5px 14px; font-size: 13px; }
-.discard-pop__btn--primary {
-  background: var(--brand-500);
-  border-color: var(--brand-500);
-  color: var(--text-onaccent, #fff);
-}
-.discard-pop__btn--primary:hover { background: var(--brand-600); }
 
 /* ─── 检查更新二次确认弹窗（居中模态） ─── */
 .update-confirm-mask {

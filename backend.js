@@ -5447,9 +5447,9 @@ class Api {
       try { names = fs.readdirSync(dir); } catch (e) { return []; }
       const done = new Set();
       for (const f of names) {
-        // 临时产物不算完成（引擎先写 `*.tmp.mp4`、成功后原子改名，见 batch/index.js）：
+        // 临时产物不算完成（引擎先写 `*.mp4.tmp`、成功后原子改名，见 batch/index.js）：
         // 否则编码中途留下的半截文件会被当成"已完成"，该序号被永久跳过。
-        if (/\.tmp\.mp4$/i.test(f) || /\.bak$/i.test(f)) continue;
+        if (/\.tmp\.mp4$|\.mp4\.tmp$/i.test(f) || /\.bak$/i.test(f)) continue;
         if (!VIDEO_EXTS.has(path.extname(f).toLowerCase())) continue;
         const m = /-([^-\d]*)(\d+)([A-Z]?)$/.exec(path.basename(f, path.extname(f)));
         if (m) { const n = parseInt(m[2], 10); if (n > 0) done.add(n); }
@@ -5473,7 +5473,7 @@ class Api {
   // 为什么必须先做：反推「还缺哪些序号」依据的是"文件在不在"，而**半截文件也在**——
   // 不清理就会把损坏成片当成已完成、永久跳过该序号（用户拿不到片子，且不会报错）。
   // ⚠ 安全原则（务必保守）：**只在能明确判定损坏时才动文件**。
-  //   · `.tmp.mp4`（引擎临时产物）→ 直接删（100% 安全：正式名才是交付物）；
+  //   · `*.mp4.tmp`（引擎临时产物）→ 直接删（100% 安全：正式名才是交付物）；
   //   · ffprobe **明确报出损坏特征**（moov atom not found / Invalid data 等）→ 改名留证；
   //   · ffprobe 超时 / 启动失败 / 权限错误 → **一律不动**（工具自身不可信时，不能替用户下结论）。
   //   教训：清理比不清理更糟的情形真实存在 —— 误判会把好成片改名，等于让用户丢片子。
@@ -5490,7 +5490,7 @@ class Api {
       out.dir = dir;
       let names = [];
       try { names = fs.readdirSync(dir); } catch (e) { return out; }
-      // ① 临时/残缺命名：引擎的临时产物（`.tmp.mp4`）**直接删除**（无保留价值）；
+      // ① 临时/残缺命名：引擎的临时产物（`*.mp4.tmp`）**直接删除**（无保留价值）；
       //    其它可疑残留改名留证
       const tempRe = /(\.tmp\.mp4$|\.tmp$|\.part$|\.ytdl$|\.temp$|^\d+-temp|temp-\d+)/i;
       for (const f of names) {
@@ -5507,7 +5507,7 @@ class Api {
       // ② ffprobe 逐个校验（能读出正时长才算可播放）
       const bin = this._resolveFfmpegBin();
       const ffprobe = bin && bin.ffprobePath;
-      const vids = names.filter((f) => !/\.tmp\.mp4$/i.test(f) && !/\.bak$/i.test(f) && VIDEO_EXTS.has(path.extname(f).toLowerCase()));
+      const vids = names.filter((f) => !/\.tmp\.mp4$|\.mp4\.tmp$/i.test(f) && !/\.bak$/i.test(f) && VIDEO_EXTS.has(path.extname(f).toLowerCase()));
       if (!ffprobe || !vids.length) { out.checked = 0; return out; }
       const probeOne = (file) => new Promise((resolve) => {
         try {

@@ -1153,6 +1153,8 @@ async function run(ctx, env = process.env) {
         const userMsg = failReason || `重试 ${rounds} 轮仍无法找到满足时长的组合（时长上限 ${cfg.maxTotalDuration} 秒）`;
         // 面向排查的完整诊断：只进诊断通道（后端日志），不出现在任务窗口
         let diagText = userMsg;
+        // 面向用户的「如何解决」：时长凑不满属于素材/配置问题，给出可操作建议而非笼统「反馈日志」
+        let userHow = '';
         // ★ 可操作诊断：只给「用尽」这类结论时，人不知道补素材还是调参数、
         //   程序也无从选择修复方式。这里把「能凑出多少 / 缺口多少 / 哪些源耗尽 / 可调什么」一并写进
         //   错误详情 —— 人照着提示就能动手，也为后续「分级自动修复」留下决策数据。
@@ -1175,6 +1177,7 @@ async function run(ctx, env = process.env) {
             + `（可凑出 ${totalDuration.toFixed(1)}s / 上限 ${cfg.maxTotalDuration}s，允许超出 ${overPct}%，已重试 ${rounds} 轮）`
             + ` ｜ 源状态：${srcStat}`
             + ` ｜ 可尝试：${hints.map((h, k) => (k + 1) + ') ' + h).join('；')}`;
+          userHow = hints.join('；');
         } catch (e3) { /* 诊断失败不影响主流程 */ }
         // 命名前的失败：输出「序号」协议行 —— 后端据此记录 failedIndices，续跑时按序号补做。
         // ⚠ 顺序很关键（2026-09-27 实报）：**必须先记序号、再写诊断**。
@@ -1189,7 +1192,13 @@ async function run(ctx, env = process.env) {
             detail: diagText,
             exhausted: Array.from(exhaustedSrcs).map((i) => i + 1) });
         } catch (eDiag) { /* 诊断失败绝不影响失败序号与后续流程 */ }
-        logger.error(`第 ${outIndex} 个成片`, userMsg);
+        // 时长凑不满不是程序 bug：明确归为「素材或配置」，并把可操作建议透给用户
+        // （补素材 / 放宽时长上限），而不是笼统的「反馈日志」。此前未传 hint，落到默认
+        // 「反馈日志」且误归为「程序」，用户看不懂、也不会去补素材或调参数。
+        const failHint = userHow
+          ? { who: '素材或配置', how: userHow }
+          : { who: '程序', how: '若反复出现，请把运行日志（log 目录里的 error-日期.log）反馈以便定位' };
+        logger.error(`第 ${outIndex} 个成片`, userMsg, failHint);
         hasError = true;
         continue;
       }
@@ -1225,9 +1234,9 @@ async function run(ctx, env = process.env) {
       //     ① 用户会把它当成品拿走，但根本放不出来；
       //     ② 续跑按产物反推「还缺哪些序号」时会把它算作已完成 → 该序号被永久跳过且不报错。
       //   改为临时名后：**正式名 ⇔ 完整可播放产物**，反推逻辑不必再猜。
-      // 临时名 = 正式名去掉扩展后接 `.tmp.mp4`（末尾仍是 .mp4 供 ffmpeg 识别容器；
-      // 此前直接追加会得到 `xxx.mp4.tmp.mp4`，扩展名重复、名字过长 ——指出）
-      const tmpOut = finalOut.replace(/\.mp4$/i, '') + '.tmp.mp4';
+      // 临时名 = 正式名 + `.tmp` 后缀（结尾不再是 .mp4：OS 与肉眼一眼看出是临时/未完成文件，
+      // 不会被误当成品传给客户）；ffmpeg 无法从 `.tmp` 推断容器，故 encArgs 显式 `-f mp4` 强制 mp4 封装。
+      const tmpOut = finalOut + '.tmp';
 
       // ── 输入文件存在性 ──
       let allExist = true;
@@ -1279,6 +1288,7 @@ async function run(ctx, env = process.env) {
         '-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'vbr', '-cq', '27',
         '-profile:v', 'high', '-level', '4.1',
         '-c:a', 'aac', '-b:a', '192k',
+        '-f', 'mp4',
         '-y', tmpOut,
       ];
       const targetDur = totalDuration > cfg.maxTotalDuration ? cfg.maxTotalDuration : totalDuration;

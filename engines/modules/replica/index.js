@@ -803,9 +803,9 @@ async function run(ctx, env = process.env) {
       // ★ 同批量模块：先写临时名，编码成功后再原子改名 ——
       //   正式名必须是「完整可播放产物」的唯一标志，否则编码中途停止会留下正式名半截文件
       //   （用户会误取、且续跑反推序号会把它当成已完成而永久跳过）。见 batch/index.js 同处说明。
-      // 临时名 = 正式名去掉扩展后接 `.tmp.mp4`（末尾仍是 .mp4 供 ffmpeg 识别容器；
-      // 此前直接追加会得到 `xxx.mp4.tmp.mp4`，扩展名重复、名字过长）
-      const tmpOut = finalOut.replace(/\.mp4$/i, '') + '.tmp.mp4';
+      // 临时名 = 正式名 + `.tmp` 后缀（结尾不再是 .mp4：OS 与肉眼一眼看出是临时/未完成文件，
+      // 不会被误当成品传给客户）；ffmpeg 无法从 `.tmp` 推断容器，故 encArgs 显式 `-f mp4` 强制 mp4 封装。
+      const tmpOut = finalOut + '.tmp';
 
       // ── 拼接 + 水印 + 编码（GPU 硬约束） ──
       const n = videos.length;
@@ -835,6 +835,7 @@ async function run(ctx, env = process.env) {
         '-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'vbr', '-cq', '27',
         '-profile:v', 'high', '-level', '4.1',
         '-c:a', 'aac', '-b:a', '192k',
+        '-f', 'mp4',
         '-y', tmpOut,
       ];
       const targetDur = totalDuration > maxDuration ? maxDuration : totalDuration;

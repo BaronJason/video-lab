@@ -51,20 +51,8 @@
     </div>
   </div>
   <!-- 工作路径扫描时的载入遮罩 -->
-  <div id="busyOverlay" class="busy-overlay" style="display:none">
-    <div class="busy-box">
-      <div class="busy-row">
-        <div class="busy-spinner"></div>
-        <div id="busyText" class="busy-text">正在检测…</div>
-      </div>
-      <div class="busy-progress" id="busyProgress" style="display:none">
-        <div class="busy-progress__bar"><div class="busy-progress__fill" id="busyProgressFill" style="width:0%"></div></div>
-        <div class="busy-progress__text" id="busyProgressText"></div>
-      </div>
-      <button type="button" class="busy-cancel-btn" id="busyCancelBtn" style="display:none">取消预检测</button>
-      <button type="button" class="busy-min-btn" id="busyMinBtn" style="display:none">后台检测</button>
-    </div>
-  </div>
+  <!-- 前台遮罩 busyOverlay 已移除（用户 2026-09-28）：扫描/检测类等待改走底部状态栏，
+       界面保持可交互；预检测进度由状态栏右侧的 probe-mini 承担 -->
   <!-- 设置面板：改为在主窗口内以 iframe 内嵌设置页（原独立窗口已取消）——
        同源、共用 preload（主窗口已开 nodeIntegrationInSubFrames），打开即显示、关闭仅隐藏，
        避免独立窗口每次重建都重新加载整套皮肤资源（64KB CSS + 1.7MB 图片） -->

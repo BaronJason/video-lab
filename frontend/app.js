@@ -1245,18 +1245,13 @@
     var watermark = state.configData ? (state.configData.watermark || '') : '';
     return { folders: folders, excludes: excludes, watermark: watermark };
   }
-  // 预检测：输入防抖 + 宽限期弹窗，避免频繁触发闪烁，也避免长时间检测误以为卡死
+  // 预检测：输入防抖后执行；不再弹前台遮罩（用户 2026-09-28），
+  // 检测进度与结果仍写回每行的预检测徽章，用户随时可看。
   var precheckDebounceTimer = null;
-  var precheckGraceTimer = null;
   var precheckOverlayCount = 0;
   var PRECHECK_DEBOUNCE_MS = 250; // 输入防抖窗口
-  var PRECHECK_OVERLAY_MS = 350;  // 宽限期：超过才弹"正在预检测"遮罩
   function showPrecheckBusy() {
     precheckOverlayCount++;
-    var o = $('busyOverlay');
-    if (!o) return;
-    $('busyText').textContent = '正在预检测，请稍候…';
-    o.style.display = 'flex';
   }
   function hidePrecheckBusy() {
     precheckOverlayCount = Math.max(0, precheckOverlayCount - 1);
@@ -1319,7 +1314,6 @@
       state.precheckInvalid = true;
       applyPrecheckValidity();
     }).finally(function () {
-      if (precheckGraceTimer) { clearTimeout(precheckGraceTimer); precheckGraceTimer = null; }
       if (precheckOverlayCount > 0) hidePrecheckBusy();
     });
   }
@@ -2405,22 +2399,21 @@
   function setStatusDone(msg) { var el = $('statusLeft'); if (!el) return; el.classList.add('status-bar__success'); el.textContent = msg; }
 
   // 载入遮罩：工作路径扫描时提示用户
-  function showBusy(text) { var o = $('busyOverlay'); if (!o) return; var p = $('busyProgress'); if (p) p.style.display = 'none'; var mb = $('busyMinBtn'); if (mb) mb.style.display = 'none'; var cb = $('busyCancelBtn'); if (cb) cb.style.display = 'none'; $('busyText').textContent = text || '正在检测…'; o.style.display = 'flex'; }
-  function hideBusy() { var o = $('busyOverlay'); if (o) o.style.display = 'none'; var mb = $('busyMinBtn'); if (mb) mb.style.display = 'none'; var cb = $('busyCancelBtn'); if (cb) cb.style.display = 'none'; }
+  // 已取消前台遮罩（用户 2026-09-28）：所有「扫描 / 检测」类等待改为底部状态栏提示，
+  // 界面保持可交互 —— 原先的遮罩带 backdrop-filter 模糊，是"窗口冻结一会儿"的观感来源。
+  function showBusy(text) { setStatus(text || '请稍候…'); }
+  function hideBusy() { setStatus(''); }
   // 设置窗口开/关时的主窗口模糊遮罩
   function showSettingsDim() { var o = $('settingsDim'); if (o) { hideBusy(); o.style.display = 'block'; } }
   function hideSettingsDim() { var o = $('settingsDim'); if (o) o.style.display = 'none'; }
   // 带进度条的等待窗口：重置预检测全量检测期间使用；提供「缩到后台」入口
-  function showBusyProgress(text) {
-    var o = $('busyOverlay'); if (!o) return;
-    $('busyText').textContent = text || '正在检测…';
-    var fill = $('busyProgressFill'), pt = $('busyProgressText'), p = $('busyProgress');
-    if (p) p.style.display = 'flex';
-    if (fill) fill.style.width = '0%';
-    if (pt) pt.textContent = '正在收集视频…';
-    var mb = $('busyMinBtn'); if (mb) mb.style.display = '';
-    var cb = $('busyCancelBtn'); if (cb) cb.style.display = '';
-    o.style.display = 'flex';
+  // 预检测一律后台进行（用户 2026-09-28 定案）：原先会弹前台遮罩且带模糊背景，
+  // 切换窗口时肉眼可见卡顿；而预检测不需要用户做任何选择（原「后台检测」按钮已成冗余），
+  // 故不再显示遮罩，直接进入状态栏右下角的 probe-mini 进度显示（内含取消按钮）。
+  function showBusyProgress() {
+    state.precheckBackground = true;
+    hideBusy();
+    showProbeMini();
   }
   // 预检测后台化：遮罩「缩到后台」后，进度转入状态栏右侧 probe-mini（排版配色参考更新条）
   function hideProbeMini() {
@@ -2445,38 +2438,10 @@
       setStatus(s.cancelled ? '后台预检测已取消（已保存 ' + done + ' 个探测结果）' : '后台预检测完成：共检测 ' + total + ' 个视频');
     }
   }
-  function enterProbeBackground() {
-    if (state.precheckBackground) return;
-    if (!state._probeActive) { setStatus('当前没有进行中的预检测'); return; }
-    state.precheckBackground = true;
-    hideBusy();
-    showProbeMini();
-    setStatus('预检测已转入后台，请在右下角查看进度');
-  }
-  // 取消预检测：二次确认后终止当前探测（已检测结果保留，物理缓存按原子替换策略处理）
-  function cancelProbeFlow() {
-    if (!state._probeActive) { setStatus('当前没有进行中的预检测'); return; }
-    confirmPopover({
-      title: '取消预检测',
-      message: '已检测到的结果会保留',
-      okLabel: '取消预检测',
-      danger: true
-    }).then(function (ok) {
-      if (!ok) return;
-      setStatus('正在取消预检测…');
-      call('cancel_precheck');
-    });
-  }
   function onResetProgress(s) {
     if (!s) return;
-    if (state.precheckBackground) { updateProbeMini(s); return; }
-    var total = s.total || 0, done = s.done || 0;
-    var pct = total > 0 ? Math.min(100, Math.round(done / total * 100)) : 0;
-    var fill = $('busyProgressFill'), pt = $('busyProgressText');
-    if (fill) fill.style.width = pct + '%';
-    if (pt) pt.textContent = s.finished
-      ? '已完成 ' + done + ' / ' + total
-      : (total > 0 ? '正在检测 ' + done + ' / ' + total + '（' + pct + '%）' : '正在收集视频…');
+    // 预检测一律后台：进度只写状态栏右侧的 probe-mini（前台遮罩已取消）
+    updateProbeMini(s);
   }
   // 仅刷新预缓存：不删缓存、不重置，只对缺失/变化的视频增量更新（进度与取消/缩后台同「重置预检测」）
   function refreshPrecacheFlow() {
@@ -2589,20 +2554,20 @@
     clip: '重建成片索引', mark: '统计水印归属', done: '检测完成'
   };
   function refreshData(force, busyText, done, skipReflow) {
+    // 扫描 / 检测不再弹前台遮罩（用户 2026-09-28）：该流程不需要用户做任何选择，
+    // 而遮罩带 backdrop-filter 模糊，会让人感觉窗口"冻结一会儿"。
+    // 改为只在底部状态栏显示当前环节，界面其余部分保持可交互。
     var dismissScan = null;
     if (busyText) {
-      showBusy(busyText);
+      setStatus(busyText);
       var api0 = getApi();
       if (api0 && typeof api0.on_scan_progress === 'function') {
         try {
           dismissScan = api0.on_scan_progress(function (p) {
-            var o = $('busyOverlay'), bt = $('busyText');
-            if (!o || o.style.display === 'none' || !bt) return;
             var label = (p && SCAN_PHASE_TEXT[p.phase]) ? SCAN_PHASE_TEXT[p.phase] : '';
-            if (label) {
-              if (p.phase === 'clip' && p.total > 0) label += ' ' + p.done + '/' + p.total;
-              bt.textContent = busyText + '（' + label + '）';
-            }
+            if (!label) return;
+            if (p.phase === 'clip' && p.total > 0) label += ' ' + p.done + '/' + p.total;
+            setStatus(busyText + '（' + label + '）');
           });
         } catch (e) { dismissScan = null; }
       }
@@ -2616,10 +2581,10 @@
         if (!foundTxt) { state.activeProject = null; state.activeTxt = null; state.versions = []; state.activeVersion = null; state.configData = null; buildDateBranches(); buildCenterBottom(); buildRightPanel(); setStatus('就绪'); }
         else selectTxt(state.activeProject, state.activeTxt, true, true);
       }
-      if (busyText) hideBusy();
+      if (busyText) setStatus('就绪');
       if (dismissScan) { try { dismissScan(); } catch (e) {} dismissScan = null; }
       if (done) done();
-    }).catch(function (e) { setStatus('数据加载失败：' + e.message); if (busyText) hideBusy(); if (dismissScan) { try { dismissScan(); } catch (e) {} dismissScan = null; } });
+    }).catch(function (e) { setStatus('数据加载失败：' + e.message); if (dismissScan) { try { dismissScan(); } catch (e) {} dismissScan = null; } });
   }
   function selectTxt(project, name, keepVersion, silent) {
     function doSelect() {
@@ -2822,11 +2787,9 @@
     setStatus('就绪');
   }
   function bindStaticEvents() {
-    // 预检测后台化：遮罩「缩到后台」与状态栏取消按钮
-    var busyMin = $('busyMinBtn'), probeCancel = $('probeMiniCancel');
-    if (busyMin) busyMin.addEventListener('click', enterProbeBackground);
-    var busyCancel = $('busyCancelBtn');
-    if (busyCancel) busyCancel.addEventListener('click', cancelProbeFlow);
+    // 预检测一律后台：只保留状态栏 probe-mini 上的取消按钮
+    //（原遮罩的「后台检测」与「取消预检测」按钮已随遮罩移除 —— 用户 2026-09-28）
+    var probeCancel = $('probeMiniCancel');
     if (probeCancel) probeCancel.addEventListener('click', function () { setStatus('正在取消后台预检测…'); call('cancel_precheck'); });
     document.addEventListener('vl:reset-center', function () {
       if (maskState.on) {

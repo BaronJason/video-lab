@@ -717,9 +717,9 @@ function warmScanOnDemand(reason) {
         logTiming('唤起检查：扫描缓存有效，无需扫描（' + reason + '，' + _elapsed() + 'ms）');
         return;
       }
+      // 唤起时同样后台扫描、不弹小窗（用户 2026-09-28）
       const winTimer = setTimeout(() => {
-        openScanWindow();
-        logTiming('唤起需要全量扫描：已弹扫描小窗');
+        logTiming('唤起需要全量扫描（后台进行，不弹小窗）');
       }, 1200);
       const finish = () => {
         clearTimeout(winTimer);
@@ -2361,19 +2361,18 @@ app.whenReady().then(async () => {
     // 超过该时长仍未判定完（典型：工作目录所在盘休眠唤醒中），先弹小窗给反馈
     const DECIDE_WIN_DELAY_MS = 1200;
     let decided = false;
+    // 扫描判定超时也不再弹小窗（用户 2026-09-28）：扫描全程后台，主窗口照常立即显示、
+    // 界面可交互，进度只写运行日志，避免"弹窗 + 窗口等待"造成的冻结观感。
     const winTimer = setTimeout(() => {
       if (decided) return;
-      global.__vlWaitScanToShow = true;
-      openScanWindow();
-      logTiming('扫描判定超时：已弹扫描小窗');
+      logTiming('扫描判定超时（后台继续，不再弹小窗）');
     }, DECIDE_WIN_DELAY_MS);
     const _t = process.hrtime.bigint();
     const _ms = () => Math.round(Number(process.hrtime.bigint() - _t) / 1e6);
     const _diag = () => { try { return api._lastFreshTiming ? JSON.stringify(api._lastFreshTiming) : ''; } catch (e) { return ''; } };
     const runWarmScan = () => {
-      global.__vlWaitScanToShow = true;
-      openScanWindow();
-      logTiming('启动需要全量扫描：已弹扫描小窗');
+      // 后台扫描：不弹小窗、不拦主窗口显示（用户 2026-09-28）
+      logTiming('启动需要全量扫描（后台进行，不弹小窗）');
       const _s = process.hrtime.bigint();
       api.listProjectsAsync().then(() => {
         const ms = Math.round(Number(process.hrtime.bigint() - _s) / 1e6);

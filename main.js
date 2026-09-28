@@ -79,7 +79,7 @@ function restartHttpServer() {
   startHttpServer({
     api,
     getMainWin: () => mainWin,
-    getSettingsWin: () => settingsWin,
+    getSettingsWin: () => null,   // 设置已内嵌为主窗口面板，不再有独立窗口
     httpPort: parseInt(config.http_port, 10) || 9527,
     httpToken: httpToken,
     extraRoutes: buildHttpExtraRoutes(),
@@ -737,7 +737,6 @@ let tray = null;
 let isQuitting = false;
 let exitLogged = false;   // 退出留痕只记一次（before-quit 因 preventDefault 会被多次触发）
 let quitConfirmed = false; // 有运行中任务退出时，经主窗口确认后才真正退出
-let settingsForceClose = false; // 应用退出路径：允许带未保存修改强制关闭设置窗口
 let closeAskOpen = false; // 关闭主窗口行为引导弹窗打开中：避免重复弹窗/重复触发
 // 配置未保存确认：关闭/退出前询问主窗口（覆盖当前配置/保存为当日配置/取消），避免修改丢失
 let discardAskOpen = false;      // 「配置未保存确认」弹窗进行中，避免重复询问
@@ -933,88 +932,41 @@ function createTaskWindow() {
   taskWin.on('closed', () => { taskWin = null; });
   return taskWin;
 }
-// 设置窗口：独立的设置页（通用设置 / 批量拼接 / 视频复刻）
-let settingsWin = null;
+// 设置面板：改为在主窗口内以 iframe 显示（原独立设置窗口已取消，用户 2026-09-28 定案）。
+// 为什么：设置页带整套皮肤资源（女仆皮肤 64KB CSS + 1.7MB 图片），独立窗口每次打开都要
+// 重新创建窗口并重新加载解码 —— 这是"每次打开都有刷新感"的来源；内嵌后打开即显示、关闭仅隐藏。
+// 附带收益：少一套窗口生命周期管理（关闭拦截/失焦关闭/未保存提醒一并不再需要）。
+let settingsPanelOpen = false;
 function openSettingsWindow() {
-  if (settingsWin && !settingsWin.isDestroyed()) { settingsWin.focus(); return settingsWin; }
-  // 点击设置按钮时立即让主窗口显示模糊遮罩，与设置窗口出现同步，避免突兀
-  // 浏览器端自身打开内嵌模态时会自行添加遮罩，不需要这里广播（否则浏览器网页也会被遮罩）
-  if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('settings_window_opened');
-  settingsWin = new BrowserWindow({ title: 'Video Lab - 设置', width: 680, height: 640, resizable: false, maximizable: false, minimizable: false, parent: mainWin, frame: false, show: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
-  // 打开即相对主窗口几何居中：子窗口默认落点常偏右/偏下，手动定位并钳制到所在显示器工作区，
-  // 主窗口贴显示器边缘时设置窗口也不会跑出屏幕
-  if (mainWin && !mainWin.isDestroyed()) {
-    const pb = mainWin.getBounds();
-    const cx = Math.round(pb.x + pb.width / 2);
-    const cy = Math.round(pb.y + pb.height / 2);
-    const wa = screen.getDisplayNearestPoint({ x: cx, y: cy }).workArea;
-    const x = Math.max(wa.x, Math.round(pb.x + (pb.width - 680) / 2));
-    const y = Math.max(wa.y, Math.round(pb.y + (pb.height - 640) / 2));
-    settingsWin.setPosition(
-      Math.min(x, wa.x + wa.width - 680),
-      Math.min(y, wa.y + wa.height - 640)
-    );
-  }
-  // 首帧就绪后再显示：避免「空白窗先出现、再刷出内容」的闪烁（与主窗口一致）
-  settingsWin.once('ready-to-show', async () => { await waitForWindowContent(settingsWin); try { if (settingsWin && !settingsWin.isDestroyed()) { settingsWin.show(); settingsWin.focus(); } } catch (e) {} });
-  settingsWin.loadFile(path.join(__dirname, 'frontend', 'settings.html'));
-  settingsWin.on('blur', handleSettingsBlur);
-  // 关闭按钮/X：有未保存修改时拦截，通知设置页在关闭按钮上方弹「取消/确认退出」二级菜单（应用退出路径不受此限制）
-  settingsWin.on('close', (e) => {
-    if (settingsForceClose || !settingsDirty) return;
-    e.preventDefault();
-    try {
-      if (!settingsWin.isDestroyed() && settingsWin.webContents && !settingsWin.webContents.isDestroyed()) {
-        settingsWin.webContents.send('confirm_discard_request');
-      }
-      if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('confirm_discard_request', null);
-    } catch (err) {}
-  });
-  settingsWin.on('closed', () => {
-    settingsWin = null; settingsDirty = false; settingsPickingDir = false;
-    try {
-      if (mainWin && !mainWin.isDestroyed() && mainWin.webContents && !mainWin.webContents.isDestroyed()) {
-        mainWin.webContents.send('settings_window_closed');
-      }
-      if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('settings_window_closed', null);
-    } catch (e) {}
-    // ★ 关闭设置窗后把主窗口提回前台：用户若在设置窗里开过资源管理器（打开日志/选择目录），
-    //   explorer 与其他窗口会压在 Z 序上方，Windows 顺着销毁顺序激活的常常不是主窗 ——
-    //   主窗被留在下层，任务栏看软件就像"没选中"（实测稳定触发）
-    try {
-      if (mainWin && !mainWin.isDestroyed()) {
-        if (mainWin.isMinimized()) mainWin.restore();
-        else mainWin.show();          // 已可见的窗口 show() = 提到前台并激活
-        mainWin.focus();
-        if (!mainWin.isFocused()) app.focus({ steal: true });   // 极端场景兜底
-      }
-    } catch (e2) {}
-  });
-  return settingsWin;
-}
-// 设置窗口失焦处理：alt+Tab 切到其他应用时不关闭；
-// 仅当用户点击了主窗口区域（失焦后主窗口重新获得焦点）时，未修改才关闭、有修改则报错音+闪红提醒
-let settingsDirty = false;
-let settingsPickingDir = false;
-function sysBeep() {
-  // 用 Electron 原生 shell.beep() 播放系统提示音：不再 spawn pwsh
-  // （PS1 双轨期残留的最后一处活代码依赖，无 pwsh 环境下会静默失效）
-  try { require('electron').shell.beep(); } catch (e) {}
-}
-function handleSettingsBlur() {
-  if (!settingsWin || settingsWin.isDestroyed() || settingsPickingDir || settingsForceClose) return;
-  setTimeout(function () {
-    if (!settingsWin || settingsWin.isDestroyed() || settingsForceClose) return;
-    // 焦点未落在主窗口（切到了其他应用/任务窗口等场景）→ 设置窗口保持打开
-    if (!mainWin || mainWin.isDestroyed() || !mainWin.isFocused()) return;
-    if (settingsDirty) {
-      sysBeep();
-      try { settingsWin.webContents.send('settings_flash_close'); } catch (e) {}
-      if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('settings_flash_close', null);
-    } else {
-      settingsWin.close();
+  settingsPanelOpen = true;
+  // 通知主窗口：显示模糊遮罩 + 内嵌设置页 iframe
+  try {
+    if (mainWin && !mainWin.isDestroyed() && mainWin.webContents && !mainWin.webContents.isDestroyed()) {
+      mainWin.webContents.send('settings_window_opened');
     }
-  }, 160);
+    if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('settings_window_opened', null);
+  } catch (e) {}
+  return null;
+}
+// 关闭设置面板：渲染层「点击面板外 / Esc」调用
+function closeSettingsPanel() {
+  settingsPanelOpen = false;
+  try {
+    if (mainWin && !mainWin.isDestroyed() && mainWin.webContents && !mainWin.webContents.isDestroyed()) {
+      mainWin.webContents.send('settings_window_closed');
+    }
+    if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('settings_window_closed', null);
+  } catch (e) {}
+  // 关闭后把主窗口提回前台：面板里可能开过资源管理器（打开日志/选择目录），
+  // explorer 会压在 Z 序上方，Windows 激活的常常不是主窗
+  try {
+    if (mainWin && !mainWin.isDestroyed()) {
+      if (mainWin.isMinimized()) mainWin.restore();
+      else mainWin.show();
+      mainWin.focus();
+      if (!mainWin.isFocused()) app.focus({ steal: true });
+    }
+  } catch (e2) {}
 }
 // 任务快照变化时推送给所有窗口（主窗口按钮计数 + 任务窗口列表）
 function sendTasksToAll() {
@@ -1104,7 +1056,8 @@ function sendToMain(channel, payload) {
   if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll(channel, payload);
 }
 function sendToSettings(channel, payload) {
-  try { if (settingsWin && !settingsWin.isDestroyed()) settingsWin.webContents.send(channel, payload); } catch (e) {}
+  // 设置已内嵌为主窗口面板：发给设置页的广播直接投递到主窗口
+  try { if (mainWin && !mainWin.isDestroyed() && mainWin.webContents && !mainWin.webContents.isDestroyed()) mainWin.webContents.send(channel, payload); } catch (e) {}
   if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll(channel, payload);
 }
 // 更新链路日志：按用户要求不再写入 Cache/update/update.log 缓存，保留调用点为 no-op
@@ -1996,7 +1949,8 @@ function registerIpc() {
   // 设置页：检查更新（仅在自动更新启用时生效，UPDATE_ENABLED=false 时返回停用）。
   // 设置页来源不向主窗口弹「发现新版本」（确认弹窗已在设置页内），下载完成后主窗口才弹操作条
   ipcMain.handle('check_update', (e, silent) => {
-    const fromSettings = !!(settingsWin && !settingsWin.isDestroyed() && e.sender === settingsWin.webContents);
+    // 设置已内嵌为主窗口面板 → 无法再靠 sender 区分；主窗口内的检查更新一律不弹操作条
+    const fromSettings = true;
     return checkForUpdate({ silent: !!silent, notifyMain: !fromSettings });
   });
   // 设置页：更新源/更新方式即时落盘（检查更新前调用，使界面当前选中值立刻生效）
@@ -2026,23 +1980,17 @@ function registerIpc() {
     try { shell.showItemInFolder(lastDownload.zipPath); } catch (e) { return { ok: false, error: e.message }; }
     return { ok: true, path: lastDownload.zipPath };
   });
-  // 设置页「确认退出」：放弃未保存修改并关闭
-  ipcMain.handle('force_close_settings', () => {
-    settingsDirty = false;
-    try { if (settingsWin && !settingsWin.isDestroyed()) settingsWin.close(); } catch (e) {}
-    return { ok: true };
-  });
+  // 关闭设置面板（渲染层点击面板外 / Esc 调用）
+  ipcMain.handle('close_settings_panel', () => { closeSettingsPanel(); return { ok: true }; });
   // 设置页：通用「选择目录」对话框（parent 取调用方窗口，引导窗口/设置窗口/主窗口通用）
   ipcMain.handle('pick_directory', async (e, title, defaultPath) => {
     settingsPickingDir = true;
     try {
-      const win = BrowserWindow.fromWebContents(e.sender) || settingsWin || mainWin;
+      const win = BrowserWindow.fromWebContents(e.sender) || mainWin;
       const result = await dialog.showOpenDialog(win, { title: title || '选择目录', defaultPath: defaultPath || api.getRoot() || defaultRoot() || os.homedir(), properties: ['openDirectory'] });
       return result.canceled || !result.filePaths || result.filePaths.length === 0 ? '' : result.filePaths[0];
     } finally { settingsPickingDir = false; }
   });
-  // 设置页：改动状态通知（决定失焦时是直接关闭还是提醒保存）
-  ipcMain.on('settings_dirty', (e, d) => { settingsDirty = !!d; });
   ipcMain.handle('get_root', () => api.getRoot());
   // ⚠ 必须走异步版：同步 checkEnv 会在冷启动时用 spawnSync 阻塞主进程事件循环数十秒
   //（首次加载 200MB+ 未签名 ffmpeg + 安全软件扫描），直接把窗口显示推迟到分钟级
@@ -2234,7 +2182,10 @@ function handleMainWindowClose() {
 }
 
 function createWindow() {
-  mainWin = new BrowserWindow({ title: 'Video Lab', width: 1360, height: 860, minWidth: 1120, minHeight: 700, frame: false, show: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
+  // nodeIntegrationInSubFrames：让 preload 也注入 iframe。
+  // 设置页已内嵌为主窗口面板（iframe），其 settings.js 依赖 preload 暴露的 window.txapi；
+  // 不开此项则 iframe 内取不到，设置页所有接口都会失效。
+  mainWin = new BrowserWindow({ title: 'Video Lab', width: 1360, height: 860, minWidth: 1120, minHeight: 700, frame: false, show: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false, nodeIntegrationInSubFrames: true } });
   mainWin.loadFile(path.join(__dirname, 'frontend', 'index.html'));
   // 页面加载完成即放行「窗口加载后」初始化。注册必须紧跟 loadFile：
   // 此前是在第一次 runAfterWindowLoad 调用时才注册，而那时页面往往已经加载完，
@@ -2461,7 +2412,6 @@ app.whenReady().then(async () => {
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on('before-quit', (e) => {
-  settingsForceClose = true; // 退出路径：设置窗口带未保存修改也允许关闭
   // 仅管理主动退出（托盘「退出」）；若主窗口仍在运行任务，先经主窗口弹确认框（与界面同款样式）
   if (!isQuitting) return;
   // 配置可能未保存：先经主窗口确认（覆盖当前配置/保存为当日配置/取消），确认后再继续退出

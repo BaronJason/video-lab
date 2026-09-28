@@ -6,6 +6,10 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 const invoke = (channel, ...args) => ipcRenderer.invoke(channel, ...args);
 
+// 是否运行在主窗口内的 iframe（设置页面板）中 —— preload 经 nodeIntegrationInSubFrames
+// 也会注入子框架；iframe 内的窗口类操作必须区别对待，见下方 window_* 接口。
+const IN_SUBFRAME = (() => { try { return window.self !== window.top; } catch (e) { return false; } })();
+
 contextBridge.exposeInMainWorld('txapi', {
   list_projects: (force) => invoke('list_projects', force),
   list_versions: (project, name) => invoke('list_versions', project, name),
@@ -137,9 +141,8 @@ contextBridge.exposeInMainWorld('txapi', {
   pick_directory: (title, defaultPath) => invoke('pick_directory', title, defaultPath),
   on_settings_saved: (cb) => { ipcRenderer.on('settings_saved', (e, cfg) => { try { cb(cfg); } catch (err) {} }); },
   notify_dirty: (d) => { try { ipcRenderer.send('settings_dirty', !!d); } catch (e) {} },
-  on_confirm_discard: (cb) => { ipcRenderer.on('confirm_discard_request', () => { try { cb(); } catch (e) {} }); },
-  force_close_settings: () => invoke('force_close_settings'),
-  on_settings_flash_close: (cb) => { ipcRenderer.on('settings_flash_close', () => { try { cb(); } catch (e) {} }); },
+  // 关闭设置面板（面板内点击外部 / Esc）：统一走主进程，保持「设置是否打开」的状态一致
+  close_settings_panel: () => invoke('close_settings_panel'),
   on_settings_window_opened: (cb) => { ipcRenderer.on('settings_window_opened', () => { try { cb(); } catch (e) {} }); },
   on_settings_window_closed: (cb) => { ipcRenderer.on('settings_window_closed', () => { try { cb(); } catch (e) {} }); },
   on_task_update: (cb) => { ipcRenderer.on('task_update', (e, tasks) => { try { cb(tasks); } catch (err) {} }); },
@@ -166,10 +169,12 @@ contextBridge.exposeInMainWorld('txapi', {
   set_skin: (skin) => invoke('set_skin', skin),
   choose_workdir: () => invoke('choose_workdir'),
   // 自制标题栏（frame:false）窗口控制
-  window_caps: () => invoke('window_caps'),
-  window_minimize: () => invoke('window_minimize'),
-  window_toggle_maximize: () => invoke('window_toggle_maximize'),
-  window_close: () => invoke('window_close'),
+  // 窗口控制：iframe（设置页面板）内必须区别对待 ——
+  // 关闭应「关闭设置面板」，最小化/最大化在面板里无意义；否则点面板右上角 X 会关掉整个主窗口。
+  window_caps: () => (IN_SUBFRAME ? Promise.resolve({ minimizable: false, maximizable: false, closable: true }) : invoke('window_caps')),
+  window_minimize: () => (IN_SUBFRAME ? Promise.resolve({ ok: true }) : invoke('window_minimize')),
+  window_toggle_maximize: () => (IN_SUBFRAME ? Promise.resolve({ ok: true }) : invoke('window_toggle_maximize')),
+  window_close: () => (IN_SUBFRAME ? invoke('close_settings_panel') : invoke('window_close')),
   listen_window_max: () => { try { ipcRenderer.send('window_max_changed_listen'); } catch (e) {} },
   on_window_max_changed: (cb) => { ipcRenderer.on('window_max_changed', (e, m) => { try { cb(!!m); } catch (err) {} }); },
 });

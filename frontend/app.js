@@ -2558,6 +2558,20 @@
     // 设置窗口打开/关闭时显示/隐藏主窗口模糊遮罩
     if (window.txapi && window.txapi.on_settings_window_opened) window.txapi.on_settings_window_opened(showSettingsDim);
     if (window.txapi && window.txapi.on_settings_window_closed) window.txapi.on_settings_window_closed(hideSettingsDim);
+    // 内嵌设置面板的关闭交互：点击面板外空白处 或 按 Esc ——
+    // 统一走主进程 close_settings_panel，再由 settings_window_closed 广播收尾，
+    // 保证主进程"设置是否打开"的状态与界面一致（托盘/快捷键都依赖它）
+    var dimEl = $('settingsDim');
+    if (dimEl) dimEl.addEventListener('mousedown', function (e) {
+      if (e.target !== dimEl) return;   // 点在 iframe 面板上不关闭
+      if (window.txapi && window.txapi.close_settings_panel) window.txapi.close_settings_panel();
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key !== 'Escape') return;
+      var d = $('settingsDim');
+      if (!d || d.style.display === 'none') return;
+      if (window.txapi && window.txapi.close_settings_panel) window.txapi.close_settings_panel();
+    });
   }
 
   // 扫描/重建环节 → 中文提示（后端 listProjects/索引重建按环节上报，前端一一对应显示）

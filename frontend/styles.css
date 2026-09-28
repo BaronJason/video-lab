@@ -3766,13 +3766,27 @@ body[data-preview-collapsed] .center-global-search .ds-input {
   background: var(--bg-overlay, rgba(0, 0, 0, 0.35));
   backdrop-filter: blur(1px);
 }
-/* 设置窗口打开时的模糊遮罩（类似预检测，纯遮罩无内容） */
+/* 设置面板打开时的模糊遮罩 + 内嵌设置页 iframe（原独立设置窗口已取消） */
 .settings-dim {
   position: fixed;
   inset: 0;
   z-index: 9998;
   background: var(--bg-overlay, rgba(0, 0, 0, 0.35));
   backdrop-filter: blur(1px);
+}
+/* 内嵌设置面板：居中卡片，尺寸沿用原独立设置窗口的 680×640 */
+.settings-frame {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 680px;
+  height: 640px;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: 10px;
+  background: var(--bg-base-default);
+  box-shadow: 0 18px 48px color-mix(in srgb, #000 42%, transparent);
+  overflow: hidden;
 }
 .busy-box {
   position: relative;
@@ -9194,13 +9208,27 @@ body[data-preview-collapsed] .center-global-search .ds-input {
   background: var(--bg-overlay, rgba(0, 0, 0, 0.35));
   backdrop-filter: blur(1px);
 }
-/* 设置窗口打开时的模糊遮罩（类似预检测，纯遮罩无内容） */
+/* 设置面板打开时的模糊遮罩 + 内嵌设置页 iframe（原独立设置窗口已取消） */
 .settings-dim {
   position: fixed;
   inset: 0;
   z-index: 9998;
   background: var(--bg-overlay, rgba(0, 0, 0, 0.35));
   backdrop-filter: blur(1px);
+}
+/* 内嵌设置面板：居中卡片，尺寸沿用原独立设置窗口的 680×640 */
+.settings-frame {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 680px;
+  height: 640px;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: 10px;
+  background: var(--bg-base-default);
+  box-shadow: 0 18px 48px color-mix(in srgb, #000 42%, transparent);
+  overflow: hidden;
 }
 .busy-box {
   position: relative;

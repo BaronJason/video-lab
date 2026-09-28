@@ -328,6 +328,11 @@ body {
   user-select: text;
 }
 
+/* ─── 内嵌模式适配 ─── */
+/* 设置页在主窗口内以 iframe 内嵌：保留标题栏（它是显式的关闭入口，关闭由 titlebar.js
+   在 iframe 内改走「通知父窗口关闭面板」），但标题栏本身不再是窗口拖动区。 */
+.win-titlebar { -webkit-app-region: no-drag; }
+
 /* 微调滚动条 */
 .settings-view::-webkit-scrollbar { width: 8px; }
 .settings-view::-webkit-scrollbar-thumb { background: var(--border-neutral-l2); border-radius: 4px; }

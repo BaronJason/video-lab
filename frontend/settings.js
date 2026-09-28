@@ -802,6 +802,15 @@
       }).catch(function (e) { toast('打开失败：' + e.message, true); });
     });
     // 「默认备份目录」行：打开备份实际落盘目录（自定义目录时含其下的「Video Lab 备份」层）
+    // 「默认备份目录」输入框：改动后（失焦 / 回车）**立即保存** ——
+    // 否则「打开备份目录」仍按已保存的旧值打开（用户报障 2026-09-28：改目录后点打开，用的还是之前的目录）。
+    // 用 change 而非 input：避免边输入边触发保存／备份目录迁移。
+    var bdInput = document.getElementById('backupDir');
+    if (bdInput && api && api.save_settings) {
+      bdInput.addEventListener('change', function () {
+        api.save_settings({ backup_dir: bdInput.value.trim() }).catch(function () {});
+      });
+    }
     var openBackup = document.getElementById('btnOpenBackupDir');
     if (openBackup && api && api.open_folder_select) openBackup.addEventListener('click', function () {
       var el = document.getElementById('backupDirPath');

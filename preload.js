@@ -40,7 +40,7 @@ contextBridge.exposeInMainWorld('txapi', {
   list_log_files: (fromPath, configName) => invoke('list_log_files', fromPath, configName),
   find_replica_output: (logPath, videoName) => invoke('find_replica_output', logPath, videoName),
   check_exists: (paths) => invoke('check_exists', paths),
-  open_folder_select: (p) => invoke('open_folder_select', p),
+  open_folder_select: (p, opts) => invoke('open_folder_select', p, opts),
   check_watermark_project: (project, wm) => invoke('check_watermark_project', project, wm),
   find_watermark_project: (project, wm) => invoke('find_watermark_project', project, wm),
   get_project_watermark: (project) => invoke('get_project_watermark', project),

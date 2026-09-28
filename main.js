@@ -2059,8 +2059,13 @@ function registerIpc() {
   // 打开「文件夹」类操作的统一入口，按目标类型分流：
   //   目录 → 在资源管理器中打开该目录（进入，而不是打开父级再选中它）；
   //   文件 → 打开其所在文件夹并选中该文件（定位）。
-  ipcMain.handle('open_folder_select', async (e, p) => {
+  ipcMain.handle('open_folder_select', async (e, p, opts) => {
     const target = path.resolve(String(p || '').replace(/^"|"$/g, ''));
+    // opts.create：调用方明确知道该目录「按需生成」（如备份目录要等首次备份才落盘）——
+    // 此时先按需创建，避免点「打开」直接报「路径不存在」（用户报障 2026-09-28）
+    if (opts && opts.create && target) {
+      try { fs.mkdirSync(target, { recursive: true }); } catch (e3) { /* 创建失败仍走下方判定，返回真实错误 */ }
+    }
     if (!target || !fs.existsSync(target)) return { ok: false, error: '路径不存在' };
     try {
       if (fs.statSync(target).isDirectory()) {

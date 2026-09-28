@@ -3087,11 +3087,15 @@ class Api {
     if (!this._runningTaskId) {
       this._runningTaskId = task.id;
       task.status = 'running';
+      // 解除计时冻结：把暂停 / 排队这段并入总暂停时长，之后才继续累计耗时
+      if (task.pausedAt) { task.totalPausedMs = (task.totalPausedMs || 0) + (Date.now() - task.pausedAt); task.pausedAt = null; }
       task.log.push('[开始运行]');
       this._emitTasks();
       this._spawnEngine(task.type, task.env, task);
     } else {
       task.status = 'queued';
+      // 排队等待不算运行耗时：先冻结计时，真正开始运行（_startNextQueued）时才解除
+      if (!task.pausedAt) task.pausedAt = Date.now();
       task.log.push('[已加入执行队列，等待前序任务完成]');
       this._taskQueue.push(task.id);
       this._emitTasks();
@@ -3107,6 +3111,8 @@ class Api {
       if (!t || t.status === 'stopped' || t._cancelled) continue;
       this._runningTaskId = id;
       t.status = 'running';
+      // 解除计时冻结：排队 / 暂停这段不算运行耗时，并入总暂停时长后再累计
+      if (t.pausedAt) { t.totalPausedMs = (t.totalPausedMs || 0) + (Date.now() - t.pausedAt); t.pausedAt = null; }
       t.log.push('[前序任务完成，开始运行本任务]');
       this._emitTasks();
       this._spawnEngine(t.type, t.env, t);
@@ -3627,8 +3633,8 @@ class Api {
       .sort((a, b) => (a.resumeIdx ?? 1e9) - (b.resumeIdx ?? 1e9));
     if (!paused.length) return { ok: false, error: '没有暂停的任务' };
     for (const t of paused) {
-      if (t.pausedAt) { t.totalPausedMs = (t.totalPausedMs || 0) + (Date.now() - t.pausedAt); }
-      t.pausedAt = null;
+      // 继续只是重新入队，此刻还没真正跑起来：保留计时冻结，
+      // 由真正开始运行（_startNextQueued）时再并入总暂停时长
       t.status = 'queued'; t.paused = false; delete t.resumeIdx;
       this._taskQueue.push(t.id);
       t.log.push('[全部继续]');

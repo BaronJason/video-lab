@@ -409,6 +409,9 @@ body {
 }
 .opt-actions { margin-top: 8px; }
 
+/* 行内小注（如「自动删除 [3 天] 前的缓存文件」的“前的缓存文件”） */
+.opt-inline-note { font-size: 12px; color: var(--text-secondary); white-space: nowrap; flex-shrink: 0; }
+
 /* 「路径与数据」占用量与提示分两行：主行仅数值（opt-path 单行省略），提示走独立 desc 行 ——
    窄窗口（App 设置 680 宽）不再出现「占用」拆字 / 释放数值断行 */
 #view-general .opt-row .form-group__label { flex-shrink: 0; white-space: nowrap; }

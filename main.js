@@ -433,6 +433,10 @@ function loadConfig() {
   for (const k of CONFIG_ANCHOR_KEYS) {
     if (disk[k] !== undefined && disk[k] !== null) cfg[k] = disk[k];
   }
+  // ⑤ 开发者开关 show_maintenance：前端无控件，只认 config.json（编辑器直改即生效），不随 settings.db
+  cfg.show_maintenance = (disk && typeof disk.show_maintenance === 'boolean')
+    ? disk.show_maintenance
+    : DEFAULT_CONFIG.show_maintenance;
   for (const k of OBSOLETE_CONFIG_KEYS) delete cfg[k];
   return cfg;
 }

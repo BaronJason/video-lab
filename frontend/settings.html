@@ -89,25 +89,33 @@
           </label>
         </div>
 
-        <label class="form-group__label">缓存</label>
+        <label class="form-group__label">缓存管理</label>
         <div class="opt-row">
-          <label class="form-group__label" for="cacheSize">占用</label>
-          <span class="opt-path" id="cacheSize">读取中…</span>
-          <button type="button" class="btn btn-ghost" id="btnCacheStats">查看构成</button>
-          <button type="button" class="btn btn-ghost" id="btnCacheClean">立即清理</button>
+          <label class="opt-radio">
+            <input type="radio" name="cachePolicy" value="off">
+            <span class="opt-radio__dot"></span>
+            <span class="opt-radio__label">不删除缓存文件</span>
+          </label>
         </div>
         <div class="opt-row">
-          <label class="opt-check">
-            <input type="checkbox" id="cacheAutoClean">
-            <span class="opt-check__box"></span>
-            <span>启动自动清理</span>
+          <label class="opt-radio">
+            <input type="radio" name="cachePolicy" value="auto">
+            <span class="opt-radio__dot"></span>
+            <span class="opt-radio__label">自动删除</span>
           </label>
-          <select class="form-input opt-time-select" id="cacheKeepDays" title="缓存保留时间">
-            <option value="3">保留 3 天</option>
-            <option value="7">保留 7 天</option>
-            <option value="15">保留 15 天</option>
-            <option value="30">保留 30 天</option>
+          <select class="form-input opt-time-select" id="cacheKeepDays" title="缓存保留天数">
+            <option value="3">3 天</option>
+            <option value="7">7 天</option>
+            <option value="15">15 天</option>
+            <option value="30">30 天</option>
           </select>
+          <span class="form-group__desc opt-inline-note">前的缓存文件</span>
+        </div>
+        <div class="opt-row">
+          <label class="form-group__label" for="cacheSize">缓存大小</label>
+          <span class="opt-path cache-size-value" id="cacheSize">读取中…</span>
+          <button type="button" class="btn btn-ghost" id="btnCacheStats">查看构成</button>
+          <button type="button" class="btn btn-ghost" id="btnCacheClean">立即清理</button>
         </div>
         <div class="form-group__desc" id="cacheStatsBox" style="display:none;white-space:pre-line;"></div>
       </div>

@@ -6882,7 +6882,7 @@ let themes = [];
   // 这样未来简化 config 时不会波及任何设置项（曾经的「回退读 config」正是隐患：config 一旦被
   // 裁掉某键，回退路径就取到 undefined，表现为设置莫名丢失或软件报错）。
   // 白名单仅供 main 端 get_settings 组装默认值时参考；读写本身不限键（任意键均可存取）。
-  static APP_SETTING_KEYS = ['notify_task_end', 'show_maintenance',
+  static APP_SETTING_KEYS = ['notify_task_end',
     'backup_dir', 'backup_auto_clean', 'backup_keep_days', 'cache_keep_days'];
 
   // 启动时把 settings.db 的 app scope 全量载入内存 config（覆盖 DEFAULT_CONFIG 的默认值）。

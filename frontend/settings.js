@@ -366,14 +366,14 @@
       if (pa) pa.textContent = s.config_path_appdata || '';
       var ld = $('logDirPath');
       if (ld) ld.textContent = s.log_dir || '';
-      // 「缓存」栏位：占用数值（主行单行）+ 自动清理开关（下拉天数随备份区同档）
+      // 「缓存管理」：单选策略（不删 / 自动删除+天数）；天数下拉始终可改（记忆预选值）
       var ci = s.cache_info || {};
       var cs = $('cacheSize');
       if (cs) cs.textContent = fmtSize(ci.size);
-      var cac = $('cacheAutoClean');
-      if (cac) cac.checked = (s.cache_keep_days || 0) > 0;
-      var ckd = $('cacheKeepDays');
-      if (ckd) ckd.value = String((s.cache_keep_days || 0) > 0 ? s.cache_keep_days : 7);
+      var ckc = $('cacheKeepDays');
+      var policy = (s.cache_keep_days || 0) > 0 ? 'auto' : 'off';
+      document.querySelectorAll('input[name="cachePolicy"]').forEach(function (rd) { rd.checked = rd.value === policy; });
+      if (ckc) ckc.value = String((s.cache_keep_days || 0) > 0 ? s.cache_keep_days : 7);
       // 「维护」板块可见性：config.json 的 show_maintenance（用户侧默认关闭；本机可置 true）
       var mtOn = s.show_maintenance === true;
       var mtNav = document.querySelector('.settings-nav__item[data-view="maintenance"]');
@@ -813,18 +813,23 @@
         toast('清理失败：' + ((e && e.message) || e), true);
       });
     });
-    // 「缓存自动清理」开关：复选框决定功能是否启动；天数下拉始终可改（记忆预选值）
+    // 「缓存管理」：偏好单选触发保存（off=0 / auto=天数）；天数下拉始终可改
     var iCacheKeep2 = document.getElementById('cacheKeepDays');
-    var iCacheAuto = document.getElementById('cacheAutoClean');
+    var cacheRadios = document.querySelectorAll('input[name="cachePolicy"]');
+    function cachePolicyVal() {
+      var auto = Array.prototype.some.call(cacheRadios, function (r) { return r.checked && r.value === 'auto'; });
+      return auto;
+    }
     if (iCacheKeep2) iCacheKeep2.addEventListener('change', function () {
       var n = parseInt(iCacheKeep2.value, 10); if (!(n > 0)) n = 7;
       iCacheKeep2.value = String(n);
-      api.save_settings({ cache_keep_days: (iCacheAuto && iCacheAuto.checked) ? n : 0 }).catch(function () {});
+      api.save_settings({ cache_keep_days: cachePolicyVal() ? n : 0 }).catch(function () {});
     });
-    if (iCacheAuto) iCacheAuto.addEventListener('change', function () {
+    cacheRadios.forEach(function (rd) { rd.addEventListener('change', function () {
+      if (!rd.checked) return;
       var n = parseInt((iCacheKeep2 && iCacheKeep2.value) || '7', 10); if (!(n > 0)) n = 7;
-      api.save_settings({ cache_keep_days: iCacheAuto.checked ? n : 0 }).catch(function () {});
-    });
+      api.save_settings({ cache_keep_days: rd.value === 'auto' ? n : 0 }).catch(function () {});
+    }); });
     // 备份目录只读（仅按钮可改）：选择后保存配置目录，并即时刷新显示实际落盘位置
     var bdBtn = document.getElementById('btnPickBackupDir');
     if (bdBtn && api && api.pick_directory) {

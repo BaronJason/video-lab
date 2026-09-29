@@ -1332,7 +1332,12 @@ class Api {
     // 缓存里没有（首次运行 / 刚新建的配置）才落到下面的目录扫描兜底 ——
     // 那是「用户主动打开某配置」的路径，允许读盘；启动渲染路径（项目列表）不经过这里。
     const fromCache = this._versionsFromTreeCache(project, name);
-    if (fromCache) return fromCache;
+    // 每版本是否有可跳日志（缓存命中路径此前漏算 → 前端恒判「配置没有对应日志」）
+    const logs = this._collectLogFiles().files;
+    if (fromCache) {
+      fromCache.forEach((v) => { v.hasLog = this._versionHasLog(v, project, name, logs); });
+      return fromCache;
+    }
     const pdir = path.join(this.root, project);
     if (!fs.existsSync(pdir) || !fs.statSync(pdir).isDirectory()) return [];
     const key = this.root + '\u0000' + project + '\u0000' + name;
@@ -1355,7 +1360,6 @@ class Api {
     // 每版本是否有可跳日志：配对锚点是「成片文件夹」
     //   - 成片内配置：仅当同一成片文件夹内存在对应日志才可跳
     //   - 外部(label含*)配置：当日有任何日志即可跳（多成片跳 -1、单成片跳唯一）
-    const logs = this._collectLogFiles().files;
     alive.forEach((v) => { v.hasLog = this._versionHasLog(v, project, name, logs); });
     this._versionsCache.set(key, alive);
     this._versionsFp.set(key, this._versionFingerprint(pdir, name));

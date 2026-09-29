@@ -813,21 +813,18 @@
         toast('清理失败：' + ((e && e.message) || e), true);
       });
     });
-    // 「缓存自动清理」开关：取消勾选 = 关闭（存 0）；勾选按下拉天数保存（与视频处理备份区同交互）
+    // 「缓存自动清理」开关：复选框决定功能是否启动；天数下拉始终可改（记忆预选值）
     var iCacheKeep2 = document.getElementById('cacheKeepDays');
     var iCacheAuto = document.getElementById('cacheAutoClean');
-    function syncCacheKeepDisabled() { if (iCacheKeep2) iCacheKeep2.disabled = !(iCacheAuto && iCacheAuto.checked); }
     if (iCacheKeep2) iCacheKeep2.addEventListener('change', function () {
       var n = parseInt(iCacheKeep2.value, 10); if (!(n > 0)) n = 7;
       iCacheKeep2.value = String(n);
       api.save_settings({ cache_keep_days: (iCacheAuto && iCacheAuto.checked) ? n : 0 }).catch(function () {});
     });
     if (iCacheAuto) iCacheAuto.addEventListener('change', function () {
-      syncCacheKeepDisabled();
       var n = parseInt((iCacheKeep2 && iCacheKeep2.value) || '7', 10); if (!(n > 0)) n = 7;
       api.save_settings({ cache_keep_days: iCacheAuto.checked ? n : 0 }).catch(function () {});
     });
-    syncCacheKeepDisabled();
     // 备份目录只读（仅按钮可改）：选择后保存配置目录，并即时刷新显示实际落盘位置
     var bdBtn = document.getElementById('btnPickBackupDir');
     if (bdBtn && api && api.pick_directory) {

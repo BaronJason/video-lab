@@ -380,6 +380,14 @@
       var mtView = $('view-maintenance');
       if (mtNav) mtNav.style.display = mtOn ? '' : 'none';
       if (mtView) mtView.style.display = mtOn ? '' : 'none';
+      // 「查看构成」属开发者诊断信息（表名/条数/体积），普通用户只需清理 →
+      // 与维护板块共用同一开关：非开发机隐藏按钮，明细区也随之不可达
+      var bcs = $('btnCacheStats');
+      if (bcs) bcs.style.display = mtOn ? '' : 'none';
+      if (!mtOn) {
+        var boxHide = document.getElementById('cacheStatsBox');
+        if (boxHide) boxHide.style.display = 'none';
+      }
       var b = s.batch || {};
       $('batchSuffixMark').value = b.suffix_mark != null ? b.suffix_mark : '';
       $('batchMaxDuration').value = b.max_duration != null ? b.max_duration : '';

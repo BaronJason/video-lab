@@ -305,6 +305,9 @@
       // 「打开备份目录」行：显示备份实际落盘根（自定义目录时含「Video Lab 备份」层）
       var bdp = $('backupDirPath');
       if (bdp) bdp.textContent = s.backup_root_effective || '';
+      // 实际落盘路径显示在路径栏内（placeholder），不再单独一行小字
+      var bdIn = $('backupDir');
+      if (bdIn && s.backup_root_effective) { bdIn.placeholder = s.backup_root_effective; bdIn.title = '实际落盘位置：' + s.backup_root_effective; }
       var bac = $('backupAutoClean');
       if (bac) bac.checked = s.backup_auto_clean === true;
       var bkd = $('backupKeepDays');

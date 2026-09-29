@@ -104,6 +104,9 @@ const PURE_BACKEND_ROUTES = {
   check_env: { m: 'checkEnvAsync', a: () => [] },
   cancel_precheck: { m: 'cancelPrecheck', a: () => [] },
   clean_video_cache: { m: 'cleanVideoCache', a: () => [] },
+  cache_info: { m: 'cacheInfo', a: () => [] },
+  cache_stats: { m: 'cacheStats', a: () => [] },
+  clean_caches: { m: 'cleanCaches', a: () => [] },
 };
 
 function startHttpServer(opts) {

@@ -693,6 +693,85 @@ class CacheStore {
     return n;
   }
 
+  // ── 缓存治理（自动/手动清理 · 体积与构成统计）──
+  // 为什么需要：库体积的大头是 clip_index（每行存「整目录的视频清单」）与 txt_content（TXT 全文），
+  // 而它们此前既无「文件是否存在」的判定、也无删除接口 —— 只要工作路径变化或测试跑过一次，
+  // 那些条目就永久驻留。以下接口供 backend 的「保守清理」（只删已失效路径）与设置页统计使用。
+  listClips(prefix) {
+    return this.open().prepare('SELECT dir FROM clip_index WHERE dir LIKE ?').all(String(prefix || '') + '%')
+      .map((r) => String(r.dir));
+  }
+  deleteClips(dirs) {
+    const list = Array.isArray(dirs) ? dirs : (dirs ? Array.from(dirs) : []);
+    if (!list.length) return 0;
+    const db = this.open();
+    let n = 0;
+    this.transaction(() => {
+      for (const ch of chunked(list, 400)) {
+        const ph = ch.map(() => '?').join(',');
+        n += Number(db.prepare(`DELETE FROM clip_index WHERE dir IN (${ph})`).run(...ch.map(String)).changes) || 0;
+      }
+    });
+    return n;
+  }
+  listTxtPaths(prefix) {
+    return this.open().prepare('SELECT path FROM txt_content WHERE path LIKE ?').all(String(prefix || '') + '%')
+      .map((r) => String(r.path));
+  }
+  deleteTxtPaths(paths) {
+    const list = Array.isArray(paths) ? paths : (paths ? Array.from(paths) : []);
+    if (!list.length) return 0;
+    const db = this.open();
+    let n = 0;
+    this.transaction(() => {
+      for (const ch of chunked(list, 400)) {
+        const ph = ch.map(() => '?').join(',');
+        n += Number(db.prepare(`DELETE FROM txt_content WHERE path IN (${ph})`).run(...ch.map(String)).changes) || 0;
+      }
+    });
+    return n;
+  }
+  // 按前缀删 cache_kv（清理「已失效工作路径」的 txt_tree:<root> / log_index:<root>）
+  deleteKvPrefix(prefix) {
+    if (!prefix) return 0;
+    return Number(this.open().prepare('DELETE FROM cache_kv WHERE k LIKE ?').run(String(prefix) + '%').changes) || 0;
+  }
+  // 库的真实占用（含 WAL/SHM）
+  dbSizeBytes() {
+    let n = 0;
+    for (const suf of ['', '-wal', '-shm']) { try { n += fs.statSync(this.dbPath + suf).size; } catch (e) {} }
+    return n;
+  }
+  // 构成统计：逐表行数 + 内容体积（列名从 PRAGMA 动态取，避免表结构变化后统计失真）
+  stats() {
+    const db = this.open();
+    const names = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+      .all().map((r) => String(r.name));
+    const tables = [];
+    for (const t of names) {
+      let rows = 0;
+      try { rows = Number(db.prepare(`SELECT COUNT(*) n FROM "${t}"`).get().n) || 0; } catch (e) { continue; }
+      let bytes = 0;
+      try {
+        const cols = db.prepare(`PRAGMA table_info("${t}")`).all().map((c) => String(c.name));
+        if (cols.length) bytes = Number(db.prepare('SELECT SUM(' + cols.map((c) => 'LENGTH("' + c + '")').join('+') + ') s FROM "' + t + '"').get().s) || 0;
+      } catch (e) { bytes = 0; }
+      tables.push({ table: t, rows, bytes });
+    }
+    return { fileBytes: this.dbSizeBytes(), tables: tables.sort((a, b) => b.bytes - a.bytes) };
+  }
+  // 回收页碎片：只在确有删除后调用；会重写库文件（耗时），务必在空闲期执行。
+  // ⚠ VACUUM 会把整库重写一遍 → WAL 随之暴涨（实测 52MB→99MB）；必须紧跟一次
+  //   wal_checkpoint(TRUNCATE) 把 WAL 截断归零，否则「占用」统计反而变大、看着像没清。
+  vacuum() {
+    try {
+      const db = this.open();
+      db.exec('VACUUM');
+      try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch (e) {}
+      return true;
+    } catch (e) { return false; }
+  }
+
   // ── log_cache ──
   getLog(lp) { return this.open().prepare('SELECT * FROM log_cache WHERE log_path = ?').get(String(lp)) || null; }
   setLog(lp, mtime, entries) {

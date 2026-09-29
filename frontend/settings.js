@@ -363,8 +363,16 @@
       if (pa) pa.textContent = s.config_path_appdata || '';
       var ld = $('logDirPath');
       if (ld) ld.textContent = s.log_dir || '';
-      var cdp = $('cfgDirPath');
-      if (cdp) cdp.textContent = s.config_path || '';
+      // 「缓存」栏位：占用 + 上次自动清理（保留天数走下拉；不再展示 config.json 这类文件路径）
+      var ci = s.cache_info || {};
+      var cs = $('cacheSize');
+      if (cs) {
+        cs.textContent = fmtSize(ci.size) + (ci.lastAt
+          ? ('　·　上次自动清理 ' + fmtTime(ci.lastAt) + '，释放 ' + fmtSize(ci.lastFreed))
+          : '　·　尚未自动清理');
+      }
+      var ckd = $('cacheKeepDays');
+      if (ckd) ckd.value = String(s.cache_keep_days != null ? s.cache_keep_days : 30);
       // 「维护」板块可见性：config.json 的 show_maintenance（用户侧默认关闭；本机可置 true）
       var mtOn = s.show_maintenance === true;
       var mtNav = document.querySelector('.settings-nav__item[data-view="maintenance"]');
@@ -396,6 +404,22 @@
       updatePreview();
       // 读取设置完毕：不再需要记录原始值（已无「未保存」概念），也不触发保存
     }).catch(function (e) { setStatus('读取设置失败：' + ((e && e.message) || e), false); });
+  }
+
+  // 缓存栏位用的轻量格式化（体积 / 时间）
+  function fmtSize(n) {
+    var v = Number(n) || 0;
+    if (v <= 0) return '0 B';
+    if (v < 1024) return v + ' B';
+    if (v < 1048576) return (v / 1024).toFixed(1) + ' KB';
+    if (v < 1073741824) return (v / 1048576).toFixed(1) + ' MB';
+    return (v / 1073741824).toFixed(2) + ' GB';
+  }
+  function fmtTime(ts) {
+    var d = new Date(Number(ts) || 0);
+    if (!(d.getTime() > 0)) return '';
+    var p = function (x) { return (x < 10 ? '0' : '') + x; };
+    return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
   }
 
   // 轻量角落提示（toast）：仅告知、无需操作，自动消失。type：ok/error/info/warn
@@ -716,6 +740,53 @@
       api.open_folder_select(dir).then(function (r) {
         if (!(r && r.ok)) toast('打开失败：' + ((r && r.error) || '路径不存在'), true);
       }).catch(function (e) { toast('打开失败：' + e.message, true); });
+    });
+    // 「缓存」栏位：查看构成（页内展开）/ 立即清理 / 保留缓存时间
+    var bCacheStats = document.getElementById('btnCacheStats');
+    if (bCacheStats && api && api.cache_stats) bCacheStats.addEventListener('click', function () {
+      var box = document.getElementById('cacheStatsBox');
+      if (!box) return;
+      if (box.style.display !== 'none') { box.style.display = 'none'; return; }
+      bCacheStats.disabled = true;
+      api.cache_stats().then(function (r) {
+        bCacheStats.disabled = false;
+        var st = (r && r.stats) || {};
+        var lines = ['缓存文件 ' + fmtSize(st.fileBytes)];
+        (st.tables || []).forEach(function (t) {
+          if (!t || !t.rows) return;
+          lines.push('　' + t.table + '：' + t.rows + ' 条 / ' + fmtSize(t.bytes));
+        });
+        box.textContent = lines.join('\n');
+        box.style.display = '';
+      }).catch(function (e) {
+        bCacheStats.disabled = false;
+        toast('读取缓存构成失败：' + ((e && e.message) || e), true);
+      });
+    });
+    var bCacheClean = document.getElementById('btnCacheClean');
+    if (bCacheClean && api && api.clean_caches) bCacheClean.addEventListener('click', function () {
+      bCacheClean.disabled = true;
+      bCacheClean.textContent = '清理中…';
+      api.clean_caches().then(function (r) {
+        bCacheClean.disabled = false;
+        bCacheClean.textContent = '立即清理';
+        toast('缓存已清理：移除 ' + ((r && r.removed) || 0) + ' 条，释放 ' + fmtSize(r && r.freed) + '，现 ' + fmtSize(r && r.size), 'ok');
+        var cs = document.getElementById('cacheSize');
+        if (cs && r) cs.textContent = fmtSize(r.size) + '　·　刚刚手动清理，释放 ' + fmtSize(r.freed);
+        var box = document.getElementById('cacheStatsBox');
+        if (box) box.style.display = 'none';
+      }).catch(function (e) {
+        bCacheClean.disabled = false;
+        bCacheClean.textContent = '立即清理';
+        toast('清理失败：' + ((e && e.message) || e), true);
+      });
+    });
+    var iCacheKeep = document.getElementById('cacheKeepDays');
+    if (iCacheKeep && api && api.save_settings) iCacheKeep.addEventListener('change', function () {
+      var n = parseInt(iCacheKeep.value, 10);
+      if (!(n >= 0)) n = 30;
+      iCacheKeep.value = String(n);
+      api.save_settings({ cache_keep_days: n }).catch(function () {});
     });
     // 「默认备份目录」行：打开备份实际落盘目录（自定义目录时含其下的「Video Lab 备份」层）
     // 「默认备份目录」输入框：改动后（失焦 / 回车）**立即保存** ——

@@ -84,6 +84,7 @@ const DEFAULT_CONFIG = {
   backup_dir: '',             // 视频处理「处理前备份」的默认目录；留空 = 数据目录下 backup（与缓存库同目录）
   backup_auto_clean: false,   // 视频处理任务完成后自动清理过期备份（默认关闭；删除走回收站可还原）
   backup_keep_days: 7,        // 备份保留天数（3 / 7 / 15 / 30）
+  cache_keep_days: 30,        // 缓存保留天数：内容缓存（视频/目录/TXT 条目）超期未更新即清理（缓存可再生）
   auto_check_update: true,    // 启动时自动检查更新
   check_update_daily: false,  // 每日定时检查更新（整点触发，需 app 保持运行）
   check_update_hour: 9,       // 每日定时检查更新时间（24 小时制整点 0-23，默认 9）
@@ -2153,6 +2154,123 @@ class Api {
   async cleanVideoCache() {
     const removed = await this._gcVideoCacheNow();
     return { ok: true, removed: removed || 0 };
+  }
+
+  // ── 缓存治理：自动清理（保守 + 保留期）· 构成统计 · 手动清理 ──
+  // 口径：
+  //   ① 保守规则 —— 只删「指向已不存在目录/文件」的条目：客观失效，绝不误删仍在用的缓存；
+  //   ② 保留期   —— 内容缓存（视频/目录/TXT 条目）超过 cache_keep_days 未更新也清理。
+  //                 缓存可再生，不影响成片与配置；任务记录与运行日志不属于「内容缓存」，不在此列。
+  //   ③ 触发     —— 启动后空闲期（节流 ≥24h）+ 库体积超阈值；
+  //   ④ 释放显著 → VACUUM 回收页碎片（会重写库文件，必须留在空闲期执行）。
+  _cacheKeepDays() {
+    const n = parseInt(this.config && this.config.cache_keep_days, 10);
+    return (Number.isFinite(n) && n >= 0) ? n : 30;
+  }
+  _cacheGcState() {
+    try { return JSON.parse(this._cacheStore.getMeta('cache_gc') || '{}') || {}; } catch (e) { return {}; }
+  }
+  // 概览（设置页显示：体积 / 保留天数 / 上次自动清理）
+  cacheInfo() {
+    try {
+      const st = this._cacheGcState();
+      return { ok: true, size: this._cacheStore ? this._cacheStore.dbSizeBytes() : 0,
+        keepDays: this._cacheKeepDays(), lastAt: st.at || 0, lastRemoved: st.removed || 0, lastFreed: st.freed || 0 };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  }
+  // 构成（设置页「查看构成」）
+  cacheStats() {
+    try { return { ok: true, stats: this._cacheStore.stats() }; }
+    catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  }
+  // 清理实现（自动/手动共用）。limit>0 时只处理前 limit 条（空闲期分批，避免冷态机械盘冻住界面）
+  async _gcStaleCaches(opts) {
+    if (!this._useDbCache() || !this._cacheStore) return { removed: 0, freed: 0, size: 0 };
+    const store = this._cacheStore;
+    const limit = Number(opts && opts.limit) > 0 ? Number(opts.limit) : 0;
+    const keepDays = this._cacheKeepDays();
+    const keepMs = keepDays > 0 ? keepDays * 86400000 : 0;
+    const now = Date.now();
+    const before = store.dbSizeBytes();
+    let removed = 0;
+    const exists = (p) => { try { fs.statSync(p); return true; } catch (e) { return false; } };
+    // ① clip_index（体积大头）：目录不存在 / 超保留期 → 删
+    try {
+      const del = [];
+      for (const d of store.listClips('')) {
+        if (!exists(d)) { del.push(d); continue; }
+        if (keepMs) { try { if (now - fs.statSync(d).mtimeMs > keepMs) del.push(d); } catch (e) {} }
+        if (limit && del.length >= limit) break;
+      }
+      if (del.length) removed += store.deleteClips(del);
+    } catch (e) {}
+    // ② txt_content：文件不存在 / 超保留期（updated_at）→ 删
+    try {
+      const rows = store.open().prepare('SELECT path, updated_at FROM txt_content').all();
+      const del = [];
+      for (const r of rows) {
+        const p = String(r.path);
+        if (!exists(p)) { del.push(p); continue; }
+        if (keepMs && Number(r.updated_at) > 0 && now - Number(r.updated_at) > keepMs) del.push(p);
+        if (limit && del.length >= limit) break;
+      }
+      if (del.length) removed += store.deleteTxtPaths(del);
+    } catch (e) {}
+    // ③ scan_cache：键（盘符开头的目录/根）不存在 → 删
+    try {
+      const del = [];
+      for (const r of store.listScans('')) {
+        const k = String(r.key);
+        if (/^[A-Za-z]:[\\/]/.test(k) && !exists(k)) del.push(k);
+        if (limit && del.length >= limit) break;
+      }
+      if (del.length) removed += store.deleteScans(del);
+    } catch (e) {}
+    // ④ cache_kv：txt_tree:<root> / log_index:<root> 等指向的 root 已不存在 → 删（含历史异写法与错位残留）
+    try {
+      const kv = store.listKv('');
+      for (const k of Object.keys(kv)) {
+        const m = /^(txt_tree|log_index|replica_logs|scan_index):(.+)$/.exec(k);
+        if (m && !exists(m[2])) removed += store.deleteKvPrefix(k);
+      }
+    } catch (e) {}
+    // ⑤ video_cache 的失效条目沿用既有 GC（missing_since 超期回收）
+    try { removed += (await this._gcVideoCacheNow()) || 0; } catch (e) {}
+    // ⚠ VACUUM 的条件**不能**是「删除后文件是否立即变小」—— SQLite 删除只把页释放进 freelist，
+    //   文件大小不变（实测移除 3197 条后仍 56.2MB）；只有 VACUUM（并截断 WAL）才真正回收。
+    if (removed > 0) { try { store.vacuum(); } catch (e) {} }
+    const size = store.dbSizeBytes();
+    const out = { at: now, removed, freed: Math.max(0, before - size), size };
+    try { store.setMeta('cache_gc', JSON.stringify(out)); } catch (e) {}
+    return out;
+  }
+  // 启动后空闲期触发：节流 ≥24h；库体积超阈值（40MB）时不受节流限制
+  async gcCachesIdle() {
+    if (!this._useDbCache() || !this._cacheStore) return { ok: true, skipped: 'no-store' };
+    const IDLE_MS = 24 * 3600 * 1000, BIG = 40 * 1024 * 1024;
+    let size = 0;
+    try { size = this._cacheStore.dbSizeBytes(); } catch (e) { return { ok: true, skipped: 'stat-fail' }; }
+    const st = this._cacheGcState();
+    const due = !st.at || (Date.now() - st.at > IDLE_MS);
+    if (!due && size < BIG) return { ok: true, skipped: 'not-due', size };
+    const r = await this._gcStaleCaches({ limit: 0 });
+    try {
+      this._lg('SYS', 'cache.gc.run',
+        '缓存自动清理 · 移除 ' + (r.removed || 0) + ' 条 · 释放 ' + this._humanSize(r.freed || 0)
+        + ' · 现 ' + this._humanSize(r.size || 0) + '（保留期 ' + this._cacheKeepDays() + ' 天 · 触发 ' + (due ? '到期' : '体积超阈值') + '）',
+        { removed: r.removed || 0, freed: r.freed || 0, size: r.size || 0, keepDays: this._cacheKeepDays(), due });
+    } catch (e) {}
+    return { ok: true, ...r, due };
+  }
+  // 前台接口：立即清理（设置页按钮）
+  async cleanCaches() {
+    const r = await this._gcStaleCaches({ limit: 0 });
+    try {
+      this._lg('SYS', 'cache.gc.manual',
+        '手动清理缓存 · 移除 ' + (r.removed || 0) + ' 条 · 释放 ' + this._humanSize(r.freed || 0) + ' · 现 ' + this._humanSize(r.size || 0),
+        { removed: r.removed || 0, freed: r.freed || 0, size: r.size || 0 });
+    } catch (e) {}
+    return { ok: true, removed: r.removed || 0, freed: r.freed || 0, size: r.size || 0 };
   }
 
   // 启动后空闲期的失效清理：**入队**（不分冷热），由空闲队列串行 + 自适应节流执行；
@@ -6764,7 +6882,7 @@ let themes = [];
   // 裁掉某键，回退路径就取到 undefined，表现为设置莫名丢失或软件报错）。
   // 白名单仅供 main 端 get_settings 组装默认值时参考；读写本身不限键（任意键均可存取）。
   static APP_SETTING_KEYS = ['notify_task_end', 'show_maintenance',
-    'backup_dir', 'backup_auto_clean', 'backup_keep_days'];
+    'backup_dir', 'backup_auto_clean', 'backup_keep_days', 'cache_keep_days'];
 
   // 启动时把 settings.db 的 app scope 全量载入内存 config（覆盖 DEFAULT_CONFIG 的默认值）。
   // 未落过库的键保持默认值 —— 这就是「不回退 config」后的取值语义：

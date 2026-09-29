@@ -1515,7 +1515,6 @@ function buildHttpExtraRoutes() {
         update_source: c.update_source === 'github' ? 'github' : 'gitee',
         update_mode: c.update_mode === 'auto' ? 'auto' : 'notify',
         config_storage: c.config_storage === 'appdata' ? 'appdata' : 'program',
-        config_path: configFilePath(),
         config_path_program: path.dirname(programConfigPath()),
         config_path_appdata: path.dirname(appdataConfigPath()),
         autostart: c.autostart === true,
@@ -1524,6 +1523,8 @@ function buildHttpExtraRoutes() {
         http_token: String(c.http_token || ''),
         http_url: httpUrl(),
         log_dir: runLog.getDir(),
+        cache_keep_days: (() => { const n = parseInt(c.cache_keep_days, 10); return Number.isFinite(n) && n >= 0 ? n : 30; })(),
+        cache_info: (() => { try { return api.cacheInfo(); } catch (e) { return {}; } })(),
         show_maintenance: c.show_maintenance === true,
         notify_task_end: c.notify_task_end !== false,
         backup_dir: String(c.backup_dir || ''),
@@ -1668,6 +1669,9 @@ function registerIpc() {
   // 仅刷新预缓存：不删缓存，只对缺失/变化的视频增量更新（与重置同通道回报进度）
   ipcMain.handle('refresh_precache', (e) => { const sender = e.sender; return api.refreshPrecache((s) => { try { sender.send('reset_progress', s); } catch (err) {} if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('reset_progress', s); }); });
   ipcMain.handle('clean_video_cache', (e) => api.cleanVideoCache());
+  ipcMain.handle('cache_info', () => api.cacheInfo());
+  ipcMain.handle('cache_stats', () => api.cacheStats());
+  ipcMain.handle('clean_caches', () => api.cleanCaches());
   ipcMain.handle('list_logs', (e, project, name, versionPath) => api.listLogs(project, name, versionPath));
   ipcMain.handle('search_logs', (e, query) => api.searchLogs(query));
   ipcMain.handle('get_log_content', (e, fromPath, configName) => api.logContent(fromPath, configName));
@@ -1828,10 +1832,11 @@ function registerIpc() {
       update_source: c.update_source === 'github' ? 'github' : 'gitee',
       update_mode: c.update_mode === 'auto' ? 'auto' : 'notify',
       config_storage: c.config_storage === 'appdata' ? 'appdata' : 'program',
-      config_path: configFilePath(),
       config_path_program: path.dirname(programConfigPath()),   // 显示目录（含引导文件与三库）
       config_path_appdata: path.dirname(appdataConfigPath()),
       log_dir: runLog.getDir(),   // 运行日志目录（设置页「打开文件夹」用；与 HTTP 版 get_settings 对齐）
+      cache_keep_days: (() => { const n = parseInt(c.cache_keep_days, 10); return Number.isFinite(n) && n >= 0 ? n : 30; })(),
+      cache_info: (() => { try { return api.cacheInfo(); } catch (e) { return {}; } })(),
       show_maintenance: c.show_maintenance === true,   // 「维护」板块可见性（用户侧默认关闭）
       notify_task_end: c.notify_task_end !== false,   // 任务通知（默认开启）
       backup_dir: String(c.backup_dir || ''),
@@ -2344,7 +2349,12 @@ app.whenReady().then(async () => {
     // 数据缓存失效清理：**窗口就绪后 15 秒**的空闲期增量执行（限量 600 条 + 细让路 + 批间小睡）。
     // 绝不放在启动关键路径：冷态全量核验近万条机械盘路径曾把事件循环冻住 49.5 秒（2026-09-26 实测，
     // 窗口 1.4 秒已画出来、用户却点不动近一分钟）。清理是维护任务，摊到多次启动完成即可。
-    setTimeout(() => { try { api.gcVideoCacheIdle().catch(() => {}); } catch (e) {} }, 15000);
+    // 启动后空闲期（15s）：先做 video_cache 失效核验，再做缓存治理
+    // （保守失效 + 保留期 + 释放显著时 VACUUM）—— 恢复默认「用户无需手动清缓存」
+    setTimeout(() => {
+      try { api.gcVideoCacheIdle().catch(() => {}); } catch (e) {}
+      try { api.gcCachesIdle().catch(() => {}); } catch (e) {}
+    }, 15000);
     // 启动自动检查更新（仅检查；UPDATE_ENABLED=false 时便携版静默停用）
     if (UPDATE_ENABLED && mainWin && !mainWin.isDestroyed()) {
       if (config.auto_check_update !== false) setTimeout(() => checkForUpdate({ silent: true }), 3000);

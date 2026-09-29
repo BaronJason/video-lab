@@ -409,6 +409,15 @@ body {
 }
 .opt-actions { margin-top: 8px; }
 
+/* 「占用」行中间是清理信息文本（非路径）—— 放开单行截断，允许自然换行，避免「释放 …」被吃字 */
+#view-general #cacheSize {
+  white-space: normal;
+  word-break: break-word;
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+}
+
 /* ─── 检查更新二次确认弹窗（居中模态） ─── */
 .update-confirm-mask {
   position: fixed;

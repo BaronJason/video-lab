@@ -1960,6 +1960,7 @@ function registerIpc() {
     return { ok: true };
   });
   // 设置页：通用「选择目录」对话框（parent 取调用方窗口，引导窗口/设置窗口/主窗口通用）
+  let settingsPickingDir = false; // 目录选择中的互斥标记（此前被误删，导致 pick_directory 报 ReferenceError）
   ipcMain.handle('pick_directory', async (e, title, defaultPath) => {
     settingsPickingDir = true;
     try {

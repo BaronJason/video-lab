@@ -2,6 +2,7 @@
 // Video Lab — 设置窗口逻辑（通用设置 / 批量拼接 / 视频复刻）
 'use strict';
 (function () {
+  var _backupCfgDir = ''; // 备份配置目录（输入框只读显示实际落盘位置，保存用此值）
   var $ = function (id) { return document.getElementById(id); };
   var api = window.txapi;
 
@@ -298,16 +299,15 @@
       if (nte) nte.checked = s.notify_task_end !== false;   // 默认开启
       var bd = $('backupDir');
       if (bd) {
-        bd.value = s.backup_dir || '';
-        // 占位符直接显示实际默认地址（比文字解释更直观）
-        if (s.backup_dir_effective) bd.placeholder = s.backup_dir_effective;
+        // 只读：备份目录仅能通过「选择文件夹」按钮修改；显示实际落盘位置
+        bd.readOnly = true;
+        bd.placeholder = s.backup_dir_effective || '';
+        if (s.backup_root_effective) { bd.value = s.backup_root_effective; bd.title = '实际落盘位置：' + s.backup_root_effective; }
       }
+      _backupCfgDir = String(s.backup_dir || '');
       // 「打开备份目录」行：显示备份实际落盘根（自定义目录时含「Video Lab 备份」层）
       var bdp = $('backupDirPath');
       if (bdp) bdp.textContent = s.backup_root_effective || '';
-      // 实际落盘路径显示在路径栏内（placeholder），不再单独一行小字
-      var bdIn = $('backupDir');
-      if (bdIn && s.backup_root_effective) { bdIn.placeholder = s.backup_root_effective; bdIn.title = '实际落盘位置：' + s.backup_root_effective; }
       var bac = $('backupAutoClean');
       if (bac) bac.checked = s.backup_auto_clean === true;
       var bkd = $('backupKeepDays');
@@ -582,7 +582,7 @@
         check_update_hour: parseInt($('checkUpdateHour').value, 10) || 9,
         autostart: !!$('autoStart').checked,
         notify_task_end: !!$('notifyTaskEnd').checked,
-        backup_dir: ($('backupDir') && $('backupDir').value.trim()) || '',
+        backup_dir: _backupCfgDir || '',
         backup_auto_clean: !!($('backupAutoClean') && $('backupAutoClean').checked),
         backup_keep_days: parseInt(($('backupKeepDays') && $('backupKeepDays').value) || '7', 10) || 7,
         close_behavior: cbEl ? cbEl.value : 'tray',
@@ -797,14 +797,21 @@
       api.save_settings({ cache_keep_days: iCacheAuto.checked ? n : 0 }).catch(function () {});
     });
     syncCacheKeepDisabled();
-    // 「默认备份目录」行：打开备份实际落盘目录（自定义目录时含其下的「Video Lab 备份」层）
-    // 「默认备份目录」输入框：改动后（失焦 / 回车）**立即保存** ——
-    // 否则「打开备份目录」仍按已保存的旧值打开（改目录后点打开，用的还是之前的目录）。
-    // 用 change 而非 input：避免边输入边触发保存／备份目录迁移。
-    var bdInput = document.getElementById('backupDir');
-    if (bdInput && api && api.save_settings) {
-      bdInput.addEventListener('change', function () {
-        api.save_settings({ backup_dir: bdInput.value.trim() }).catch(function () {});
+    // 备份目录只读（仅按钮可改）：选择后保存配置目录，并即时刷新显示实际落盘位置
+    var bdBtn = document.getElementById('btnPickBackupDir');
+    if (bdBtn && api && api.pick_directory) {
+      bdBtn.addEventListener('click', function () {
+        api.pick_directory('选择备份目录', _backupCfgDir || '').then(function (dir) {
+          if (typeof dir !== 'string' || !dir.trim()) { setStatus('已取消选择', false); return; }
+          _backupCfgDir = dir.trim();
+          api.save_settings({ backup_dir: _backupCfgDir }).then(function (r) {
+            if (r && r.ok) toast('备份目录已保存', 'ok');
+          }).catch(function () { setStatus('保存备份目录失败', true); });
+          if (api.get_settings) api.get_settings().then(function (s) {
+            var bdE = document.getElementById('backupDir');
+            if (bdE && s && s.backup_root_effective) { bdE.value = s.backup_root_effective; bdE.title = '实际落盘位置：' + s.backup_root_effective; }
+          }).catch(function () {});
+        }).catch(function () { setStatus('选择备份目录失败', true); });
       });
     }
     // 「关闭行为」「任务结束通知」：同属「改完立刻影响当前行为」的开关 → 即时保存

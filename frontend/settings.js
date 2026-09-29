@@ -363,17 +363,14 @@
       if (pa) pa.textContent = s.config_path_appdata || '';
       var ld = $('logDirPath');
       if (ld) ld.textContent = s.log_dir || '';
-      // 「缓存」栏位：占用 + 上次自动清理（保留天数走下拉；不再展示 config.json 这类文件路径）
+      // 「缓存」栏位：占用数值（主行单行）+ 自动清理开关（下拉天数随备份区同档）
       var ci = s.cache_info || {};
-      // 数值与清理提示分两个节点：主行只放数值（窄窗不折行），提示独立小字行
       var cs = $('cacheSize');
       if (cs) cs.textContent = fmtSize(ci.size);
-      var cgi = $('cacheGcInfo');
-      if (cgi) cgi.textContent = ci.lastAt
-        ? ('上次自动清理 ' + fmtTime(ci.lastAt) + '，释放 ' + fmtSize(ci.lastFreed))
-        : '尚未自动清理';
+      var cac = $('cacheAutoClean');
+      if (cac) cac.checked = (s.cache_keep_days || 0) > 0;
       var ckd = $('cacheKeepDays');
-      if (ckd) ckd.value = String(s.cache_keep_days != null ? s.cache_keep_days : 30);
+      if (ckd) ckd.value = String((s.cache_keep_days || 0) > 0 ? s.cache_keep_days : 7);
       // 「维护」板块可见性：config.json 的 show_maintenance（用户侧默认关闭；本机可置 true）
       var mtOn = s.show_maintenance === true;
       var mtNav = document.querySelector('.settings-nav__item[data-view="maintenance"]');
@@ -774,8 +771,6 @@
         toast('缓存已清理：移除 ' + ((r && r.removed) || 0) + ' 条，释放 ' + fmtSize(r && r.freed) + '，现 ' + fmtSize(r && r.size), 'ok');
         var cs = document.getElementById('cacheSize');
         if (cs && r) cs.textContent = fmtSize(r.size);
-        var cgi2 = document.getElementById('cacheGcInfo');
-        if (cgi2 && r) cgi2.textContent = '刚刚手动清理，释放 ' + fmtSize(r.freed);
         var box = document.getElementById('cacheStatsBox');
         if (box) box.style.display = 'none';
       }).catch(function (e) {
@@ -784,13 +779,21 @@
         toast('清理失败：' + ((e && e.message) || e), true);
       });
     });
-    var iCacheKeep = document.getElementById('cacheKeepDays');
-    if (iCacheKeep && api && api.save_settings) iCacheKeep.addEventListener('change', function () {
-      var n = parseInt(iCacheKeep.value, 10);
-      if (!(n >= 0)) n = 30;
-      iCacheKeep.value = String(n);
-      api.save_settings({ cache_keep_days: n }).catch(function () {});
+    // 「缓存自动清理」开关：取消勾选 = 关闭（存 0）；勾选按下拉天数保存（与视频处理备份区同交互）
+    var iCacheKeep2 = document.getElementById('cacheKeepDays');
+    var iCacheAuto = document.getElementById('cacheAutoClean');
+    function syncCacheKeepDisabled() { if (iCacheKeep2) iCacheKeep2.disabled = !(iCacheAuto && iCacheAuto.checked); }
+    if (iCacheKeep2) iCacheKeep2.addEventListener('change', function () {
+      var n = parseInt(iCacheKeep2.value, 10); if (!(n > 0)) n = 7;
+      iCacheKeep2.value = String(n);
+      api.save_settings({ cache_keep_days: (iCacheAuto && iCacheAuto.checked) ? n : 0 }).catch(function () {});
     });
+    if (iCacheAuto) iCacheAuto.addEventListener('change', function () {
+      syncCacheKeepDisabled();
+      var n = parseInt((iCacheKeep2 && iCacheKeep2.value) || '7', 10); if (!(n > 0)) n = 7;
+      api.save_settings({ cache_keep_days: iCacheAuto.checked ? n : 0 }).catch(function () {});
+    });
+    syncCacheKeepDisabled();
     // 「默认备份目录」行：打开备份实际落盘目录（自定义目录时含其下的「Video Lab 备份」层）
     // 「默认备份目录」输入框：改动后（失焦 / 回车）**立即保存** ——
     // 否则「打开备份目录」仍按已保存的旧值打开（改目录后点打开，用的还是之前的目录）。

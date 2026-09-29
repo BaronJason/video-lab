@@ -3311,6 +3311,10 @@ class Api {
             outDir: t.outDir || '', _stopRequested: !!t._stopRequested,
             groupDate: typeof t.groupDate === 'string' ? t.groupDate : '',
             failedVideos: Array.isArray(t.failedVideos) ? t.failedVideos.slice(-100) : [],
+            // 失败成片【序号】：续跑按序号补做的唯一依据。此前未随任务落盘 → 实例重启后续跑
+            // 退化成「按成片名解析」，而 failedVideos 里的「第N个」是占位名，必然解析失败。
+            failedIndices: Array.isArray(t.failedIndices)
+              ? t.failedIndices.filter((n) => Number.isInteger(n) && n > 0).slice(-500) : [],
           };
           store.upsertTask({
             id: t.id, seq: parseInt(String(t.id).replace(/\D/g, ''), 10) || 0,
@@ -3353,7 +3357,8 @@ class Api {
         if (t.status !== 'paused' && t.status !== 'done' && t.status !== 'stopped' && t.status !== 'error' && t.status !== 'interrupted'
           && t.status !== 'queued' && t.status !== 'running') continue;
         t.log = store.getTaskLog(t.id);
-        const restored = Object.assign({}, t, { env: t.env || {}, pid: null, progress: t.progress || { current: 0, total: 0 }, log: Array.isArray(t.log) ? t.log : [], failedVideos: Array.isArray(t.failedVideos) ? t.failedVideos : [] });
+        const restored = Object.assign({}, t, { env: t.env || {}, pid: null, progress: t.progress || { current: 0, total: 0 }, log: Array.isArray(t.log) ? t.log : [], failedVideos: Array.isArray(t.failedVideos) ? t.failedVideos : [],
+          failedIndices: Array.isArray(t.failedIndices) ? t.failedIndices.filter((n) => Number.isInteger(n) && n > 0) : [] });
         // 强杀/异常退出恢复兜底：非终态任务转为可继续状态，避免任务从列表凭空消失
         // （正常退出走 shutdownTasks 已完成转换，此处仅兜底）
         if (restored.status === 'queued') {
@@ -5282,7 +5287,23 @@ class Api {
     // 收集失败成片名：优先 failedVideos（运行时逐条记录），回退日志行解析
     const failNames = new Set();
     if (Array.isArray(t.failedVideos)) {
-      for (const f of t.failedVideos) if (f && f.name) failNames.add(f.name);
+      for (const f of t.failedVideos) {
+        const nm = (f && f.name) ? String(f.name).trim() : '';
+        if (!nm) continue;
+        // 「第N个」是「命名前失败」的【序号占位】（由失败成片序号协议行写入 failedVideos），
+        // 不是真实成片名 —— 必须归入 failedIndices 走序号补做，**绝不能进「按成片名解析序号」通道**：
+        // 否则引擎会拿「第4个;第6个;…」去反解序号、必然失败（且提示自相矛盾）。
+        const pm = /^第(\d+)个$/.exec(nm);
+        if (pm) {
+          const n = parseInt(pm[1], 10);
+          if (Number.isInteger(n) && n > 0) {
+            t.failedIndices = t.failedIndices || [];
+            if (t.failedIndices.indexOf(n) < 0) t.failedIndices.push(n);
+          }
+          continue;
+        }
+        failNames.add(nm);
+      }
     }
     if (!failNames.size) {
       for (const ln of (t.log || [])) {

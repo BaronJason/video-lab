@@ -960,7 +960,7 @@ async function run(ctx, env = process.env) {
     // 先声明模式与范围、再报总数：否则续跑时那句「开始批量生成（共 N 个）」
     // 会被误读成「要重做 N 个」，看上去像重新开始
     logger.info(resumeMode
-      ? `🔁 续跑模式：仅重做 ${indexList.length} 个成片（序号 ${indexList.join(', ')}）—— 本批共 ${totalOutput} 个，其余保留既有产物`
+      ? `🔁 续跑模式：仅重做 ${indexList.length} 个成片（序号 ${indexList.join(', ')}）—— 本批总量 ${totalOutput} 个，其余保留既有产物`
       : `开始批量生成（共 ${totalOutput} 个）`);
 
     const dPrefix = datePrefix(taskDate(cfg.submitTs));
@@ -979,7 +979,10 @@ async function run(ctx, env = process.env) {
     for (const outIndex of indexList) {
       logger.info('');
       logger.info('-'.repeat(48));
-      logger.progress('生成', outIndex, totalOutput);
+      // 续跑：进度按「本次补做」视角显示（第 k / N 片）—— 否则会显示成整批的 X / 20，
+      // 与实际「本次只补 N 片」不符（用户会误以为做了整批）。绝对序号在命名与日志中不受影响。
+      logger.progress('生成', resumeMode ? (indexList.indexOf(outIndex) + 1) : outIndex,
+        resumeMode ? indexList.length : totalOutput);
 
       let selectedParts = null;
       let updatePlans = [];

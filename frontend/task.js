@@ -427,6 +427,7 @@
     progress.className = 'task-card__progress';
     progress.innerHTML =
       '<div class="task-card__progress-text"><span class="task-card__progress-label"></span><span class="task-card__progress-elapsed"></span><span class="task-card__progress-pct"></span></div>' +
+      '<div class="task-card__progress-sub" style="display:none"></div>' +
       '<div class="task-card__progress-track"><div class="task-card__progress-fill"></div></div>';
     card.appendChild(progress);
 
@@ -438,7 +439,7 @@
     body.appendChild(log);
     card.appendChild(body);
 
-    var record = { el: card, header: header, logEl: log, body: body, logCount: 0, expanded: false, progressEl: progress, progressLabel: progress.querySelector('.task-card__progress-label'), progressElapsed: progress.querySelector('.task-card__progress-elapsed'), progressPct: progress.querySelector('.task-card__progress-pct'), progressFill: progress.querySelector('.task-card__progress-fill') };
+    var record = { el: card, header: header, logEl: log, body: body, logCount: 0, expanded: false, progressEl: progress, progressLabel: progress.querySelector('.task-card__progress-label'), progressElapsed: progress.querySelector('.task-card__progress-elapsed'), progressPct: progress.querySelector('.task-card__progress-pct'), progressSub: progress.querySelector('.task-card__progress-sub'), progressFill: progress.querySelector('.task-card__progress-fill') };
     bindLogFollow(record);
     header.addEventListener('click', function (e) {
       if (e.target.closest('.task-card__stop')) return;
@@ -762,12 +763,32 @@
       rec.progressEl.style.display = 'flex';
     } else if (total > 0) {
       var cur = Math.max(0, Math.min(prog.current || 0, total));
-      rec.progressLabel.textContent = (cur > 0 ? unit + ' ' + cur + '/' + total : unitEst + ' ' + total) + groupText;
-      rec.progressPct.textContent = Math.round(cur / total * 100) + '%';
-      rec.progressFill.style.width = (cur / total * 100) + '%';
-      rec.progressEl.style.display = 'flex';
+      var batchTotal = parseInt(prog.batchTotal || '0', 10) || 0;
+      var batchBase = parseInt(prog.batchBase || '0', 10) || 0;
+      if (batchTotal > 0) {
+        // 续跑任务：同一批成片分多次产出。主进度按「本批」算、本次补做放后面 ——
+        // 既不能显示成「一次做完整批」（看不出补过片），也不能只显示本次（看不出全批）。
+        var batchCur = Math.max(0, Math.min(batchTotal, batchBase + cur));
+        rec.progressLabel.textContent = '本批 ' + batchCur + '/' + batchTotal + ' · 本次 ' + cur + '/' + total;
+        rec.progressPct.textContent = Math.round(batchCur / batchTotal * 100) + '%';
+        rec.progressFill.style.width = (batchCur / batchTotal * 100) + '%';
+        rec.progressEl.style.display = 'flex';
+        if (rec.progressSub) {
+          var ridx = Array.isArray(prog.resumeIndices) ? prog.resumeIndices : [];
+          rec.progressSub.textContent = '已有 ' + batchBase + ' 片 · 本次补 ' + total + ' 片'
+            + (ridx.length ? '（#' + ridx.join(' #') + '）' : '');
+          rec.progressSub.style.display = '';
+        }
+      } else {
+        rec.progressLabel.textContent = (cur > 0 ? unit + ' ' + cur + '/' + total : unitEst + ' ' + total) + groupText;
+        rec.progressPct.textContent = Math.round(cur / total * 100) + '%';
+        rec.progressFill.style.width = (cur / total * 100) + '%';
+        rec.progressEl.style.display = 'flex';
+        if (rec.progressSub) rec.progressSub.style.display = 'none';
+      }
     } else {
       rec.progressEl.style.display = 'none';
+      if (rec.progressSub) rec.progressSub.style.display = 'none';
     }
     // 任务总用时：进度条文字行内、百分比左侧（动态时分秒格式）；
     // 宽度由 CSS min-width 固定，未开始时内容留空保持占位，避免 % 位数变化/用时出现造成跳变

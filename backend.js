@@ -3038,6 +3038,11 @@ class Api {
     return task;
   }
 
+  // 续跑任务标题：反复续跑时不要把「（续跑）」累加成一串（曾出现「xx（续跑）（续跑）」）。
+  _resumeTitle(base) {
+    return String(base || '').replace(/（续跑）\s*$/, '').trim() + '（续跑）';
+  }
+
   // 续跑任务继承原任务的「失败依据」。
   // 为什么必须继承：续跑任务若在早期步骤失败（如续跑过滤），它自身既无失败记录也无进度
   // （total 初始为 0）→ 前端判定「无失败可续」，只给「重新开始」，用户被迫整批重做。
@@ -3050,8 +3055,30 @@ class Api {
       if (Array.isArray(t.failedVideos) && t.failedVideos.length) {
         task.failedVideos = t.failedVideos.slice();
       }
-      const total = Number((env || {}).BATCH_COUNT) || Number((t.progress && t.progress.total)) || 0;
-      if (total > 0) task.progress = Object.assign({}, task.progress, { total: total });
+      // ── 本批进度视角：续跑任务本次只做 N 片，但卡片要能同时表达「本批」的完成度 ──
+      // batchTotal    = 本批总量（整批要出的片数；续跑不改变它）
+      // batchBase     = 本次续跑开始前本批已产出的片数（= 本批总量 − 本次待补数）
+      // resumeIndices = 本次补做的绝对序号（供卡片标注 #4 #6 #20）
+      // total         = 本次视角的分母（本次补做数）
+      const batchTotal = Number((env || {}).BATCH_COUNT) || Number((t.progress && t.progress.batchTotal)) || 0;
+      const onlyIdx = String((env || {}).BATCH_ONLY_INDEX || '').split(';')
+        .map((x) => parseInt(x, 10)).filter((n) => Number.isInteger(n) && n > 0);
+      const onlyCnt = onlyIdx.length || (Array.isArray(t.failedIndices) ? t.failedIndices.length : 0);
+      const patch = {};
+      if (batchTotal > 0) { patch.batchTotal = batchTotal; patch.batchBase = Math.max(0, batchTotal - onlyCnt); }
+      if (onlyIdx.length) patch.resumeIndices = onlyIdx.slice(0, 60);
+      patch.total = onlyCnt > 0 ? onlyCnt : (Number((t.progress && t.progress.total)) || 0);
+      task.progress = Object.assign({}, task.progress, patch);
+
+      // ── 日志续写：把上一次运行的日志（含更早的续跑）保留在新任务日志之前，绝不覆盖 ──
+      const carry = Array.isArray(t.log) ? t.log.slice(-500) : [];
+      if (carry.length) {
+        task.log = carry.concat([
+          '[—— 以上为上一次运行（含更早的续跑）的日志 ——]',
+          '[—— 本次续跑开始：仅补做 ' + (onlyCnt || '若干') + ' 片'
+            + (onlyIdx.length ? '（序号 ' + onlyIdx.join(', ') + '）' : '') + ' ——]',
+        ]);
+      }
     } catch (e) { /* 继承失败不影响续跑本身 */ }
     return task;
   }
@@ -5445,11 +5472,11 @@ class Api {
       } else {
         env.BATCH_ONLY_NAMES = namesArr.join(';');
       }
-      task = this._inheritResumeBasis(this._createTask('batch', (t.title || '') + '（续跑）', env, src), t, env);
+      task = this._inheritResumeBasis(this._createTask('batch', this._resumeTitle(t.title), env, src), t, env);
     } else {
       env.REPLICA_ONLY_NAMES = namesArr.join(';');
       env.REPLICA_SUBMIT_TS = String(Date.now()); // 刷新提交时刻，续跑产物按当前日期输出
-      task = this._inheritResumeBasis(this._createTask('replica', (t.title || '') + '（续跑）', env, src), t, env);
+      task = this._inheritResumeBasis(this._createTask('replica', this._resumeTitle(t.title), env, src), t, env);
     }
     this._enqueueTask(task);
     this._lg('RUN', 'resume.create',

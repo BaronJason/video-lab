@@ -365,12 +365,13 @@
       if (ld) ld.textContent = s.log_dir || '';
       // 「缓存」栏位：占用 + 上次自动清理（保留天数走下拉；不再展示 config.json 这类文件路径）
       var ci = s.cache_info || {};
+      // 数值与清理提示分两个节点：主行只放数值（窄窗不折行），提示独立小字行
       var cs = $('cacheSize');
-      if (cs) {
-        cs.textContent = fmtSize(ci.size) + (ci.lastAt
-          ? ('　·　上次自动清理 ' + fmtTime(ci.lastAt) + '，释放 ' + fmtSize(ci.lastFreed))
-          : '　·　尚未自动清理');
-      }
+      if (cs) cs.textContent = fmtSize(ci.size);
+      var cgi = $('cacheGcInfo');
+      if (cgi) cgi.textContent = ci.lastAt
+        ? ('上次自动清理 ' + fmtTime(ci.lastAt) + '，释放 ' + fmtSize(ci.lastFreed))
+        : '尚未自动清理';
       var ckd = $('cacheKeepDays');
       if (ckd) ckd.value = String(s.cache_keep_days != null ? s.cache_keep_days : 30);
       // 「维护」板块可见性：config.json 的 show_maintenance（用户侧默认关闭；本机可置 true）
@@ -772,7 +773,9 @@
         bCacheClean.textContent = '立即清理';
         toast('缓存已清理：移除 ' + ((r && r.removed) || 0) + ' 条，释放 ' + fmtSize(r && r.freed) + '，现 ' + fmtSize(r && r.size), 'ok');
         var cs = document.getElementById('cacheSize');
-        if (cs && r) cs.textContent = fmtSize(r.size) + '　·　刚刚手动清理，释放 ' + fmtSize(r.freed);
+        if (cs && r) cs.textContent = fmtSize(r.size);
+        var cgi2 = document.getElementById('cacheGcInfo');
+        if (cgi2 && r) cgi2.textContent = '刚刚手动清理，释放 ' + fmtSize(r.freed);
         var box = document.getElementById('cacheStatsBox');
         if (box) box.style.display = 'none';
       }).catch(function (e) {

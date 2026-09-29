@@ -969,7 +969,9 @@ async function run(ctx, env = process.env) {
     //   仍凑不出组合再逐级加大加速倍率；倍率设硬顶，避免画面加速过狠。
     //   红线：输出时长始终以 maxTotalDuration 封顶（平台规则，超出无法过审）——
     //   加大倍率只放宽「允许的组合时长」，不改输出上限。
-    const RETRY_PER_STEP = Math.max(100, Math.round(cfg.maxRetry));   // 每档轮数（用户确认 100 轮足够）
+    // 每档重试轮数直接取设置页「重试次数」的设定值：设定值即「实际的改档重试轮数」。
+    // 此前用 Math.max(100, ...) 兜底，≤100 的设定值一律被抬成 100 —— 用户填的数形同虚设。
+    const RETRY_PER_STEP = Math.max(1, Math.round(cfg.maxRetry));
     const THR_STEPS = [1, 1.25, 1.5, 1.75, 2];                        // 加速倍率梯度（相对用户设置）
     const MAX_SPEED_RATIO = 2.0;                                      // 加速倍率硬顶（画面可接受范围）
     const ladderRounds = RETRY_PER_STEP * THR_STEPS.length;
@@ -1106,7 +1108,16 @@ async function run(ctx, env = process.env) {
               const dur = tempParts[pi] ? tempParts[pi].duration : (staleParts.has(pi) ? staleParts.get(pi).duration : 0);
               if (dur > maxDur) { maxDur = dur; retryTargetSrc = pi; }
             }
-            if (retryTargetSrc < 0) { failReason = '所有源的可替换片段均已用尽（首段固定不参与替换）'; break; }
+            if (retryTargetSrc < 0) {
+              // 本档可替换源已全部用尽：若还有加速档位，提前进入下一档（放宽允许时长）再试，
+              // 而不是直接判失败 —— 否则设定值给出的「每档 N 轮」跑不满、升档兜底形同虚设。
+              const nextStart = (thrStep + 1) * RETRY_PER_STEP;
+              if (thrStep < THR_STEPS.length - 1 && nextStart < ladderRounds) {
+                logger.info('⏭️  本档可替换源已用尽 → 提前进入下一档（放宽允许时长）继续尝试');
+                retryCount = nextStart - 1; continue;
+              }
+              failReason = '所有源的可替换片段均已用尽（首段固定不参与替换）'; break;
+            }
             continue;
           }
           continue; // 首轮失败：静默进入渐进替换
@@ -1142,13 +1153,18 @@ async function run(ctx, env = process.env) {
           if (tempParts[pi] && tempParts[pi].duration > maxDur) { maxDur = tempParts[pi].duration; retryTargetSrc = pi; }
         }
         if (retryTargetSrc < 0) {
+          const nextStart2 = (thrStep + 1) * RETRY_PER_STEP;
+          if (thrStep < THR_STEPS.length - 1 && nextStart2 < ladderRounds) {
+            logger.info('⏭️  本档可替换源已用尽 → 提前进入下一档（放宽允许时长）继续尝试');
+            retryCount = nextStart2 - 1; continue;
+          }
           failReason = `非首段源的可替换片段均已用尽，仍超出时长上限 ${cfg.maxTotalDuration} 秒`;
           break;
         }
       }
 
       if (!foundCombination) {
-        const rounds = Math.min(retryCount + 1, Math.round(cfg.maxRetry));
+        const rounds = retryCount + 1;   // 本片累计重试轮数（跨档累加；每档上限 = 设置页「重试次数」）
         // 面向用户的文案：只说「发生了什么」，用户不需要缺口/源状态这类内部细节
         const userMsg = failReason || `重试 ${rounds} 轮仍无法找到满足时长的组合（时长上限 ${cfg.maxTotalDuration} 秒）`;
         // 面向排查的完整诊断：只进诊断通道（后端日志），不出现在任务窗口
@@ -1172,7 +1188,7 @@ async function run(ctx, env = process.env) {
           const hints = [];
           if (deadNames.length) hints.push(`向已耗尽的源补充素材（${deadNames.join('、')}）`);
           hints.push(`放宽时长上限（当前 ${cfg.maxTotalDuration}s）或允许超出比例（当前 ${overPct}%）`);
-          if (rounds >= Math.round(cfg.maxRetry)) hints.push(`提高重试轮数（当前上限 ${Math.round(cfg.maxRetry)} 轮，本次已用尽）`);
+          if (thrStep >= THR_STEPS.length - 1) hints.push(`提高重试轮数（每档 ${Math.round(cfg.maxRetry)} 轮，${THR_STEPS.length} 档已全部用尽）`);
           diagText += ` ｜ 诊断：${isOver ? '最优组合仍超出' : '最优组合距上限还差'} ${gap.toFixed(1)}s`
             + `（可凑出 ${totalDuration.toFixed(1)}s / 上限 ${cfg.maxTotalDuration}s，允许超出 ${overPct}%，已重试 ${rounds} 轮）`
             + ` ｜ 源状态：${srcStat}`

@@ -52,14 +52,22 @@ function scrub(s) {
     .replace(/\b((?:[a-z_]*token[a-z_]*|password|passwd|secret)\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}]+)/gi, '$1***');
 }
 
-/** 结构化细节尽量压缩成单行，避免超长行影响扫读；顺带脱敏与截断 */
-function briefData(data) {
+/** 结构化细节尽量压成单行，避免超长行影响扫读；顺带脱敏。
+ *  超长**不再截断**：按 max 拆成多行（续行带 ↳[i/n] 标记）—— 排查日志的价值全在细节，
+ *  此前截成「…(截断)」会把引擎尾部 / 诊断事件 / env 快照一并丢掉（连 JSON 都无法解析），
+ *  导致「为什么走到这个结论」永久不可考。多行换完整，代价是极少数超长事件占几行。 */
+function briefData(data, max = 2000) {
   if (data == null) return '';
   try {
-    let s = scrub(typeof data === 'string' ? data : JSON.stringify(data));
+    const s = scrub(typeof data === 'string' ? data : JSON.stringify(data));
     if (s === '{}' || s === 'null' || s === '""') return '';
-    if (s.length > 2000) s = s.slice(0, 2000) + '…(截断)';
-    return s;
+    if (s.length <= max) return s;
+    const chunks = [];
+    for (let i = 0; i < s.length; i += max) chunks.push(s.slice(i, i + max));
+    const pad = ' '.repeat(24) + '↳ ';
+    let out = chunks[0];
+    for (let k = 1; k < chunks.length; k++) out += '\n' + pad + '[' + (k + 1) + '/' + chunks.length + '] ' + chunks[k];
+    return out;
   } catch (e) { return ''; }
 }
 

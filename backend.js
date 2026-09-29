@@ -3038,6 +3038,24 @@ class Api {
     return task;
   }
 
+  // 续跑任务继承原任务的「失败依据」。
+  // 为什么必须继承：续跑任务若在早期步骤失败（如续跑过滤），它自身既无失败记录也无进度
+  // （total 初始为 0）→ 前端判定「无失败可续」，只给「重新开始」，用户被迫整批重做。
+  // 把失败序号 / 失败记录 / 进度总量一并带过去，任何一次续跑失败都不会再把「可继续」的能力弄丢。
+  _inheritResumeBasis(task, t, env) {
+    try {
+      if (Array.isArray(t.failedIndices) && t.failedIndices.length) {
+        task.failedIndices = t.failedIndices.filter((n) => Number.isInteger(n) && n > 0).slice();
+      }
+      if (Array.isArray(t.failedVideos) && t.failedVideos.length) {
+        task.failedVideos = t.failedVideos.slice();
+      }
+      const total = Number((env || {}).BATCH_COUNT) || Number((t.progress && t.progress.total)) || 0;
+      if (total > 0) task.progress = Object.assign({}, task.progress, { total: total });
+    } catch (e) { /* 继承失败不影响续跑本身 */ }
+    return task;
+  }
+
   // 任务成片文件夹：批量任务按提交时刻+配置名精确推算（与脚本实际输出目录一致）；
   // 其余类型取源 TXT 所在目录下以「成片」结尾的子目录。
   // 找不到即返回空串：绝不回退成源目录 —— 源目录放着原始日志与素材，
@@ -5427,11 +5445,11 @@ class Api {
       } else {
         env.BATCH_ONLY_NAMES = namesArr.join(';');
       }
-      task = this._createTask('batch', (t.title || '') + '（续跑）', env, src);
+      task = this._inheritResumeBasis(this._createTask('batch', (t.title || '') + '（续跑）', env, src), t, env);
     } else {
       env.REPLICA_ONLY_NAMES = namesArr.join(';');
       env.REPLICA_SUBMIT_TS = String(Date.now()); // 刷新提交时刻，续跑产物按当前日期输出
-      task = this._createTask('replica', (t.title || '') + '（续跑）', env, src);
+      task = this._inheritResumeBasis(this._createTask('replica', (t.title || '') + '（续跑）', env, src), t, env);
     }
     this._enqueueTask(task);
     this._lg('RUN', 'resume.create',

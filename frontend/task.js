@@ -733,9 +733,13 @@
     // 所以「进度未走完」同样应当给出续跑入口，否则用户只剩「重新开始」（会删掉已成功产物）。
     var progDone = (t.progress && t.progress.current) || 0;
     var progTotal = (t.progress && t.progress.total) || 0;
+    // 进度未知（引擎在早期步骤失败、还没报出总数 → total=0）**不能当作「没有内容」**：
+    // 任务确实运行过（有 startedAt 或已推算出成片目录）就仍可能缺片 —— 一律给出续跑入口；
+    // 究竟有没有缺片，由 backend 的第三层兜底（按成片目录反推待补序号）给出准确结论。
+    var everRan = !!t.startedAt || !!t.outDir;
     var hasFail = (Array.isArray(t.failedVideos) && t.failedVideos.length > 0)
       || (t.log || []).some(function (l) { return /❌ 失败成片/.test(String(l)); })
-      || (progTotal > 0 && progDone < progTotal);
+      || (progTotal > 0 ? progDone < progTotal : everRan);
     var canContinue = (t.type === 'replica' || t.type === 'batch') && canRerun && hasFail;
     continueBtn.style.display = (canContinue && state.tab !== 'running') ? '' : 'none';
     // 进度条：数字行（当前/总）+ 下方进度条，仅解析到总进度后显示；

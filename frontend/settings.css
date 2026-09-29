@@ -401,32 +401,13 @@ body {
      对比不足，看起来像"没跟随皮肤"；次级色三皮肤下都清晰 */
   color: var(--text-secondary);
   font-family: Consolas, "Courier New", monospace;
-  word-break: break-all;
+  /* 长路径单行省略，避免换行打乱行高（2026-09-29 调整） */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .opt-actions { margin-top: 8px; }
-
-/* ─── 设置页「路径与数据」卡片化（2026-09-29 UI 优化） ─── */
-.settings-card {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 12px 14px;
-  border: 1px solid var(--border-neutral-l1);
-  border-radius: var(--radius-sm);
-  background: var(--bg-base-secondary);
-}
-.settings-card + .settings-card { margin-top: 10px; }
-.settings-card__head { display: flex; align-items: center; justify-content: space-between; }
-.settings-card__title { font-weight: var(--font-weight-strong, 600); color: var(--text-default); }
-.opt-kv {
-  flex: 0 0 92px;
-  color: var(--text-secondary);
-  font-size: 12px;
-  align-self: center;
-}
-.settings-card .opt-row { padding: 2px 0; }
-.settings-card .opt-actions { margin-top: 0; margin-left: auto; }
-.settings-card .opt-path { font-size: 11px; }
 
 /* ─── 检查更新二次确认弹窗（居中模态） ─── */
 .update-confirm-mask {

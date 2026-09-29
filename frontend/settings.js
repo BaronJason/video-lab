@@ -422,6 +422,24 @@
     var p = function (x) { return (x < 10 ? '0' : '') + x; };
     return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
   }
+  function fmtNum(n) {
+    var v = Number(n) || 0;
+    return String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+  // 缓存构成：[一个词的名称, 是否会被自动清理]。用户只需知道「这是什么」与「会不会被清」
+  var CACHE_TABLE_INFO = {
+    video_cache: ['视频信息', true],
+    txt_content: ['配置文本', true],
+    scan_cache: ['目录扫描记录', true],
+    log_cache: ['日志索引', true],
+    cache_kv: ['杂项缓存', true],
+    verify_cache: ['预检测结果', true],
+    clip_index: ['成片素材清单', false],   // 业务记录：只在成片本身已被删除时才回收
+    tasks: ['任务记录', false],
+    task_logs: ['任务日志', false],
+    task_marks: ['任务标记', false],
+    meta: ['内部状态', false],
+  };
 
   // 轻量角落提示（toast）：仅告知、无需操作，自动消失。type：ok/error/info/warn
   function toast(message, type) {
@@ -752,11 +770,16 @@
       api.cache_stats().then(function (r) {
         bCacheStats.disabled = false;
         var st = (r && r.stats) || {};
-        var lines = ['缓存文件 ' + fmtSize(st.fileBytes)];
+        var clean = [], keep = [];
         (st.tables || []).forEach(function (t) {
           if (!t || !t.rows) return;
-          lines.push('　' + t.table + '：' + t.rows + ' 条 / ' + fmtSize(t.bytes));
+          var info = CACHE_TABLE_INFO[t.table] || [t.table, false];
+          var line = '　' + info[0] + '　' + fmtNum(t.rows) + ' 条 · ' + fmtSize(t.bytes);
+          (info[1] ? clean : keep).push(line);
         });
+        var lines = ['合计 ' + fmtSize(st.fileBytes)];
+        if (clean.length) lines.push('可清理', clean.join('\n'));
+        if (keep.length) lines.push('不可清理', keep.join('\n'));
         box.textContent = lines.join('\n');
         box.style.display = '';
       }).catch(function (e) {

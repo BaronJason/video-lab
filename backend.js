@@ -2194,12 +2194,13 @@ class Api {
     const before = store.dbSizeBytes();
     let removed = 0;
     const exists = (p) => { try { fs.statSync(p); return true; } catch (e) { return false; } };
-    // ① clip_index（体积大头）：目录不存在 / 超保留期 → 删
+    // ① clip_index：**只删「目录已不存在」的条目**。
+    //    ⚠ 这里存的是「成片 → 该成片用过的片段清单」的业务映射，不是可再生缓存 ——
+    //      绝不能按保留期清理：目录还在就说明成片还在，映射必须留着。
     try {
       const del = [];
       for (const d of store.listClips('')) {
-        if (!exists(d)) { del.push(d); continue; }
-        if (keepMs) { try { if (now - fs.statSync(d).mtimeMs > keepMs) del.push(d); } catch (e) {} }
+        if (!exists(d)) del.push(d);
         if (limit && del.length >= limit) break;
       }
       if (del.length) removed += store.deleteClips(del);

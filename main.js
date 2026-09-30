@@ -2047,6 +2047,10 @@ function registerIpc() {
     return { ok: true };
   });
   ipcMain.handle('report_ui_error', async (e, p) => { try { return api.reportUiError(p) || { ok: true }; } catch (err) { return { ok: false, error: String(err && err.message || err) }; } });
+  ipcMain.handle('read_log', async (e, o) => { try { return api.readLog(o) || { ok: false }; } catch (err) { return { ok: false, error: String(err && err.message || err) }; } });
+  ipcMain.handle('get_log_level', async () => { try { return api.getLogLevel() || { ok: false }; } catch (err) { return { ok: false, error: String(err && err.message || err) }; } });
+  ipcMain.handle('set_log_level', async (e, lvl) => { try { return api.setLogLevel(lvl) || { ok: false }; } catch (err) { return { ok: false, error: String(err && err.message || err) }; } });
+  ipcMain.handle('export_diag_pack', async (e, id) => { try { return api.exportDiagPack(id) || { ok: false }; } catch (err) { return { ok: false, error: String(err && err.message || err) }; } });
   ipcMain.handle('open_project_dir', async (e, project) => {
     const root = api.getRoot();
     const target = path.resolve(root || '', String(project || ''));

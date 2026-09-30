@@ -26,8 +26,11 @@ function hintFor(step) {
 const DIAG_PREFIX = '@@VLDIAG@@';
 
 class Logger {
-  constructor({ stream = process.stdout, diagLimit = 3000 } = {}) {
+  constructor({ stream = process.stdout, diagLimit = 3000, taskId = '' } = {}) {
     this._out = stream;
+    // taskId 贯穿（方案 §五.4）：backend 经 env 注入 VL_TASK_ID，诊断事件携带同一 id，
+    // 任务失败随 task.diag 落运行日志 → 跨进程可用同一个 id 串出完整链路。
+    this._taskId = String(taskId || process.env.VL_TASK_ID || '');
     // 诊断环形缓冲：只驻内存，不进 stdout —— 任务窗口（用户视图）保持简洁；
     // 任务失败时由 dumpDiag() 一次性交给后端，落进运行日志（诊断视图，完整过程）。
     this._diag = [];
@@ -41,6 +44,7 @@ class Logger {
   diag(ev, data) {
     try {
       const rec = { t: Date.now(), ev: String(ev) };
+      if (this._taskId) rec.taskId = this._taskId;
       if (data !== undefined) rec.d = data;
       this._diag.push(rec);
       if (this._diag.length > this._diagLimit) this._diag.shift();

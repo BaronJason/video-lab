@@ -38,6 +38,10 @@ function openDirForeground(target) {
 // [channel, apiMethod, argTransform?] argTransform 可选，用于处理布尔/默认值
 const PURE_BACKEND_ROUTES = {
   report_ui_error: { m: 'reportUiError', a: (args) => [args[0]] },
+  read_log: { m: 'readLog', a: (args) => [args[0]] },
+  get_log_level: { m: 'getLogLevel', a: () => [] },
+  set_log_level: { m: 'setLogLevel', a: (args) => [args[0]] },
+  export_diag_pack: { m: 'exportDiagPack', a: (args) => [args[0]] },
   list_projects: { m: 'listProjectsAsync', a: (args) => [!!args[0]] },
   list_versions: { m: 'listVersions', a: (args) => [args[0], args[1]] },
   read_config: { m: 'readConfig', a: (args) => [args[0]] },

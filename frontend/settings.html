@@ -394,10 +394,47 @@
 
       <div class="settings-group"><span class="settings-group__title">日志</span></div>
       <div class="form-group">
-        <div class="form-group__desc">逐条记录启动退出、任务执行、删除与配置变更，保留最近 7 天。任务记录和成片都可能被清除，这份日志不会 —— 排查「某次成片去哪了」时从这里查证。</div>
+        <div class="form-group__desc">逐条记录启动退出、任务执行、删除与配置变更（app 保留 7 天、error 30 天、engine 7 天）。任务记录和成片都可能被清除，这份日志不会 —— 排查「某次成片去哪了」时从这里查证。</div>
         <div class="opt-row">
           <button type="button" class="btn btn-ghost" id="btnOpenLogDir">打开文件夹</button>
           <span class="opt-path" id="logDirPath"></span>
+        </div>
+      </div>
+      <div class="form-group">
+        <div class="form-group__desc">日志查看：按文件类型与级别过滤（engine 含引擎原始输出；级别过滤对 error 文件即只看索引行）。</div>
+        <div class="opt-row">
+          <select class="opt-time-select" id="logViewFile" style="width:100px">
+            <option value="app">app（全量）</option>
+            <option value="error">error（错误）</option>
+            <option value="engine">engine（引擎）</option>
+          </select>
+          <select class="opt-time-select" id="logViewLevel" style="width:90px">
+            <option value="">全部级别</option>
+            <option value="fatal">fatal</option>
+            <option value="error">error</option>
+            <option value="warn">warn</option>
+            <option value="info">info</option>
+            <option value="debug">debug</option>
+          </select>
+          <input type="text" class="form-input" id="logViewGrep" placeholder="按任务 id / 关键词过滤（可留空）" style="flex:1;min-width:0">
+          <button type="button" class="btn btn-ghost" id="btnLogViewLoad">加载</button>
+        </div>
+        <textarea class="form-input" id="logViewOut" readonly style="width:100%;height:220px;margin-top:8px;font-family:Consolas,monospace;font-size:12px;white-space:pre;overflow:auto"></textarea>
+      </div>
+      <div class="form-group">
+        <div class="form-group__desc">日志级别（会话级：重启恢复 info）。排查时可切 debug 记录候选选取、参数档位等细节。</div>
+        <div class="opt-row">
+          <select class="opt-time-select" id="logLevelSel" style="width:120px">
+            <option value="info">info（默认）</option>
+            <option value="debug">debug（排查）</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <div class="form-group__desc">一键诊断包：把「该任务相关的 app/error/engine 日志行 + 任务环境快照 + 产物清单」合成一个文本文件（日志目录 diag\ 下），反馈问题时直接发送。包内含本机路径，请勿随意分享。</div>
+        <div class="opt-row">
+          <input type="text" class="form-input" id="diagTaskId" placeholder="任务 id（任务窗口卡片上可复制；留空取最近一个失败任务）" style="flex:1;min-width:0">
+          <button type="button" class="btn btn-ghost" id="btnExportDiag">导出诊断包</button>
         </div>
       </div>
     </section>

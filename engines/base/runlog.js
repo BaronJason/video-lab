@@ -1,38 +1,45 @@
-// 运行日志（面向排查）：%APPDATA%\Video Lab\log\
-//   app-YYYY-MM-DD.log    全量流水，保留 7 天（扫读 + 检索两用）
-//   error-YYYY-MM-DD.log  仅失败/异常，保留 30 天 —— 排查时只看这个文件即可定位原因
-// 两份都按天切；错误日志保留更久，因为「上周出过一次的问题」往往要回头翻。
+// 运行日志（面向排查）：《日志体系方案.md》的唯一实现 —— 改动日志相关代码前先读该方案。
 //
-// 存在意义：任务记录、任务标记、成片产物都可能被用户清除或删除，一旦清除，
-// 排查就只剩"反推"。本日志独立于这些数据，任何清除/删除操作都不触碰它 ——
-// 它是"事后唯一还在的证据"。
+// 文件划分（<存储根>\log\）：
+//   app-YYYY-MM-DD.log      全量事件（人读 + 结构化两用），保留 7 天
+//   error-YYYY-MM-DD.log    lvl>=warn 与失败/异常事件的**索引行**（短正文副本 + ref），保留 30 天
+//   engine-YYYY-MM-DD.log   引擎原始 stdout/stderr（[taskId] 前缀 + 任务标记 + ffmpeg 行秒级采样），保留 7 天
+//   超 32MB 滚动为 -2/-3 序号；跨天未超保留期的旧文件压缩为 .gz（pruneAsync，空闲期调用）
 //
-// 单行格式（刻意设计成扫读 + 精确检索两用）：
-//   2026-09-20 16:23:41.123  DEL  task.artifacts.remove  删 3 个成片 · 共 264.1 MB · {"task":"task_1_x","files":[...]}
-//   └─ 时间(毫秒)          └─动词 └─动作(点分)              └─中文摘要（含关键数字）      └─结构化细节(JSON)
+// 行格式（方案 §4.2，人读单行 + 结构化尾）：
+//   2026-09-30 15:30:01.123  info   backend   task.artifacts.remove  删 3 个成片 · 共 264.1 MB  · {"pid":123,"taskId":"task_1","verb":"DEL","data":{...}}
+//   └ 时间(毫秒)            └ lvl  └ mod     └ ev(点分)            └ msg                     └ 结构化字段
 //
-// 动词表（三字母，便于 grep 与一眼分类）：
-//   SYS 启动/退出/环境      RUN 任务执行        DEL 删除（含移入回收站）
-//   ADD 新增/创建           MOD 修改/移动       ERR 异常/失败
-//   IPC 通道调用（兜底记录"用户点了什么"）      CFG 配置与设置
-//
-// 约定：写日志永不影响主流程 —— 全部 try/catch 静默；按天切文件；启动时清理 7 天前的。
+// 级别：fatal/error/warn/info/debug（小写）；默认 info，setLevel 运行时切换。
+// 写入：error/warn/fatal 同步追加（事后唯一证据）；info/debug 缓冲 500ms/256 条批量落盘，exit 时冲刷。
+// 去重（§4.5）：正文只在 app 落一次；error 只写索引行（短正文副本 + ref:app@<字节偏移>）。
 'use strict';
 
 const fs = require('node:fs');
 const path = require('node:path');
+const zlib = require('node:zlib');
 
 const KEEP_DAYS = 7;
-const ERROR_KEEP_DAYS = 30;   // 错误日志保留更久：排查滞后性很强，7 天不够
+const ERROR_KEEP_DAYS = 30;
+const MAX_FILE_BYTES = 32 * 1024 * 1024;
+const FLUSH_MS = 500;
+const FLUSH_MAX = 256;
+
+const LEVELS = { fatal: 0, error: 1, warn: 2, info: 3, debug: 4 };
+let _level = LEVELS.info;
 
 let logDir = '';
+let _buf = [];
+let _flushTimer = null;
 
-/** 指定日志目录（调用方给出 storageDir\log） */
 function init(dir) {
   logDir = String(dir || '');
   if (!logDir) return;
   try { fs.mkdirSync(logDir, { recursive: true }); } catch (e) {}
 }
+
+function setLevel(lvl) { if (lvl in LEVELS) _level = LEVELS[lvl]; }
+function getLevel() { return Object.keys(LEVELS).find((k) => LEVELS[k] === _level) || 'info'; }
 
 function pad(n, w) { return String(n).padStart(w, '0'); }
 function dayOf(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1, 2) + '-' + pad(d.getDate(), 2); }
@@ -44,19 +51,14 @@ function fileOf(day) { return path.join(logDir, 'app-' + day + '.log'); }
 function errFileOf(day) { return path.join(logDir, 'error-' + day + '.log'); }
 function engineFileOf(day) { return path.join(logDir, 'engine-' + day + '.log'); }
 
-/** 敏感值脱敏：令牌 / 口令一律不入日志。两道正则 ——
- *  ① 带引号的键（JSON 形态）："http_token":"abc"  → "http_token":"***"
- *  ② 裸键（摘要/文本形态）：  http_token: abc     → http_token: ***        */
+/** 敏感值脱敏：令牌/口令不入日志（JSON 形态与裸键形态两道） */
 function scrub(s) {
   return String(s == null ? '' : s)
     .replace(/("(?:[a-z_]*token[a-z_]*|password|passwd|secret)"\s*:\s*)"[^"]*"/gi, '$1"***"')
     .replace(/\b((?:[a-z_]*token[a-z_]*|password|passwd|secret)\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}]+)/gi, '$1***');
 }
 
-/** 结构化细节尽量压成单行，避免超长行影响扫读；顺带脱敏。
- *  超长**不再截断**：按 max 拆成多行（续行带 ↳[i/n] 标记）—— 排查日志的价值全在细节，
- *  此前截成「…(截断)」会把引擎尾部 / 诊断事件 / env 快照一并丢掉（连 JSON 都无法解析），
- *  导致「为什么走到这个结论」永久不可考。多行换完整，代价是极少数超长事件占几行。 */
+/** 结构化细节压成单行 + 脱敏；超长不截断：分片多行（↳[i/n]），语义不丢（§4.3） */
 function briefData(data, max = 2000) {
   if (data == null) return '';
   try {
@@ -65,14 +67,14 @@ function briefData(data, max = 2000) {
     if (s.length <= max) return s;
     const chunks = [];
     for (let i = 0; i < s.length; i += max) chunks.push(s.slice(i, i + max));
-    const pad = ' '.repeat(24) + '↳ ';
+    const padsp = ' '.repeat(24) + '↳ ';
     let out = chunks[0];
-    for (let k = 1; k < chunks.length; k++) out += '\n' + pad + '[' + (k + 1) + '/' + chunks.length + '] ' + chunks[k];
+    for (let k = 1; k < chunks.length; k++) out += '\n' + padsp + '[' + (k + 1) + '/' + chunks.length + '] ' + chunks[k];
     return out;
   } catch (e) { return ''; }
 }
 
-/** 通道入参/结果摘要：脱敏 + 压缩成单行 + 截断。IPC 与 HTTP 共用。 */
+/** 通道入参/结果摘要：脱敏 + 单行 + 截断（IPC 与 HTTP 共用） */
 function briefArgs(v, max) {
   try {
     if (v == null) return '';
@@ -82,13 +84,11 @@ function briefArgs(v, max) {
   } catch (e) { return ''; }
 }
 
-// 只读/展示类通道不记 —— 否则轮询会把日志淹成噪音。
-// 覆盖：列表、读取、打开、窗口、检测、解析、搜索、定位、预检测、扫描、应答、事件推送。
+// 只读/展示类通道不记（轮询防噪音）
 const SILENT_CHANNEL = /^(list_|get_|read_|open_|window_|check_|resolve_|search_|find_|locate_|precheck|scan_|respond_|ack_|on_|task_replica_outdir)/;
 function isSilentChannel(ch) { return SILENT_CHANNEL.test(String(ch == null ? '' : ch)); }
 
-// 配置保存类通道只记「变更了的键」：全量配置一次数百字符，改几次皮肤就把日志刷满了。
-// 快照放在本模块，IPC 与 HTTP 共用一份，避免两边互相误报差异。
+// 配置保存类通道只记「变更了的键」（IPC 与 HTTP 共用一份快照）
 const SETTINGS_DELTA_CHANNEL = /^save_(settings|mask_session)$/;
 let _lastSettingsSnap = '';
 function deltaArgs(channel, args) {
@@ -109,15 +109,7 @@ function deltaArgs(channel, args) {
   return n ? [delta] : [];
 }
 
-/**
- * 通道调用留痕（IPC 与 HTTP 共用）。回答"用户到底点了什么"——
- * 任务窗口、主窗口、浏览器端的写操作都会留下这条。只读通道跳过。
- * @param {string} transport 'ipc' | 'http'
- * @param {string} channel   通道名
- * @param {*} args           入参
- * @param {*} result         返回值（用于判断 ok / 失败）
- * @param {number} ms        耗时
- */
+/** 通道调用留痕（IPC 与 HTTP 共用）：回答"用户到底点了什么"，只读通道跳过 */
 function chEvent(transport, channel, args, result, ms) {
   try {
     if (isSilentChannel(channel)) return;
@@ -132,48 +124,143 @@ function chEvent(transport, channel, args, result, ms) {
   } catch (e) { /* 静默 */ }
 }
 
-/** 单行格式化：时间 · 动词 · 动作 · 摘要 · 细节（脱敏与换行折叠都在这里） */
-function formatLine(verb, action, summary, data) {
-  const s = scrub(String(summary || '').replace(/\s*\n\s*/g, ' '));
-  const d = briefData(data);
-  const head = stampOf(new Date()) + '  ' + String(verb || 'SYS').padEnd(3) + '  ' + String(action || '-').padEnd(26);
-  return head + (s ? '  ' + s : '') + (d ? '  · ' + d : '') + '\n';
+// ── 核心写入 ──
+
+const VERB_LVL = { ERR: 'error', UI: 'error', DIAG: 'info', SYS: 'info', RUN: 'info', ADD: 'info', MOD: 'info', CFG: 'info', DEL: 'info', IPC: 'info' };
+
+/** §八：单文件 32MB → -2/-3 滚动（先挪已有序号再让位当前文件） */
+function rotateIfNeeded(file) {
+  try {
+    if (!fs.existsSync(file) || fs.statSync(file).size < MAX_FILE_BYTES) return;
+    const base = file.replace(/\.log$/, '');
+    let n = 2;
+    while (fs.existsSync(base + '-' + (n + 1) + '.log')) n++;
+    for (; n >= 2; n--) {
+      const from = base + (n > 1 ? '-' + n : '') + '.log';
+      if (fs.existsSync(from)) fs.renameSync(from, base + '-' + (n + 1) + '.log');
+    }
+    fs.renameSync(file, base + '-2.log');
+  } catch (e) {}
 }
 
-/** 是否属于「失败/异常」类事件 —— 这类额外写一份进 error 日志（保留 30 天）。
- *  判定口径：动词 ERR / UI，或动作名里带 error/fail/失败/异常。 */
-function isErrorish(verb, action) {
-  const v = String(verb == null ? '' : verb).toUpperCase();
-  if (v === 'ERR' || v === 'UI' || v === 'DIAG') return true;
-  return /(error|fail|失败|异常|崩溃)/i.test(String(action == null ? '' : action));
+function syncAppend(file, line) {
+  try {
+    rotateIfNeeded(file);
+    fs.appendFileSync(file, line, 'utf8');
+    return true;
+  } catch (e) { return false; }
+}
+
+function flushBuffer() {
+  if (_flushTimer) { clearTimeout(_flushTimer); _flushTimer = null; }
+  if (!_buf.length) return;
+  const file = fileOf(dayOf(new Date()));
+  try {
+    rotateIfNeeded(file);
+    fs.appendFileSync(file, _buf.join(''), 'utf8');
+  } catch (e) { /* 静默 */ }
+  _buf = [];
+}
+
+function scheduleFlush() {
+  if (_flushTimer) return;
+  _flushTimer = setTimeout(flushBuffer, FLUSH_MS);
+  if (_flushTimer.unref) _flushTimer.unref();
+}
+process.on('exit', () => { try { flushBuffer(); } catch (e) {} });
+
+function firstLine(s) { return String(s || '').split('\n')[0]; }
+
+/** 单行格式化（§4.2）。data 以**原对象**进 meta（JSON 只序列化一次，杜绝双重转义）；
+ *  超长（>2000 字符）时主行不带 data，分片以 ↳[i/n] 续行跟随（§4.3：语义不丢） */
+function formatLine(lvl, mod, ev, msg, data, taskId, verb) {
+  const s = scrub(String(msg || '').replace(/\s*\n\s*/g, ' '));
+  const meta = { pid: process.pid };
+  if (taskId) meta.taskId = taskId;
+  if (verb) meta.verb = verb;
+  let dj = '';
+  try { dj = data == null ? '' : scrub(JSON.stringify(data)); } catch (e) { dj = ''; }
+  if (dj && dj !== '{}' && dj.length <= 2000) meta.data = data;
+  const head = stampOf(new Date()) + '  ' + String(lvl).padEnd(5) + '  ' + String(mod || 'backend').padEnd(7) + '  ' + String(ev || '-');
+  let line = head + (s ? '  ' + s : '') + '  · ' + scrub(JSON.stringify(meta)) + '\n';
+  if (dj.length > 2000) {
+    const chunks = [];
+    for (let i = 0; i < dj.length; i += 2000) chunks.push(dj.slice(i, i + 2000));
+    const padsp = ' '.repeat(24) + '↳ ';
+    for (let k = 0; k < chunks.length; k++) line += padsp + '[' + (k + 1) + '/' + chunks.length + '] ' + chunks[k] + '\n';
+  }
+  return line;
 }
 
 /**
- * 写一条事件。刻意用同步追加 —— 本日志是"事后唯一证据"，可靠性优先于性能：
- * 流式写入的缓冲在进程退出（尤其是崩溃）时等不到 flush，最后几条恰好最可能是关键线索。
- * 写入失败一律静默，绝不影响主流程。
- * @param {string} verb    SYS/RUN/DEL/ADD/MOD/ERR/IPC/CFG
- * @param {string} action  点分动作名，如 task.artifacts.remove
- * @param {string} summary 中文一句话摘要（含关键数字），可为空
- * @param {object} [data]  结构化细节
+ * 结构化写入（唯一真相）。
+ * @param {'fatal'|'error'|'warn'|'info'|'debug'} lvl
+ * @param {string} mod     backend / engine / ui / ipc / http / cache …
+ * @param {string} ev      域.对象.动作（batch.task.start / ui.exception / ipc.continue_replica）
+ * @param {string} msg     人读一句
+ * @param {object} [data]  结构化对象（不截断，超长分片）
+ * @param {object} [bind]  { taskId }
  */
-function logEvent(verb, action, summary, data) {
+function log(lvl, mod, ev, msg, data, bind) {
   try {
     if (!logDir) return;
+    if ((LEVELS[lvl] == null ? 3 : LEVELS[lvl]) > _level) return;
+    const line = formatLine(lvl, mod, ev, msg, data, bind && bind.taskId, bind && bind.verb);
     const day = dayOf(new Date());
-    const line = formatLine(verb, action, summary, data);
-    fs.appendFileSync(fileOf(day), line, 'utf8');
-    // 失败/异常再写一份到错误日志：排查时只需看这一个文件
-    if (isErrorish(verb, action)) {
-      try { fs.appendFileSync(errFileOf(day), line, 'utf8'); } catch (e2) {}
+    if (lvl === 'error' || lvl === 'fatal' || lvl === 'warn') {
+      // 失败/异常：同步写（§六.7）；error 文件只写索引行（短正文副本 + ref，§4.5）
+      const ok = syncAppend(fileOf(day), line);
+      let offset = 0;
+      if (ok) { try { offset = Math.max(0, fs.statSync(fileOf(day)).size - Buffer.byteLength(line, 'utf8')); } catch (e) {} }
+      const idxMeta = { ref: 'app@' + offset, pid: process.pid };
+      if (bind && bind.taskId) idxMeta.taskId = bind.taskId;
+      const idxLine = stampOf(new Date()) + '  ' + String(lvl).padEnd(5) + '  ' + String(mod || 'backend').padEnd(7)
+        + '  ' + String(ev || '-') + '  ' + scrub(firstLine(msg)) + '  · ' + scrub(JSON.stringify(idxMeta)) + '\n';
+      syncAppend(errFileOf(day), idxLine);
+    } else {
+      _buf.push(line);
+      if (_buf.length >= FLUSH_MAX) flushBuffer();
+      else scheduleFlush();
     }
-  } catch (e) { /* 静默 */ }
+  } catch (e) { /* 写日志永不影响主流程 */ }
 }
 
-/** 同 logEvent（保留别名：退出/崩溃路径用它表达"必须落盘"的语义） */
+/** 上下文绑定的 child logger（业界惯例：bindings 自动粘到每条事件） */
+function logger(bind) {
+  const b = bind || {};
+  return {
+    fatal: (ev, msg, data) => log('fatal', b.mod, ev, msg, data, b),
+    error: (ev, msg, data) => log('error', b.mod, ev, msg, data, b),
+    warn: (ev, msg, data) => log('warn', b.mod, ev, msg, data, b),
+    info: (ev, msg, data) => log('info', b.mod, ev, msg, data, b),
+    debug: (ev, msg, data) => log('debug', b.mod, ev, msg, data, b),
+  };
+}
+
+/** 兼容垫片：旧调用点 `_lg(verb, action, summary, data)` 零改动。
+ *  verb→lvl 映射；taskId 自动从 data.task / data.id / data.taskId 提取（child logger 的等效物）；
+ *  旧 isErrorish 语义保留：action 含 error/fail/失败/异常/崩溃 的事件（如 `RUN task.error`）升为
+ *  error 级 —— 它们必须进 error 文件（保留 30 天），不能因动词是 RUN 而丢失。 */
+function logEvent(verb, action, summary, data) {
+  try {
+    const v = String(verb == null ? 'SYS' : verb).toUpperCase();
+    let lvl = VERB_LVL[v] || 'info';
+    if (v !== 'ERR' && v !== 'UI' && /(error|fail|失败|异常|崩溃)/i.test(String(action || ''))) lvl = 'error';
+    let taskId = null;
+    let d = data;
+    if (d && typeof d === 'object' && !Array.isArray(d)) {
+      taskId = d.taskId || d.task || d.id || null;
+      if (taskId != null) {
+        d = Object.assign({}, d);
+        if (d.taskId === taskId) delete d.taskId;
+      }
+    }
+    log(lvl, 'backend', String(action || '-'), summary, d, taskId != null ? { taskId: String(taskId), verb: v } : { verb: v });
+  } catch (e) { /* 静默 */ }
+}
 const logEventSync = logEvent;
 
-// 便捷包装
+// 便捷包装（兼容垫片）
 const sys = (action, summary, data) => logEvent('SYS', action, summary, data);
 const run = (action, summary, data) => logEvent('RUN', action, summary, data);
 const del = (action, summary, data) => logEvent('DEL', action, summary, data);
@@ -185,22 +272,13 @@ function err(action, e, data) {
   const msg = (e && (e.message || e.stack)) ? String(e.message || e.stack) : String(e == null ? '' : e);
   logEvent('ERR', action, msg.split('\n')[0].slice(0, 300), data);
 }
+/** 前端异常上报（垫片：verb UI → lvl error） */
+function ui(action, msg, data) { logEvent('UI', String(action || 'ui.exception'), String(msg || ''), data); }
 
-/** 前端异常上报（动词 UI）：界面上的报错此前只弹 toast，事后无从回溯 —— 现在一并落错误日志。
- *  @param {string} action  点分动作名，如 ui.exception / ui.rejection
- *  @param {string} msg     错误消息
- *  @param {object} [data]  { stack, where, href } */
-function ui(action, msg, data) {
-  logEvent('UI', String(action || 'ui.exception'), String(msg || '').slice(0, 300), data);
-}
-
-// ── 引擎原始行落盘（engine-<date>.log，方案 §五：唯一落盘方 = 主进程，引擎不写文件）──
-// 引擎 stdout/stderr 的**每一行**都经主进程转到这里：任务终态后仍会增长（内存 500 行窗口之外
-// 的后续行、崩溃前的最后输出，唯一去处）。多任务并发写同一文件会交错 → 每行带 [taskId] 前缀；
-// ffmpeg 进度等高频行按 ≤1 条/秒采样（§4.7），任务开始/结束写分隔行便于人读分段。
+// ── 引擎原始行（engine-<date>.log；方案 §五：唯一落盘方 = 主进程）──
 let _engineDay = '';
 let _engineFd = null;
-let _engineLastTs = 0;        // 高频行采样：同秒内的进度行只落首条
+let _engineLastTs = 0;
 const ENGINE_PROGRESS_RE = /^\s*(frame\s*=|fps\s*=|q\s*=|size\s*=|time\s*=|bitrate\s*=|dup\s*=|drop\s*=|speed\s*=|elapsed\s*=)/;
 
 function engineOpen() {
@@ -219,11 +297,17 @@ function engineWrite(tag, line) {
     const fd = engineOpen();
     if (fd === null) return;
     fs.writeSync(fd, stampOf(new Date()) + '  [' + tag + ']  ' + line + '\n');
+    const f = engineFileOf(_engineDay);
+    if (fs.existsSync(f) && fs.statSync(f).size >= MAX_FILE_BYTES) {
+      try { fs.closeSync(_engineFd); } catch (e2) {}
+      _engineFd = null;
+      rotateIfNeeded(f);
+      _engineFd = fs.openSync(f, 'a');
+    }
   } catch (e) { /* 写日志永不影响主流程 */ }
 }
 
-/** 引擎原始行落盘（stdout 与 stderr 都走这里）。tag = taskId（跨进程串联的最小线索）。
- *  高频 ffmpeg 进度行按秒采样；其余行全量。 */
+/** 引擎原始行落盘（stdout/stderr 同路）。tag = taskId。ffmpeg 进度行秒级采样（§4.7）。 */
 function engineLine(tag, line) {
   const s = String(line == null ? '' : line).replace(/\r$/, '');
   if (!s) return;
@@ -235,24 +319,22 @@ function engineLine(tag, line) {
   engineWrite(String(tag || 'engine'), s);
 }
 
-/** 任务边界标记（人读分段；任务开始/结束各一行，不受采样影响） */
+/** 任务边界标记（人读分段，不受采样影响） */
 function engineTaskMark(tag, what) {
   engineWrite(String(tag || 'engine'), '════ ' + String(what || '') + ' ════');
 }
 
-/** 文件大小可读化：供摘要里写「共 264.1 MB」 */
+// ── 清理 / 压缩 / 列表 / 读取 ──
+
 function humanSize(bytes) {
   const n = Number(bytes) || 0;
   if (n < 1024) return n + ' B';
   if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
-  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(2) + ' GB';
   return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
 }
 
-/**
- * 把一批文件路径整理成「可事后复盘的清单」：路径 + 大小 + 修改时间。
- * 删除类操作必须在删之前调用它 —— 这正是日志存在的头号理由。
- */
+/** 批量文件清单（路径+大小+修改时间）：删除类操作必须在删之前调用 */
 function describeFiles(paths, { max = 60 } = {}) {
   const list = Array.isArray(paths) ? paths : (paths ? [paths] : []);
   const out = [];
@@ -267,40 +349,71 @@ function describeFiles(paths, { max = 60 } = {}) {
   return { files: out, count: list.length, bytes: total, truncated: list.length > out.length };
 }
 
-/** 启动时清理超过 KEEP_DAYS 天的日志。日志属应用自管缓存，直接删除（不进回收站，避免长期堆积）。 */
+const FILE_RE = /^(app|error|engine)-(\d{4})-(\d{2})-(\d{2})(?:-(\d+))?\.log(\.gz)?$/;
+
+/** 异步清理 + 压缩（§八）：超保留期删除；跨天未压缩未超期 → gzip（异步，空闲期调用） */
+async function pruneAsync(keepDays = KEEP_DAYS, keepErrorDays = ERROR_KEEP_DAYS) {
+  if (!logDir) return { removed: 0, compressed: 0 };
+  let removed = 0, compressed = 0;
+  try {
+    const cutoffApp = Date.now() - keepDays * 86400000;
+    const cutoffErr = Date.now() - keepErrorDays * 86400000;
+    for (const f of fs.readdirSync(logDir)) {
+      const m = FILE_RE.exec(f);
+      if (!m) continue;
+      const kind = m[1];
+      const dayStr = m[2] + '-' + m[3] + '-' + m[4];
+      const t = new Date(Number(m[2]), Number(m[3]) - 1, Number(m[4])).getTime();
+      const cutoff = kind === 'error' ? cutoffErr : cutoffApp;
+      const full = path.join(logDir, f);
+      if (t < cutoff) { try { fs.unlinkSync(full); removed++; } catch (e) {} continue; }
+      if (m[6] || m[5]) continue;                        // 已滚动序号 / 已压缩
+      if (dayStr === dayOf(new Date())) continue;        // 当天仍在写
+      try {
+        const gz = full + '.gz';
+        if (!fs.existsSync(gz)) {
+          // zlib.promises 在新版 Node 已移除 → 回调包装（零依赖）
+          const buf = await new Promise((res, rej) => zlib.gzip(fs.readFileSync(full), { level: 6 }, (e, b) => e ? rej(e) : res(b)));
+          fs.writeFileSync(gz, buf);
+          fs.unlinkSync(full);
+          compressed++;
+        }
+      } catch (e) { /* 单文件失败不影响其它 */ }
+      await new Promise((r) => setImmediate(r));         // 让路
+    }
+  } catch (e) { /* 静默 */ }
+  return { removed, compressed };
+}
+
+/** 同步清理（兼容旧调用点；只删不压，压缩走 pruneAsync） */
 function pruneOld(keepDays = KEEP_DAYS, keepErrorDays = ERROR_KEEP_DAYS) {
   if (!logDir) return { removed: 0 };
   try {
     let removed = 0;
-    const cutoffApp = Date.now() - keepDays * 24 * 3600 * 1000;
-    const cutoffErr = Date.now() - keepErrorDays * 24 * 3600 * 1000;
+    const cutoffApp = Date.now() - keepDays * 86400000;
+    const cutoffErr = Date.now() - keepErrorDays * 86400000;
     for (const f of fs.readdirSync(logDir)) {
-      const mA = /^app-(\d{4})-(\d{2})-(\d{2})\.log$/.exec(f);
-      const mE = /^error-(\d{4})-(\d{2})-(\d{2})\.log$/.exec(f);
-      const mG = /^engine-(\d{4})-(\d{2})-(\d{2})\.log$/.exec(f);
-      const m = mA || mE || mG;
-      if (!m) continue;
-      const t = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
-      const cutoff = mG ? cutoffApp : (mA ? cutoffApp : cutoffErr);
+      const m = FILE_RE.exec(f);
+      if (!m || m[6]) continue;
+      const kind = m[1];
+      const t = new Date(Number(m[2]), Number(m[3]) - 1, Number(m[4])).getTime();
+      const cutoff = kind === 'error' ? cutoffErr : cutoffApp;
       if (t < cutoff) { try { fs.unlinkSync(path.join(logDir, f)); removed++; } catch (e) {} }
     }
     return { removed };
   } catch (e) { return { removed: 0 }; }
 }
 
-/** 每条都是同步追加，没有待 flush 的缓冲；保留此函数供退出路径表达「日志收尾」语义 */
-function close() {}
+function close() { try { flushBuffer(); } catch (e) {} }
 
-/** 当前日志目录（供设置页展示与打开） */
 function getDir() { return logDir; }
 
-/** 列出保留期内的日志文件（新的在前） */
-function listDays() {
+function listFiles(kind) {
   if (!logDir) return [];
   const out = [];
   try {
     for (const f of fs.readdirSync(logDir)) {
-      const m = /^app-(\d{4}-\d{2}-\d{2})\.log$/.exec(f);
+      const m = new RegExp('^' + kind + '-(\\d{4}-\\d{2}-\\d{2})(?:-(\\d+))?\\.log$').exec(f);
       if (!m) continue;
       const full = path.join(logDir, f);
       let size = 0, mtime = 0;
@@ -310,36 +423,21 @@ function listDays() {
   } catch (e) { return []; }
   return out.sort((a, b) => (a.day < b.day ? 1 : -1));
 }
-
-/** 列出保留期内的错误日志文件（新的在前）—— 排查入口，优先于全量日志 */
-function listErrorDays() {
-  if (!logDir) return [];
-  const out = [];
-  try {
-    for (const f of fs.readdirSync(logDir)) {
-      const m = /^error-(\d{4}-\d{2}-\d{2})\.log$/.exec(f);
-      if (!m) continue;
-      const full = path.join(logDir, f);
-      let size = 0, mtime = 0;
-      try { const st = fs.statSync(full); size = st.size; mtime = st.mtimeMs; } catch (e) {}
-      out.push({ day: m[1], file: f, size, mtime });
-    }
-  } catch (e) { return []; }
-  return out.sort((a, b) => (a.day < b.day ? 1 : -1));
-}
+const listDays = () => listFiles('app');
+const listErrorDays = () => listFiles('error');
+const listEngineDays = () => listFiles('engine');
 
 /**
- * 读取某日运行日志（排查用；缺省今天）。
- * 文件可能很大，只保留末尾的窗口：超过 MAX_READ 时从文件尾部读。
- * @param {string} day `YYYY-MM-DD`，留空取今天
- * @param {{tail?:number, grep?:string, maxBytes?:number}} opts tail 取末尾若干行；grep 为子串过滤（先过滤再取尾）
- * @returns {{ok:boolean, day:string, path:string, exists:boolean, size:number, total:number, lines:string[], text:string}}
+ * 读取日志（排查视图；app/error/engine 三类 + lvl/mod 过滤，方案 §七）。
+ * 文件可能很大，只保留末尾窗口。
+ * @param {{file?:'app'|'error'|'engine', day?:string, lvl?:string, mod?:string, grep?:string, tail?:number, maxBytes?:number}} opts
  */
-function readDay(day, opts) {
+function readLog(opts) {
   const o = opts || {};
-  const d = /^\d{4}-\d{2}-\d{2}$/.test(String(day || '')) ? String(day) : dayOf(new Date());
-  const full = fileOf(d);
-  const base = { ok: true, day: d, path: full, exists: false, size: 0, total: 0, lines: [], text: '' };
+  const kind = ['app', 'error', 'engine'].includes(String(o.file)) ? String(o.file) : 'app';
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(String(o.day || '')) ? String(o.day) : dayOf(new Date());
+  const full = kind === 'app' ? fileOf(d) : (kind === 'error' ? errFileOf(d) : engineFileOf(d));
+  const base = { ok: true, file: kind, day: d, path: full, exists: false, size: 0, total: 0, lines: [], text: '' };
   if (!logDir) return Object.assign(base, { ok: false, error: '日志目录不可用' });
   let size = 0;
   try { if (!fs.existsSync(full)) return base; size = fs.statSync(full).size; } catch (e) { return base; }
@@ -352,17 +450,29 @@ function readDay(day, opts) {
     fs.readSync(fd, buf, 0, buf.length, start);
     fs.closeSync(fd);
     text = buf.toString('utf8');
-    if (start > 0) text = text.slice(text.indexOf('\n') + 1);   // 丢掉被截断的首行
+    if (start > 0) text = text.slice(text.indexOf('\n') + 1);
   } catch (e) { return Object.assign(base, { ok: false, error: String(e && e.message || e) }); }
   let lines = text.split(/\r?\n/).filter(Boolean);
   const total = lines.length;
+  const lvl = String(o.lvl || '').trim();
+  const mod = String(o.mod || '').trim();
   const grep = String(o.grep || '').trim();
+  if (lvl) lines = lines.filter((l) => l.includes('  ' + lvl.padEnd(5) + '  '));
+  if (mod) lines = lines.filter((l) => l.includes('  ' + mod + '  '));
   if (grep) lines = lines.filter((l) => l.indexOf(grep) >= 0);
   const tail = parseInt(o.tail, 10);
   if (tail > 0 && lines.length > tail) lines = lines.slice(lines.length - tail);
-  return { ok: true, day: d, path: full, exists: true, size, total, lines, text: lines.join('\n') };
+  return { ok: true, file: kind, day: d, path: full, exists: true, size, total, lines, text: lines.join('\n') };
 }
 
-module.exports = { init, getDir, listDays, listErrorDays, readDay, logEvent, logEventSync, sys, run, del, add, mod, cfg, ipc, err, ui, humanSize, describeFiles,
+/** 兼容旧调用点（app 日志读取） */
+function readDay(day, opts) { return readLog(Object.assign({ file: 'app', day }, opts || {})); }
+
+module.exports = {
+  init, getDir, setLevel, getLevel, logger, log,
+  listDays, listErrorDays, listEngineDays, readLog, readDay,
+  logEvent, logEventSync, sys, run, del, add, mod, cfg, ipc, err, ui,
   engineLine, engineTaskMark, engineFileOf,
-  pruneOld, close, scrub, briefArgs, chEvent, isSilentChannel, isErrorish, KEEP_DAYS, ERROR_KEEP_DAYS };
+  humanSize, describeFiles, pruneOld, pruneAsync, close,
+  scrub, briefArgs, chEvent, isSilentChannel, KEEP_DAYS, ERROR_KEEP_DAYS,
+};

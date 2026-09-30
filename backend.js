@@ -4594,6 +4594,8 @@ class Api {
     const { spawn } = require('child_process');
     const childEnv = Object.assign({}, env);
     childEnv.VL_CACHE_DB = this.cacheDbPath || '';
+    // taskId 贯穿（方案 §五.4）：引擎侧诊断事件（@@VLDIAG@@）携带同一 id，跨进程可串链
+    childEnv.VL_TASK_ID = task ? String(task.id || '') : '';
     return new Promise((resolve) => {
       const child = this._spawnNodeEngineChild(task, childEnv);
       if (task) {
@@ -5921,6 +5923,81 @@ class Api {
         (msg || '前端异常（无错误消息）').split('\n')[0] + (where ? ' @ ' + where : ''),
         { where, href, stack });
       return { ok: true };
+    } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  }
+
+  // ── 日志体系 P1/P2（方案 §七/§九；改日志相关代码前先读《日志体系方案.md》）──
+  /** 运行日志读取（排查视图）：app/error/engine 三类 + lvl/mod 过滤（透传 runlog.readLog） */
+  readLog(o) {
+    try {
+      if (!this._runLog) this._runLog = require(path.join(this.enginesDir, 'base', 'runlog.js'));
+      return this._runLog.readLog(o || {});
+    } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  }
+  getLogLevel() {
+    try {
+      if (!this._runLog) this._runLog = require(path.join(this.enginesDir, 'base', 'runlog.js'));
+      return { ok: true, level: this._runLog.getLevel() };
+    } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  }
+  /** 级别运行时切换（§三.4：排查临时切 debug；会话级，重启回 info —— 安全默认） */
+  setLogLevel(lvl) {
+    try {
+      if (!this._runLog) this._runLog = require(path.join(this.enginesDir, 'base', 'runlog.js'));
+      this._runLog.setLevel(String(lvl));
+      const level = this._runLog.getLevel();
+      this._lg('CFG', 'log.level', '日志级别切换 · ' + level, { level });
+      return { ok: true, level };
+    } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  }
+  /** 一键诊断包（§七）：该任务相关的 app/error/engine 行 + env 快照 + 任务标记 + 产物清单 → 单个 txt。
+   *  包内含本机路径 → 文件头附提示（外发前自行打码）。 */
+  exportDiagPack(id) {
+    try {
+      let t = id ? this.tasks.get(id) : null;
+      if (!t && !id) {
+        // 留空 = 最近一个失败/中断/停止任务（按结束时间降序）
+        for (const t2 of this.tasks.values()) {
+          if (!['error', 'interrupted', 'stopped'].includes(t2.status)) continue;
+          if (!t || (t2.endedAt || 0) > (t.endedAt || 0)) t = t2;
+        }
+        if (!t) return { ok: false, error: '最近没有失败任务，请填写任务 id' };
+      }
+      if (!t) return { ok: false, error: '任务不存在' };
+      id = t.id;
+      if (!this._runLog) this._runLog = require(path.join(this.enginesDir, 'base', 'runlog.js'));
+      const opts = { grep: id, tail: 20000, maxBytes: 16 * 1024 * 1024 };
+      const app = this._runLog.readLog(Object.assign({ file: 'app' }, opts));
+      const error = this._runLog.readLog(Object.assign({ file: 'error' }, opts));
+      const engine = this._runLog.readLog(Object.assign({ file: 'engine' }, opts));
+      const marker = this._loadMarker(t);
+      const outs = Array.isArray(marker && marker.videos) ? marker.videos : [];
+      const parts = [];
+      parts.push('Video Lab 诊断包');
+      parts.push('生成时间: ' + new Date().toLocaleString());
+      parts.push('任务: ' + id + ' · ' + t.type + ' · ' + String(t.title || '').slice(0, 80) + ' · 状态 ' + t.status);
+      parts.push('⚠ 包内含本机路径与任务信息，请勿随意分享；外发前可自行将路径打码。');
+      parts.push('');
+      parts.push('════ 任务 env 快照（已脱敏）════');
+      parts.push(this._runLog.scrub(JSON.stringify(this._envBrief(t.env), null, 1)));
+      parts.push('');
+      parts.push('════ 任务标记（产物归属）════');
+      parts.push(marker ? this._runLog.scrub(JSON.stringify(marker, null, 1).slice(0, 20000)) : '(无)');
+      parts.push('');
+      parts.push('════ 产物清单（' + outs.length + ' 个文件）════');
+      parts.push(JSON.stringify(this._describeForLog(outs), null, 1));
+      parts.push('');
+      for (const [name, r] of [['app', app], ['error', error], ['engine', engine]]) {
+        parts.push('════ ' + name + '-*.log 中与该任务相关的行（' + (r.lines ? r.lines.length : 0) + ' 行，窗口内）════');
+        parts.push(r.lines && r.lines.length ? r.lines.join('\n') : '(无匹配行)');
+        parts.push('');
+      }
+      const dir = path.join(this._runLog.getDir(), '..', 'diag');
+      try { fs.mkdirSync(dir, { recursive: true }); } catch (e2) {}
+      const file = path.join(dir, 'diag-' + String(id).replace(/[^\w-]/g, '') + '-' + Date.now().toString(36) + '.txt');
+      fs.writeFileSync(file, parts.join('\n'), 'utf8');
+      this._lg('SYS', 'diag.export', '导出诊断包 · ' + t.type + ' · ' + path.basename(file), { id, path: file });
+      return { ok: true, path: file };
     } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
   }
 

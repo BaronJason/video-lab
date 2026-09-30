@@ -69,7 +69,7 @@ async function main() {
   for (let i = 0; i < argv.length; i++) {
     if (argv[i].startsWith('--')) { args[argv[i].slice(2)] = (argv[i + 1] && !argv[i + 1].startsWith('--')) ? argv[++i] : true; }
   }
-  const logger = new Logger();
+  const logger = new Logger({ taskId: process.env.VL_TASK_ID || '' });
   loadModules(logger);
 
   const id = typeof args.module === 'string' ? args.module.trim() : '';

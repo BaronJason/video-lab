@@ -862,6 +862,43 @@
         if (!(r && r.ok)) toast('打开失败：' + ((r && r.error) || '路径不存在'), true);
       }).catch(function () { setStatus('打开失败', false); });
     });
+    // 日志查看器（方案 §七）：文件类型 + 级别 + 关键词过滤
+    var btnLogView = document.getElementById('btnLogViewLoad');
+    if (btnLogView && api && api.read_log) btnLogView.addEventListener('click', function () {
+      var file = (document.getElementById('logViewFile') || {}).value || 'app';
+      var lvl = (document.getElementById('logViewLevel') || {}).value || '';
+      var grep = (document.getElementById('logViewGrep') || {}).value || '';
+      api.read_log({ file: file, lvl: lvl, grep: grep, tail: 2000 }).then(function (r) {
+        var out = document.getElementById('logViewOut');
+        if (!out) return;
+        if (!r || !r.ok) { out.value = '读取失败：' + ((r && r.error) || '未知错误'); return; }
+        if (!r.exists) { out.value = '该日尚无 ' + file + ' 日志文件。'; return; }
+        out.value = r.text || '（无匹配行）';
+      }).catch(function () { setStatus('读取日志失败', true); });
+    });
+    // 日志级别（会话级；重启回 info —— 安全默认）
+    if (api && api.get_log_level && api.set_log_level) {
+      api.get_log_level().then(function (r) {
+        if (r && r.ok) { var sel = document.getElementById('logLevelSel'); if (sel) sel.value = r.level || 'info'; }
+      }).catch(function () {});
+      var lvlSel = document.getElementById('logLevelSel');
+      if (lvlSel) lvlSel.addEventListener('change', function () {
+        api.set_log_level(lvlSel.value).then(function (r) {
+          toast(r && r.ok ? '日志级别已切换：' + r.level : '切换失败', r && r.ok ? 'ok' : true);
+        }).catch(function () {});
+      });
+    }
+    // 一键诊断包（方案 §七）：相关日志行 + env 快照 + 产物清单 → 单个 txt
+    var btnDiag = document.getElementById('btnExportDiag');
+    if (btnDiag && api && api.export_diag_pack) btnDiag.addEventListener('click', function () {
+      var id = (document.getElementById('diagTaskId') || {}).value || '';
+      btnDiag.disabled = true;
+      api.export_diag_pack(id.trim()).then(function (r) {
+        btnDiag.disabled = false;
+        if (r && r.ok) { toast('诊断包已生成（日志目录 diag\\ 下），即将打开', 'ok'); if (api.open_parent) api.open_parent(r.path); }
+        else toast('导出失败：' + ((r && r.error) || '未知错误'), true);
+      }).catch(function () { btnDiag.disabled = false; setStatus('导出诊断包失败', true); });
+    });
     // 复制浏览器访问地址（带安全令牌，供用户手动填入其他设备/分享）
     var btnCopyUrl = document.getElementById('btnOpenBrowserUrl');
     if (btnCopyUrl) btnCopyUrl.addEventListener('click', function () {

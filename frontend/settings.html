@@ -46,7 +46,6 @@
     <div class="settings-nav__brand">Video Lab</div>
     <button class="settings-nav__item is-active" data-view="general">通用设置</button>
     <button class="settings-nav__item" data-view="batch">批量拼接</button>
-    <button class="settings-nav__item" data-view="replica">视频复刻</button>
     <button class="settings-nav__item" data-view="mask">遮罩叠加</button>
     <button class="settings-nav__item" data-view="tool">视频处理</button>
 
@@ -289,25 +288,7 @@
         <input class="form-input" id="batchMaxRetry" type="number" min="1" step="1" placeholder="">
       </div>
 
-      
-    </section>
-
-    <!-- ═══ 视频复刻 ═══ -->
-    <section class="settings-view" id="view-replica">
-      <h2 class="settings-view__title">视频复刻参数</h2>
-
-            <div class="settings-group"><span class="settings-group__title">成片时长与变速</span></div>
-      <div class="form-group">
-        <label class="form-group__label">最大成片时长 (秒)</label>
-        <input class="form-input" id="replicaMaxDuration" type="number" min="1" step="1" placeholder="">
-      </div>
-
-      <div class="form-group">
-        <label class="form-group__label">倍速阈值</label>
-        <input class="form-input" id="replicaSpeedLimit" type="number" min="1" step="0.1" placeholder="">
-      </div>
-
-            <div class="settings-group"><span class="settings-group__title">去重</span></div>
+      <div class="settings-group"><span class="settings-group__title">去重（视频复刻）</span></div>
       <div class="form-group">
         <label class="form-group__label">重复度下限<small>不一致时长占比的下限</small></label>
         <div class="opt-row">

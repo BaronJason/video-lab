@@ -5413,6 +5413,8 @@ class Api {
     const notSet = this._settingsError('replica');
     if (notSet.length) return { ok: false, error: '视频复刻参数未设置：' + notSet.join('、') + '，请到 设置-视频复刻 中配置后再启动' };
     const r = this.config.replica || {};
+    // 全局参数（成片时长上限 / 加速阈值 / 每档轮数）与批量拼接共用同一套 —— 复刻不再单独设置
+    const b = this.config.batch || {};
     const o = opts || {};
     const num = (v, dft) => { const n = parseFloat(v); return Number.isFinite(n) && n > 0 ? n : dft; };
     const boolOn = (v, dft) => (v === undefined || v === null) ? (dft !== false) : (v === true);
@@ -5420,8 +5422,10 @@ class Api {
       REPLICA_TXT: path.resolve(logPath),
       REPLICA_MODE: String(mode) === '2' ? '2' : '1',
       REPLICA_NO_WAIT: '1',
-      REPLICA_MAX_DURATION: String(r.max_duration),
-      REPLICA_SPEED_LIMIT: String(r.speed_limit),
+      // 全局参数（与批量拼接共用同一套，复刻不单独设置）：成片时长上限 / 加速阈值 / 每档轮数
+      BATCH_MAX_DURATION: String(b.max_duration),
+      BATCH_SPEED_LIMIT: String(b.speed_limit),
+      BATCH_MAX_RETRY: String(b.max_retry),
       // 重复度区间：本次任务弹窗传入优先，未传则用设置里的默认值与默认启用状态
       // （下限=至少替换到的占比；上限=尽量避免超过，超过会被平台判为全新视频）
       REPLICA_DEDUP_RATIO: String(num(o.dedupRatio, r.dedup_ratio)),

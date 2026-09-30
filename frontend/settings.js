@@ -396,8 +396,8 @@
       state.batch.txt_prefix = toArr(b.txt_prefix);
       $('batchProducer').value = b.producer != null ? b.producer : '';
       var r = s.replica || {};
-      $('replicaMaxDuration').value = r.max_duration != null ? r.max_duration : '';
-      $('replicaSpeedLimit').value = r.speed_limit != null ? r.speed_limit : '';
+      // 复刻的「成片时长上限 / 加速阈值 / 每档轮数」已与批量拼接共用同一套（副本遵循批量设置），
+      // 独立视图已移除，这里不再单独渲染这些字段。
       $('replicaDedupRatio').value = r.dedup_ratio != null ? r.dedup_ratio : '';
       var rdm = $('replicaDedupMax');
       if (rdm) rdm.value = r.dedup_ratio_max != null ? r.dedup_ratio_max : '';
@@ -572,8 +572,7 @@
       state.batch.txt_prefix = (state.batch.txt_prefix || []).slice();
       state.batch.producer = $('batchProducer').value.trim();
       state.batch.suffix_mark = $('batchSuffixMark').value.trim();
-      state.replica.max_duration = $('replicaMaxDuration').value.trim();
-      state.replica.speed_limit = $('replicaSpeedLimit').value.trim();
+      // 同上：复刻不再保存时长上限 / 加速阈值（与批量共用）
       state.replica.dedup_ratio = $('replicaDedupRatio').value.trim();
       state.replica.dedup_ratio_max = ($('replicaDedupMax') || {}).value ? $('replicaDedupMax').value.trim() : '';
       state.replica.dedup_ratio_on = !!($('replicaDedupRatioOn') && $('replicaDedupRatioOn').checked);

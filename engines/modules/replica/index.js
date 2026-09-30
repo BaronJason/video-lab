@@ -11,6 +11,8 @@ const { probe } = require('../../base/probe');
 const { acquireLock } = require('../../base/lock');
 const { stripQuotes, getNumberSuffix, exists, renameWithRetry } = require('../../base/paths');
 const dedupe = require('../../base/dedupe');
+// 「加速换档重试」策略（与批量拼接共用同一套，见 engines/base/ladder.js）
+const ladder = require('../../base/ladder');
 
 // 缓存作用域位掩码（与 engines/base/cache.js 的 SCOPES 同源）。
 // 惰性取用：持久层不可用时不影响复刻执行，故不在模块顶层 require。
@@ -33,8 +35,11 @@ function readEnv(env = process.env) {
   return {
     txt: n('REPLICA_TXT'),
     mode: n('REPLICA_MODE'),                       // '1' | '2'（由应用注入）
-    maxDuration: num('REPLICA_MAX_DURATION', 179),
-    speedLimit: num('REPLICA_SPEED_LIMIT', 1.2),
+    // 成片时长上限 / 加速阈值 / 每档轮数：与批量拼接**共用同一套**（这些参数与去重无关，属副本通用属性）。
+    // 复刻不单独设置：直接读全局的 BATCH_*（副本遵循批量设置；界面上改的是批量那套参数）。
+    maxDuration: num('BATCH_MAX_DURATION', 179),
+    speedLimit: num('BATCH_SPEED_LIMIT', 1.2),
+    maxRetry: num('BATCH_MAX_RETRY', 45),
     dedupRatio: num('REPLICA_DEDUP_RATIO', 0.4),
     // 重复度区间（平台规则：占比过低判重复不过审、过高判全新视频继承不到流量）
     dedupMin: num('REPLICA_DEDUP_MIN', num('REPLICA_DEDUP_RATIO', 0.4)),
@@ -146,9 +151,17 @@ function parseJobs(allLines) {
 
 // ───────────────────────── 候选与替换（Select-ReplacementVideo） ─────────────────────────
 function sameDirCandidates(videoPath) {
-  const dir = path.dirname(videoPath);
-  let ok = false; try { ok = fs.statSync(dir).isDirectory(); } catch (e) { ok = false; }
-  if (!ok) return [];
+  // 候选目录：优先原目录；**原目录不存在时退回上一级** ——
+  // 素材常被「改名 + 上移」（如 260723-督灸-xxx 整理成 260924-膝盖赤峰-xxx 后直接放在父目录下），
+  // 若仍只在原目录内枚举，候选恒为空 → 缺失修复与去重替换会整体失效（任务直接失败）。
+  // 退回父目录后，同后缀匹配仍可能命中；命中不了也还有"其它候选"可换，至少不连累整个任务。
+  let dir = path.dirname(videoPath);
+  const isDir = (d) => { try { return fs.statSync(d).isDirectory(); } catch (e) { return false; } };
+  if (!isDir(dir)) {
+    const up = path.dirname(dir);
+    if (up && up !== dir && isDir(up)) dir = up;
+    else return [];
+  }
   let entries = [];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return []; }
   const out = [];
@@ -161,6 +174,133 @@ function sameDirCandidates(videoPath) {
     out.push(full);
   }
   return out;
+}
+
+/** 不轮询子目录（配置行以 `=` 开头）：只取该目录下的直接子文件 */
+function directVideos(dir) {
+  let ok = false; try { ok = fs.statSync(dir).isDirectory(); } catch (e) { ok = false; }
+  if (!ok) return [];
+  let entries = [];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return []; }
+  const out = [];
+  for (const ent of entries) {
+    if (!ent.isFile()) continue;
+    if (!VIDEO_EXT_RE.test(ent.name)) continue;
+    if (/旧水印/.test(ent.name)) continue;
+    out.push(path.join(dir, ent.name));
+  }
+  return out;
+}
+
+/**
+ * 读取「原配置」的素材池 —— 复刻的替换候选应当来自**配置里声明的素材目录**，
+ * 而不是"缺失片段所在的那一层子目录"。理由（用户定案）：只换同目录编号 ≈ 换汤不换药，
+ * 「换了不如用原配置重跑一遍批量」；只有从配置素材池里挑新片段才是真正的换新内容。
+ * 配置正本位于拼接日志同目录（引擎会把配置移入成片文件夹作为正本）。
+ * 语法与批量引擎完全一致：普通行 = 素材目录（递归）、`=` 前缀 = 不轮询子目录、`-` 前缀 = 排除、
+ * 末行为水印（此处忽略）。
+ */
+function loadConfigPool(logTxtPath, logger) {
+  const empty = { pools: [], exclude: [], src: '' };
+  const dir = path.dirname(logTxtPath);
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch (e) { return empty; }
+  const cands = names.filter((n) => /\.txt$/i.test(n) && !/拼接日志/.test(n));
+  if (!cands.length) return empty;
+  const base = path.basename(logTxtPath).replace(/-?拼接日志/, '').replace(/\.txt$/i, '');
+  cands.sort((a, b) => (b.includes(base) ? 1 : 0) - (a.includes(base) ? 1 : 0));
+  const src = path.join(dir, cands[0]);
+  let lines = [];
+  try {
+    lines = fs.readFileSync(src, 'utf8').replace(/^\uFEFF/, '').split(/\r?\n/)
+      .map((s) => s.trim()).filter((s) => /\S/.test(s));
+  } catch (e) { return empty; }
+  if (lines.length < 2) return empty;   // 至少 1 个素材行 + 1 个水印行
+
+  const exclude = [];
+  const pools = [];
+  for (const raw of lines.slice(0, lines.length - 1)) {
+    const line = raw.trim();
+    if (line.includes('=')) {
+      const d = stripQuotes(line.replace(/=/g, '').trim());
+      if (d) pools.push({ dir: d, recursive: false });
+    } else if (line.startsWith('-')) {
+      const ex = stripQuotes(line.slice(1).trim());
+      if (ex) exclude.push(ex);
+    } else {
+      const d = stripQuotes(line);
+      if (d) pools.push({ dir: d, recursive: true });
+    }
+  }
+  for (const p of pools) {
+    let vids = p.recursive ? recursiveVideos(p.dir) : directVideos(p.dir);
+    if (exclude.length) {
+      const ex = exclude.map((x) => x.toLowerCase());
+      vids = vids.filter((v) => !ex.some((e) => v.toLowerCase().includes(e)));
+    }
+    p.videos = vids;
+  }
+  const live = pools.filter((p) => p.videos.length);
+  if (logger) logger.info(`📚 已加载原配置素材池：${path.basename(src)}（${live.length} 个可用目录）`);
+  return { pools: live, exclude, src };
+}
+
+/**
+ * 兜底池：日志中出现的「片段所属文件夹」—— 这些目录必然来自原配置（成片由批量拼接按配置产出），
+ * 因此当配置正本缺失、或配置与日志明显对不上时，可以拿它们作为候选来源。
+ * 注意：只影响"候选从哪里选"，**片段的拼接顺序恒定不变**（替换一律原位进行）。
+ */
+function poolsFromJobs(jobs) {
+  const dirMap = new Map();
+  for (const job of jobs || []) {
+    for (const v of (job.origVideos || job.videos || [])) {
+      if (!v) continue;
+      const d = path.dirname(v);
+      if (!d) continue;
+      const k = d.toLowerCase();
+      if (!dirMap.has(k)) dirMap.set(k, d);
+    }
+  }
+  const pools = [];
+  for (const d of dirMap.values()) {
+    const vids = recursiveVideos(d);
+    if (vids.length) pools.push({ dir: d, recursive: true, videos: vids });
+  }
+  return pools;
+}
+
+/**
+ * 构建最终候选池：以配置正本为主，补充「日志里出现但配置未覆盖」的目录。
+ * 这样即使配置缺失/与日志对不上，替换依然有来自原配置的候选可用。
+ */
+function buildReplicaPools({ txtPath, jobs, logger }) {
+  const cfgp = loadConfigPool(txtPath, logger);
+  const logPools = poolsFromJobs(jobs);
+  const seen = new Set(cfgp.pools.map((p) => String(p.dir).toLowerCase()));
+  const extra = logPools.filter((p) => !seen.has(String(p.dir).toLowerCase()));
+  const pools = cfgp.pools.concat(extra);
+  if (logger) {
+    if (!cfgp.pools.length && extra.length) {
+      logger.warn(`未读到可用的原配置素材池 → 改用日志中 ${extra.length} 个片段目录作为候选来源`);
+    } else if (extra.length) {
+      logger.info(`📚 候选池：配置 ${cfgp.pools.length} 个目录 + 日志补充 ${extra.length} 个目录`);
+    }
+  }
+  return { pools, src: cfgp.src, fromConfig: cfgp.pools.length, fromLog: extra.length };
+}
+
+/** 某个片段属于哪个配置素材目录（最长前缀匹配）→ 返回该目录的候选列表 */
+function poolForPath(pools, videoPath) {
+  if (!Array.isArray(pools) || !pools.length) return null;
+  const p = String(videoPath).toLowerCase().replace(/\//g, '\\');
+  let best = null;
+  for (const pool of pools) {
+    const d = String(pool.dir).toLowerCase().replace(/\//g, '\\').replace(/\\+$/, '');
+    if (p === d || p.startsWith(d + '\\')) {
+      if (!best || pool.dir.length > best.dir.length) best = pool;
+    }
+  }
+  return best ? best.videos : null;
 }
 
 function recursiveVideos(dir) {
@@ -199,10 +339,14 @@ async function sortByValidThenDuration(list, info) {
  * - excludeNames 文件名排除（同名即同一片段，成片内不得重复）
  * - shorterThan >0 时只接受严格更短的候选（无更短 → 返回空，由调用方标记该段耗尽）
  */
-async function selectReplacementVideo({ originalPath, exclude = [], preferShort = false, shorterThan = 0, excludeNames = [], info, targetDurMax = 0 }) {
+async function selectReplacementVideo({ originalPath, exclude = [], preferShort = false, shorterThan = 0, excludeNames = [], info, targetDurMax = 0, pool = null, noSameSuffix = false, stillNeed = false }) {
   const excludeSet = new Set(exclude);
   const nameSet = new Set(excludeNames);
-  let cands = sameDirCandidates(originalPath).filter((p) => !excludeSet.has(p) && !nameSet.has(path.basename(p)));
+  // 候选来源：优先「原配置素材池」（配置声明的目录，递归），池不可用时退回同目录 + 父目录兜底
+  // 候选必须排除「原片段自身」：配置池（递归）可能只包含它自己，若选中自己就是"表面替换成功"
+  //（生成时计入占比 → 占比虚高 → 提前停止替换），而最终校验发现片段没变 → 不达标不出片。
+  let cands = (Array.isArray(pool) && pool.length ? pool.slice() : sameDirCandidates(originalPath))
+    .filter((p) => !excludeSet.has(p) && !nameSet.has(path.basename(p)) && p !== originalPath);
   if (shorterThan > 0) {
     const keep = [];
     for (const c of cands) { const i = await info(c); if ((i.duration || 0) < shorterThan) keep.push(c); }
@@ -211,12 +355,19 @@ async function selectReplacementVideo({ originalPath, exclude = [], preferShort 
   if (targetDurMax > 0) {
     const keep = [];
     for (const c of cands) { const i = await info(c); if ((i.duration || 0) <= targetDurMax) keep.push(c); }
-    cands = keep;
+    // 预算装不下任何候选时**不放弃替换**：仍保留候选池（后续会选最短的那个），最终由「成片加速」把
+    // 总时长压回设定值 —— 加速的定位是拼接完成后的兜底，不是用来放宽这里的替换预算。
+    if (keep.length) cands = keep;
   }
   if (!cands.length) return { path: null, equivalent: false };
 
   const origSuffix = getNumberSuffix(originalPath);
-  const sameSuffix = origSuffix ? cands.filter((c) => getNumberSuffix(c) === origSuffix) : [];
+  //  而"同后缀 = 内容等效"对去重没有意义（换了等于没换，占比仍为 0）。
+  //  同后缀优先只用于**缺失修复**（找回与原片段等效的版本）。
+  // noSameSuffix（主动替换/去重）：不走"同后缀优先" —— 配置素材池（递归）里几乎总能找到同编号片段，
+  // 而"同后缀 = 内容等效"对去重没有意义（换了等于没换，最终占比仍为 0）。
+  // 同后缀优先只保留给**缺失修复**（找回与原片段等效的版本）。
+  const sameSuffix = (origSuffix && !noSameSuffix) ? cands.filter((c) => getNumberSuffix(c) === origSuffix) : [];
   const others = cands.filter((c) => !sameSuffix.includes(c));
 
   // 时长预算模式（targetDurMax>0）：在上限内选「最长」候选（并列随机）——
@@ -235,8 +386,24 @@ async function selectReplacementVideo({ originalPath, exclude = [], preferShort 
       }
       return tie[Math.floor(Math.random() * tie.length)];
     };
-    if (sameSuffix.length) { const p = await pickLongestTie(sameSuffix); if (p) return { path: p, equivalent: true }; }
-    if (others.length) { const p = await pickLongestTie(others); if (p) return { path: p, equivalent: false }; }
+    // 尚未达到占比下限时，改选「预算内最短」的候选：占比是按**被替换原段的时长**计的，换更短的新片段
+    // 并不会拉低占比，却能把 179s 时长预算省下来，让后面更多段也换得动（用户策略：不达标就依次往前再释放一段）。
+    // 达标后再回到「预算内选最长」，最大化新内容量。
+    const pickShortest = async (list) => {
+      const s = await sortByValidThenDuration(list, info);
+      if (!s.length) return null;
+      const i0 = await info(s[0]);
+      const tie = [s[0]];
+      for (let k = 1; k < s.length; k++) {
+        const ik = await info(s[k]);
+        if (ik.valid !== i0.valid || Math.abs((ik.duration || 0) - (i0.duration || 0)) > 0.05) break;
+        tie.push(s[k]);
+      }
+      return tie[Math.floor(Math.random() * tie.length)];
+    };
+    const pick = stillNeed ? pickShortest : pickLongestTie;
+    if (sameSuffix.length) { const p = await pick(sameSuffix); if (p) return { path: p, equivalent: true }; }
+    if (others.length) { const p = await pick(others); if (p) return { path: p, equivalent: false }; }
     return { path: null, equivalent: false };
   }
 
@@ -334,7 +501,7 @@ function resolveFromVideoCache(oldPath, { exclude = [], excludeNames = [], index
 async function selectVariancePaths({
   originalPaths, alreadyChangedIndices = [], alreadyEquivalentIndices = [],
   triedSubs = new Map(), preferShort = false, dedupRatio, info, logger, durationCap = 0,
-  dedupMax = 0, dedupMaxOn = false,
+  dedupMax = 0, dedupMaxOn = false, pools = null,
 }) {
   const origDurations = [];
   let totalOrig = 0;
@@ -370,6 +537,8 @@ async function selectVariancePaths({
       skippedOverCap.push(i);
       continue;
     }
+    const poolHere = pools ? poolForPath(pools, originalPaths[i]) : null;
+    if (logger && poolHere) logger.info(`     第 ${i + 1} 段候选池命中 ${poolHere.length} 个（${path.basename(originalPaths[i])}）`);
     const origKey = String(originalPaths[i]);
     const excludeSubs = [];
     for (const k of triedSubs.keys()) if (k.startsWith(origKey + '|')) excludeSubs.push(k.slice(origKey.length + 1));
@@ -389,6 +558,8 @@ async function selectVariancePaths({
     const sel = await selectReplacementVideo({
       originalPath: originalPaths[i], exclude: excludeAll, excludeNames: usedNames, preferShort, info,
       targetDurMax: budget > 0 ? budget : 0,
+      pool: pools ? poolForPath(pools, originalPaths[i]) : null,
+      noSameSuffix: true,   // 主动替换：换新内容，不走"同后缀等效"
     });
     if (!sel.path) continue;
     newPaths[i] = sel.path;
@@ -417,6 +588,8 @@ async function selectVariancePaths({
       const excludeAll2 = excludeSubs2.concat(newPaths.filter((pp) => pp && pp !== originalPaths[i]));
       const sel2 = await selectReplacementVideo({
         originalPath: originalPaths[i], exclude: excludeAll2, excludeNames: usedNames2, preferShort, info,
+        pool: pools ? poolForPath(pools, originalPaths[i]) : null,
+        noSameSuffix: true,
       });
       if (!sel2.path) continue;
       newPaths[i] = sel2.path;
@@ -509,6 +682,10 @@ async function run(ctx, env = process.env) {
   const info = makeVideoInfo(cache);
 
   // ── 缺失片段修复（三路） ──
+  // 先冻结「原始片段列表」：缺失修复会就地改写 job.videos，而最终的不一致占比校验必须
+  // 以**原始**为基准 —— 否则缺失修复带来的改动量会被自己抹掉（表现为：生成时按 24.7% 判定
+  // 已达下限而停止替换，校验时只认到 5.1% → 误判「重复度过高」导致出片失败）。
+  for (const job of jobs) job.origVideos = job.videos.slice();
   const missingAll = [];
   for (const job of jobs) {
     for (let i = 0; i < job.videos.length; i++) {
@@ -562,6 +739,9 @@ async function run(ctx, env = process.env) {
         continue;
       }
       job.videos[m.index] = newPath;
+      // 两类归属分开记：非等效（内容确实换了）计入去重配额；等效（同序号/缓存命中，内容相近）另记一份。
+      // 等效位**不锁定**该位置（选位时不跳过，仍可能被换成非等效片段，从而真正贡献去重）；
+      // 但最终口径校验要把它排除（等效填充不算"不一致"）。
       if (isEquivalent) job.missingEquivalentIndices.push(m.index);
       else job.missingReplacedIndices.push(m.index);
       if (newPath !== orig) logger.info(`   ✅ [${job.name}] ${path.basename(orig)} -> ${path.basename(newPath)}`);
@@ -583,6 +763,11 @@ async function run(ctx, env = process.env) {
   else if (cfg.mode === '2') mode = 2;
   else return fail('未通过环境变量 REPLICA_MODE 指定复刻模式（脚本由 Video Lab 驱动）', '复刻模式');
   const modeName = mode === 1 ? '原片复刻' : '去重复刻';
+  // 去重复刻：候选池 = 原配置素材池（+ 日志中片段目录补充）。第 1 段恒定不动，其余段**原位**
+  // 换新片段（顺序不变），候选优先来自配置声明的素材目录。
+  const configPool = (mode === 2)
+    ? buildReplicaPools({ txtPath, jobs, logger })
+    : { pools: [], exclude: [], src: '', fromConfig: 0, fromLog: 0 };
   const outRoot = path.join(cfg.outputDir || derivedRoot, modeName);
   try { fs.mkdirSync(outRoot, { recursive: true }); } catch (e) {}
 
@@ -638,27 +823,47 @@ async function run(ctx, env = process.env) {
       const speedThreshold = cfg.speedLimit;
 
       if (mode === 2) {
-        // ── 模式2：尾部替换 + 渐进压时长 ──
+        // ── 模式2：尾部替换 + 换档重试（对齐批量模块的「升档兜底」）──
+        // 红线：输出时长恒以 maxDuration 封顶（平台规则）；换档只放宽「允许的组合时长」，
+        // 最终由成片加速把超出的部分压回设定值 —— 不是用加速去放宽这里的替换预算。
+        const THR_STEPS = [1, 1.25, 1.5, 1.75, 2];
+        const MAX_SPEED_RATIO = 2.0;
+        const RETRY_PER_STEP = Math.max(1, Math.round(cfg.maxRetry || 45));
+        const ladderRounds = RETRY_PER_STEP * THR_STEPS.length;
+        let ladderAllowed = Math.min(maxDuration * speedThreshold, maxDuration * MAX_SPEED_RATIO);
         let workVideos = job.videos.slice();
         const triedSubs = new Map();
         const exhaustedIdx = new Set();
-        let attempt = 0;
         let durOk = false;
-        while (attempt === 0 || (!durOk && attempt < MAX_ATTEMPT && exhaustedIdx.size < workVideos.length)) {
+        let attempt = 0;
+        for (let round = 0; round < ladderRounds; round++) {
+          const thrStep = Math.min(Math.floor(round / RETRY_PER_STEP), THR_STEPS.length - 1);
+          ladderAllowed = Math.min(maxDuration * speedThreshold * THR_STEPS[thrStep], maxDuration * MAX_SPEED_RATIO);
+          if (round > 0 && round % RETRY_PER_STEP === 0) {
+            // 换档：清掉上一档的失败记忆与耗尽标记，否则候选一直被挡、换档等于没换
+            exhaustedIdx.clear();
+            triedSubs.clear();
+            logger.info(`⤴️  加大加速倍率至 ${(speedThreshold * THR_STEPS[thrStep]).toFixed(2)} 倍，继续尝试`
+              + `（输出时长仍以上限 ${maxDuration}s 封顶）`);
+          }
           let newVideos = [];
-          if (attempt === 0) {
+          if (round === 0) {
             const r = await selectVariancePaths({
               originalPaths: job.videos,
               alreadyChangedIndices: job.missingReplacedIndices,
-              alreadyEquivalentIndices: job.missingEquivalentIndices,
+              // 等效填充位**不跳过**：仍参与去重选位（被命中就换成非等效片段，去重更充分）
+              alreadyEquivalentIndices: [],
               triedSubs, preferShort: true, dedupRatio: cfg.dedupRatio, info, logger,
-              // 总时长预算 = 成片上限：尾部替换在预算内优先选更长候选（填满上限、更多新内容），
-              // 预算不足时退回原压时长语义；超限后由渐进压时长轮次兜底
-              durationCap: maxDuration,
+              durationCap: ladderAllowed,
               dedupMax: cfg.dedupMax,
               dedupMaxOn: cfg.dedupMaxOn,
+              // 候选池来自"原配置的素材目录"（第1段不动、其余段原位替换，顺序恒定）
+              pools: configPool.pools,
             });
             newVideos = r.paths;
+            for (let i = 0; i < job.videos.length; i++) {
+              if (job.videos[i] !== newVideos[i]) triedSubs.set(String(job.videos[i]) + '|' + newVideos[i], true);
+            }
           } else {
             let longestIdx = -1;
             let longestDur = -1;
@@ -667,7 +872,7 @@ async function run(ctx, env = process.env) {
               const d = (await info(workVideos[i])).duration || 0;
               if (d > longestDur) { longestDur = d; longestIdx = i; }
             }
-            if (longestIdx < 0) { durOk = false; break; }
+            if (longestIdx < 0) break;
             const workKey = String(workVideos[longestIdx]);
             const exclude = [];
             for (const k of triedSubs.keys()) if (k.startsWith(workKey + '|')) exclude.push(k.slice(workKey.length + 1));
@@ -681,18 +886,13 @@ async function run(ctx, env = process.env) {
           }
           totalDuration = 0;
           for (const p of newVideos) totalDuration += (await info(p)).duration || 0;
-          if (attempt === 0) {
-            for (let i = 0; i < job.videos.length; i++) {
-              if (job.videos[i] !== newVideos[i]) triedSubs.set(String(job.videos[i]) + '|' + newVideos[i], true);
-            }
-          }
           workVideos = newVideos.slice();
-          if (totalDuration <= maxDuration * speedThreshold) { durOk = true; break; }
-          attempt++;
+          if (totalDuration <= ladderAllowed) { durOk = true; break; }
+          attempt = round + 1;
         }
         videos = workVideos.slice();
         if (!durOk) {
-          logger.error('日志复刻-时长检查', `总时长 ${round1(totalDuration)} 秒超过允许阈值（重试45次后仍不达标），请重选片段或调整日志`);
+          logger.error('日志复刻-时长检查', `总时长 ${round1(totalDuration)} 秒超过允许阈值（${THR_STEPS.length} 档 × ${RETRY_PER_STEP} 轮已用尽），请重选片段或调整日志`);
           logger.fail(job.name, `总时长超阈值：${round1(totalDuration)} 秒`);
           hasError = true;
           continue;
@@ -740,10 +940,15 @@ async function run(ctx, env = process.env) {
       // 下限未达标 → 该成片不出片（重复度过高）；超上限 → 告警（受片段时长粒度限制，生成时已优先保下限）
       if (mode === 2 && job.videos.length) {
         let changedDurFinal = 0, origDurTotal = 0;
-        for (let vi = 0; vi < job.videos.length; vi++) {
-          const od = (await info(job.videos[vi])).duration || 0;
+        const eqSet = new Set(job.missingEquivalentIndices || []);
+        // 基准必须是「原始片段列表」（缺失修复前的快照）—— 用被修复改写过的 job.videos 比较，
+        // 会把缺失修复的改动量自己抹掉，导致误判"重复度过高"。
+        const baseVideos = job.origVideos || job.videos;
+        for (let vi = 0; vi < baseVideos.length; vi++) {
+          const od = (await info(baseVideos[vi])).duration || 0;
           origDurTotal += od;
-          if (videos[vi] !== job.videos[vi]) changedDurFinal += od;
+          // 与原片不同即算不一致；但等效填充（同序号/缓存命中，内容相近）不计入
+          if (videos[vi] !== baseVideos[vi] && !eqSet.has(vi)) changedDurFinal += od;
         }
         const ratioFinal = origDurTotal > 0 ? changedDurFinal / origDurTotal : 0;
         const minTxt = cfg.dedupMinOn ? round1(cfg.dedupMin * 100) + '%' : '未启用';

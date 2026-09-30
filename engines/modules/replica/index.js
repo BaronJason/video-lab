@@ -498,6 +498,26 @@ function resolveFromVideoCache(oldPath, { exclude = [], excludeNames = [], index
 }
 
 // ─────────────────── 模式2：尾部替换（Select-VariancePaths） ───────────────────
+/**
+ * 不一致时长占比 —— **唯一真相**，选位预估与最终校验共用本函数。
+ * 分母 = 修复+替换后**实际播放列表**的时长和（观众看到的成片）；
+ * 分子 = 「与原版不同且非等效修复」位的实际播放时长。
+ * ⚠ 不得改回「对 origVideos 逐位 probe」的旧口径：原文件可能已不存在（info 返回 duration=0），
+ *   缺失位时长会从分母蒸发（实测 YX54B：190.83s → 101.53s），造成「选位账 37.2% / 校验账 33.2%」
+ *   两套账打架、「下限设得高能过、设得低反而失败」的悖论。
+ */
+async function calcDedupRatio(videos, origVideos, equivalentIndices, info) {
+  const eqSet = new Set(equivalentIndices || []);
+  let num = 0, den = 0;
+  for (let i = 0; i < videos.length; i++) {
+    const d = (await info(videos[i])).duration || 0;
+    den += d;
+    const orig = origVideos ? origVideos[i] : videos[i];
+    if (videos[i] !== orig && !eqSet.has(i)) num += d;
+  }
+  return den > 0 ? num / den : 0;
+}
+
 async function selectVariancePaths({
   originalPaths, alreadyChangedIndices = [], alreadyEquivalentIndices = [],
   triedSubs = new Map(), preferShort = false, dedupRatio, info, logger, durationCap = 0,
@@ -569,7 +589,8 @@ async function selectVariancePaths({
     } else {
       actuallyReplaced++;
       changedSet.add(i);
-      trulyChangedDur += origDurations[i];
+      // 分子记「该位实际播放时长」（换上的新片段），与 calcDedupRatio 的最终校验口径一致
+      trulyChangedDur += (await info(sel.path)).duration || 0;
       replaceDetails.push(`    第 ${i + 1} 段: ${path.basename(originalPaths[i])} -> ${path.basename(sel.path)}`);
     }
   }
@@ -597,7 +618,7 @@ async function selectVariancePaths({
       else {
         actuallyReplaced++;
         changedSet.add(i);
-        trulyChangedDur += origDurations[i];
+        trulyChangedDur += (await info(sel2.path)).duration || 0;
         overCap = true;
         replaceDetails.push(`    第 ${i + 1} 段: ${path.basename(originalPaths[i])} -> ${path.basename(sel2.path)}（为守住下限补足）`);
       }
@@ -823,6 +844,8 @@ async function run(ctx, env = process.env) {
       // 验收上限必须跟随达标档位，不能写死 speedThreshold，否则第 2 档及以后才达标的
       // 成片（换档机制的正常产物）会被误判「超阈值」丢弃，换档等于白换。
       let okRound = 0;
+      // 换段失败记忆（键 = 原片段|已试候选）：换档循环与回补共用，避免同一组合反复试败
+      const triedSubs = new Map();
       const maxDuration = cfg.maxDuration;
       const speedThreshold = cfg.speedLimit;
       // 档位驱动器：模式1/2 共用（模式1 不换档，恒处第 0 档）。本模块不保留任何档位常量
@@ -835,7 +858,6 @@ async function run(ctx, env = process.env) {
         // 最终由成片加速把超出的部分压回设定值 —— 不是用加速去放宽这里的替换预算。
         let ladderAllowed = L.allowedOf(0);
         let workVideos = job.videos.slice();
-        const triedSubs = new Map();
         const exhaustedIdx = new Set();
         let durOk = false;
         let attempt = 0;
@@ -950,26 +972,49 @@ async function run(ctx, env = process.env) {
       }
 
       // ── 重复度区间校验（模式2）──
-      // 口径：按最终片段与原片的差异重算不一致时长占比（含缺失修复、补足替换、重复消除的全部改动）
-      // 下限未达标 → 该成片不出片（重复度过高）；超上限 → 告警（受片段时长粒度限制，生成时已优先保下限）
+      // 占比口径统一走 calcDedupRatio（唯一真相）：分母 = 实际播放列表时长和，分子 = 非等效差异位的播放时长。
+      // 旧口径对 baseVideos 逐位 probe：原文件已不存在时 od=0，缺失位（本例 89.3s）从分母蒸发
+      // → 「下限高能过、下限低反而失败」的悖论（选位账 37.2% / 校验账 33.2%）。
+      // 下限未达标 → 先回补（定案「宁多不少」），找遍仍不达标才不出片；超上限 → 告警。
       if (mode === 2 && job.videos.length) {
-        let changedDurFinal = 0, origDurTotal = 0;
-        const eqSet = new Set(job.missingEquivalentIndices || []);
-        // 基准必须是「原始片段列表」（缺失修复前的快照）—— 用被修复改写过的 job.videos 比较，
-        // 会把缺失修复的改动量自己抹掉，导致误判"重复度过高"。
         const baseVideos = job.origVideos || job.videos;
-        for (let vi = 0; vi < baseVideos.length; vi++) {
-          const od = (await info(baseVideos[vi])).duration || 0;
-          origDurTotal += od;
-          // 与原片不同即算不一致；但等效填充（同序号/缓存命中，内容相近）不计入
-          if (videos[vi] !== baseVideos[vi] && !eqSet.has(vi)) changedDurFinal += od;
-        }
-        const ratioFinal = origDurTotal > 0 ? changedDurFinal / origDurTotal : 0;
+        const eqSet = new Set(job.missingEquivalentIndices || []);
+        let ratioFinal = await calcDedupRatio(videos, baseVideos, eqSet, info);
         const minTxt = cfg.dedupMinOn ? round1(cfg.dedupMin * 100) + '%' : '未启用';
         const maxTxt = (cfg.dedupMaxOn && cfg.dedupMax > 0) ? round1(cfg.dedupMax * 100) + '%' : '未启用';
+
+        // 回补（用户定案 2026-09-23「④ 下限优先于上限：宁多不少，找遍仍不达标则回补」）：
+        // 按「越靠后越优先」对「尚未与原版不同的位 / 等效填充位」追加替换，直到达标或候选枯竭。
+        // 等效位被换成非等效后要移出 eqSet，否则校验仍把它当"内容相近"而不计分子。
+        if (cfg.dedupMinOn && ratioFinal < cfg.dedupMin) {
+          logger.warn(`🔀 占比 ${round1(ratioFinal * 100)}% 低于下限 ${minTxt}，按「越靠后越优先」回补替换`);
+          for (let i = videos.length - 1; i >= 1 && ratioFinal < cfg.dedupMin; i--) {
+            const origKey = String(baseVideos[i]);
+            const excludeSubs = [];
+            for (const k of triedSubs.keys()) if (k.startsWith(origKey + '|')) excludeSubs.push(k.slice(origKey.length + 1));
+            const usedNames = [];
+            for (let k = 0; k < videos.length; k++) if (k !== i && videos[k]) usedNames.push(path.basename(videos[k]));
+            const sel = await selectReplacementVideo({
+              originalPath: videos[i], exclude: excludeSubs, excludeNames: usedNames, info,
+              pool: configPool.pools ? poolForPath(configPool.pools, videos[i]) : null,
+              noSameSuffix: true,
+            });
+            if (!sel.path || sel.equivalent) continue;
+            videos[i] = sel.path;
+            triedSubs.set(origKey + '|' + sel.path, true);
+            const wasEq = eqSet.delete(i);
+            ratioFinal = await calcDedupRatio(videos, baseVideos, eqSet, info);
+            logger.info(`     第 ${i + 1} 段回补: ${path.basename(baseVideos[i])} -> ${path.basename(sel.path)}`
+              + `（占比 ${round1(ratioFinal * 100)}%${wasEq ? '，等效位已转正' : ''}）`);
+          }
+          // 回补改变了片段列表 → 重算总时长供后续时长/加速验收
+          totalDuration = 0;
+          for (const p of videos) totalDuration += (await info(p)).duration || 0;
+        }
+
         logger.info(`🔀 不一致时长占比 ${round1(ratioFinal * 100)}%（下限 ${minTxt} / 上限 ${maxTxt}）`);
         if (cfg.dedupMinOn && ratioFinal < cfg.dedupMin) {
-          logger.error('复刻-重复度下限', `不一致占比 ${round1(ratioFinal * 100)}% 低于下限 ${round1(cfg.dedupMin * 100)}%（重复度过高）`);
+          logger.error('复刻-重复度下限', `不一致占比 ${round1(ratioFinal * 100)}% 低于下限 ${round1(cfg.dedupMin * 100)}%（重复度过高，回补后仍不达标）`);
           logger.fail(job.name, `不一致占比 ${round1(ratioFinal * 100)}% 低于下限`);
           hasError = true;
           continue;

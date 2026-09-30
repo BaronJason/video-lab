@@ -9,7 +9,7 @@ const path = require('node:path');
 const { runFfmpeg } = require('../../base/ffmpeg');
 const { probe } = require('../../base/probe');
 const { acquireLock } = require('../../base/lock');
-const { stripQuotes, getNumberSuffix, exists, renameWithRetry } = require('../../base/paths');
+const { stripQuotes, getNumberSuffix, exists, renameWithRetry, tempNameFor } = require('../../base/paths');
 const dedupe = require('../../base/dedupe');
 // 「加速换档重试」策略（与批量拼接共用同一套，见 engines/base/ladder.js）
 const ladder = require('../../base/ladder');
@@ -1065,9 +1065,9 @@ async function run(ctx, env = process.env) {
       // ★ 同批量模块：先写临时名，编码成功后再原子改名 ——
       //   正式名必须是「完整可播放产物」的唯一标志，否则编码中途停止会留下正式名半截文件
       //   （用户会误取、且续跑反推序号会把它当成已完成而永久跳过）。见 batch/index.js 同处说明。
-      // 临时名 = 正式名 + `.tmp` 后缀（结尾不再是 .mp4：OS 与肉眼一眼看出是临时/未完成文件，
-      // 不会被误当成品传给客户）；ffmpeg 无法从 `.tmp` 推断容器，故 encArgs 显式 `-f mp4` 强制 mp4 封装。
-      const tmpOut = finalOut + '.tmp';
+      // 临时名 = `<随机>.tmp`（tempNameFor 统一生成）：与正式名完全无关，用户一眼可辨；
+      // ffmpeg 无法从 `.tmp` 推断容器，故 encArgs 显式 `-f mp4` 强制 mp4 封装。
+      const tmpOut = tempNameFor(finalOut);
 
       // ── 拼接 + 水印 + 编码（GPU 硬约束） ──
       const n = videos.length;

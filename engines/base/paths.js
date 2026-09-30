@@ -59,6 +59,19 @@ function exists(p) {
   try { return fs.existsSync(p); } catch (e) { return false; }
 }
 
+/**
+ * 成片临时产物名（唯一生成入口，batch/replica/mask 共用）：`<随机>.tmp`。
+ * · 与正式名**完全无关** —— 不在正式名上改造，文件管理器里一眼可辨「这不是视频」；
+ * · `.tmp` 结尾不入视频扩展名 → 续跑反推 / 产物校验天然不把它当完成（backend 按同一形态直接清理）；
+ * · 无扩展名可推断容器 → ffmpeg 输出必须显式 `-f mp4`；
+ * · 时间戳+随机段保证同目录并发不冲突；改名失败残留由续跑清理直接删除。
+ */
+function tempNameFor(finalOut) {
+  let rnd = '';
+  for (let i = 0; i < 8; i++) rnd += Math.floor(Math.random() * 36).toString(36);
+  return path.join(path.dirname(finalOut), `${Date.now().toString(36)}${rnd}.tmp`);
+}
+
 // 原子改名（带重试）：Windows 上 rename 可能被杀软 / 索引服务对「刚写完的大文件」的瞬时占用挡住 ——
 // 单次失败就会把**已编码成功**的成片判为失败（合成完成后要确保改名能完成，不被其他软件影响）。
 // 成功后返回 null，全部尝试失败返回最后一次错误。批内退避递增，总计约 2.2s，不阻塞正常路径（首次即成功）。
@@ -72,4 +85,4 @@ async function renameWithRetry(src, dst, delays) {
   return lastErr;
 }
 
-module.exports = { stripQuotes, normalize, isVideoExt, getNumberSuffix, getMaskDirName, sortKey, exists, videoExts, renameWithRetry };
+module.exports = { stripQuotes, normalize, isVideoExt, getNumberSuffix, getMaskDirName, sortKey, exists, videoExts, renameWithRetry, tempNameFor };

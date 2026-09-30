@@ -8,7 +8,7 @@ const os = require('node:os');
 const { runFfmpeg } = require('../../base/ffmpeg');
 const { probe, probeDetail } = require('../../base/probe');
 const { acquireLock } = require('../../base/lock');
-const { exists, getMaskDirName } = require('../../base/paths');
+const { exists, getMaskDirName, renameWithRetry, tempNameFor } = require('../../base/paths');
 
 const RAW_EXTS = ['*.mp4', '*.mov', '*.avi', '*.mkv', '*.m4v', '*.webm', '*.flv'];
 const MASK_EXTS = ['*.mov', '*.mp4'];
@@ -258,6 +258,10 @@ async function run(ctx, env = process.env) {
       const subDir = path.dirname(j.outFile);
       if (subDir) { try { fs.mkdirSync(subDir, { recursive: true }); } catch (e) {} }
 
+      // 与 batch/replica 同规则：先写 `<随机>.tmp` 临时名（与正式名完全无关），编码成功后原子改名 ——
+      // 否则编码中途停止会留下正式名半截文件（用户误取 / 跳过检测误判）。见 batch/index.js 同处说明。
+      const tmpOut = tempNameFor(j.outFile);
+
       let targetDur;
       let ffArgs;
       if (cfg.mode === 2) {
@@ -271,7 +275,9 @@ async function run(ctx, env = process.env) {
           '-map', '[outv]', '-map', '0:a?',
           '-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'vbr', '-cq', '25',
           '-c:a', 'aac', '-b:a', '192k', '-shortest',
-          j.outFile];
+          // 临时名无扩展名可推断容器 → 必须显式 -f mp4（与 batch/replica 同）
+          '-f', 'mp4',
+          tmpOut];
       } else {
         const srcForDur = cfg.mode === 1 ? combinedMap.get(j.maskPath) : j.maskPath;
         let vidDur = await durationOf(j.vidPath);
@@ -309,11 +315,27 @@ async function run(ctx, env = process.env) {
           '-map', '[outv]', '-map', maskHasAudio ? '1:a?' : '0:a?',
           '-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'vbr', '-cq', '25',
           '-c:a', 'aac', '-b:a', '192k',
-          j.outFile];
+          // 临时名无扩展名可推断容器 → 必须显式 -f mp4（与 batch/replica 同）
+          '-f', 'mp4',
+          tmpOut];
       }
       logger.clipDuration(targetDur);
       const { code, stderr: maskFfErr } = await makeFfArgs(ffArgs, logger);
       const maskFfTail = logger.ffmpegTail(maskFfErr);
+      if (code === 0) {
+        // 编码成功 → 原子改名到正式名（带重试，对齐 batch/replica：杀软/索引服务会瞬时占用刚写完的大文件）
+        const rnErr = await renameWithRetry(tmpOut, j.outFile);
+        if (rnErr) {
+          // 保留临时产物：改名失败多为瞬时占用，删掉等于白编码一次；残留由续跑清理直接删除
+          logger.error('遮罩-产物改名', `产物改名失败：${j.outName} · ${(rnErr && rnErr.message) || rnErr}`);
+          logger.fail(j.outName, '产物改名失败');
+          hasError = true;
+          continue;
+        }
+      } else {
+        // 编码失败：清掉半截临时产物（临时名与正式名无关，正式目录里不会出现半截成片）
+        try { if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut); } catch (e) {}
+      }
       if (code === 0 && exists(j.outFile)) {
         logger.info(`   ✅ 成片完成：${j.outFile}`);
         if (cfg.logDir) {

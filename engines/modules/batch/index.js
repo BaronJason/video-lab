@@ -9,7 +9,7 @@ const path = require('node:path');
 const { runFfmpeg } = require('../../base/ffmpeg');
 const { probe } = require('../../base/probe');
 const { acquireLock } = require('../../base/lock');
-const { stripQuotes, exists, sortKey, renameWithRetry } = require('../../base/paths');
+const { stripQuotes, exists, sortKey, renameWithRetry, tempNameFor } = require('../../base/paths');
 const { pickCandidate, pickRandom, failKey, triedPathsFor } = require('../../base/retry');
 // 「加速换档重试」策略：本模块是它的原始出处，现已抽到 base/ladder.js 由批量与复刻共用。
 // 这里不再内联任何档位常量 —— 改动档位语义请改 ladder.js，否则两侧行为会再次分叉。
@@ -1256,9 +1256,9 @@ async function run(ctx, env = process.env) {
       //     ① 用户会把它当成品拿走，但根本放不出来；
       //     ② 续跑按产物反推「还缺哪些序号」时会把它算作已完成 → 该序号被永久跳过且不报错。
       //   改为临时名后：**正式名 ⇔ 完整可播放产物**，反推逻辑不必再猜。
-      // 临时名 = 正式名 + `.tmp` 后缀（结尾不再是 .mp4：OS 与肉眼一眼看出是临时/未完成文件，
-      // 不会被误当成品传给客户）；ffmpeg 无法从 `.tmp` 推断容器，故 encArgs 显式 `-f mp4` 强制 mp4 封装。
-      const tmpOut = finalOut + '.tmp';
+      // 临时名 = `<随机>.tmp`（tempNameFor 统一生成）：与正式名完全无关，用户一眼可辨「这不是视频」，
+      // 不会被误当成品传给客户；ffmpeg 无法从 `.tmp` 推断容器，故 encArgs 显式 `-f mp4` 强制 mp4 封装。
+      const tmpOut = tempNameFor(finalOut);
 
       // ── 输入文件存在性 ──
       let allExist = true;

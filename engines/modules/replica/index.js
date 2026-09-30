@@ -819,32 +819,33 @@ async function run(ctx, env = process.env) {
       }
 
       let totalDuration = 0;
+      // 达标时所处的换档轮次（仅模式2）：决定最终验收允许的加速倍率 ——
+      // 验收上限必须跟随达标档位，不能写死 speedThreshold，否则第 2 档及以后才达标的
+      // 成片（换档机制的正常产物）会被误判「超阈值」丢弃，换档等于白换。
+      let okRound = 0;
       const maxDuration = cfg.maxDuration;
       const speedThreshold = cfg.speedLimit;
+      // 档位驱动器：模式1/2 共用（模式1 不换档，恒处第 0 档）。本模块不保留任何档位常量
+      // —— 语义改动只改 ladder.js，避免与批量侧再次分叉。
+      const L = ladder.createRunner({ maxDuration, speedThreshold, maxRetry: cfg.maxRetry, logger });
 
       if (mode === 2) {
-        // ── 模式2：尾部替换 + 换档重试（对齐批量模块的「升档兜底」）──
+        // ── 模式2：尾部替换 + 换档重试（与批量拼接共用 base/ladder.js 的同一套档位语义）──
         // 红线：输出时长恒以 maxDuration 封顶（平台规则）；换档只放宽「允许的组合时长」，
         // 最终由成片加速把超出的部分压回设定值 —— 不是用加速去放宽这里的替换预算。
-        const THR_STEPS = [1, 1.25, 1.5, 1.75, 2];
-        const MAX_SPEED_RATIO = 2.0;
-        const RETRY_PER_STEP = Math.max(1, Math.round(cfg.maxRetry || 45));
-        const ladderRounds = RETRY_PER_STEP * THR_STEPS.length;
-        let ladderAllowed = Math.min(maxDuration * speedThreshold, maxDuration * MAX_SPEED_RATIO);
+        let ladderAllowed = L.allowedOf(0);
         let workVideos = job.videos.slice();
         const triedSubs = new Map();
         const exhaustedIdx = new Set();
         let durOk = false;
         let attempt = 0;
-        for (let round = 0; round < ladderRounds; round++) {
-          const thrStep = Math.min(Math.floor(round / RETRY_PER_STEP), THR_STEPS.length - 1);
-          ladderAllowed = Math.min(maxDuration * speedThreshold * THR_STEPS[thrStep], maxDuration * MAX_SPEED_RATIO);
-          if (round > 0 && round % RETRY_PER_STEP === 0) {
+        for (let round = 0; round < L.rounds; round++) {
+          ladderAllowed = L.allowedOf(round);
+          if (L.isShift(round)) {
             // 换档：清掉上一档的失败记忆与耗尽标记，否则候选一直被挡、换档等于没换
             exhaustedIdx.clear();
             triedSubs.clear();
-            logger.info(`⤴️  加大加速倍率至 ${(speedThreshold * THR_STEPS[thrStep]).toFixed(2)} 倍，继续尝试`
-              + `（输出时长仍以上限 ${maxDuration}s 封顶）`);
+            L.announceShift(round);
           }
           let newVideos = [];
           if (round === 0) {
@@ -872,14 +873,27 @@ async function run(ctx, env = process.env) {
               const d = (await info(workVideos[i])).duration || 0;
               if (d > longestDur) { longestDur = d; longestIdx = i; }
             }
-            if (longestIdx < 0) break;
+            if (longestIdx < 0) {
+              // 全部位置已耗尽：不再空转剩余轮数，提前进入下一档放宽允许时长（与批量同口径）
+              const nx = L.nextStepStart(round);
+              if (nx >= 0) { L.announceStepSkip(); round = nx - 1; continue; }
+              break;
+            }
             const workKey = String(workVideos[longestIdx]);
             const exclude = [];
             for (const k of triedSubs.keys()) if (k.startsWith(workKey + '|')) exclude.push(k.slice(workKey.length + 1));
             const sel = await selectReplacementVideo({
               originalPath: workVideos[longestIdx], exclude, preferShort: true, shorterThan: longestDur, info,
             });
-            if (!sel.path) { exhaustedIdx.add(longestIdx); continue; }
+            if (!sel.path) {
+              exhaustedIdx.add(longestIdx);
+              // 本档可替换位置已全部耗尽 → 提前进档（与批量同口径），避免「每档 N 轮」白跑
+              if (exhaustedIdx.size >= workVideos.length) {
+                const nx = L.nextStepStart(round);
+                if (nx >= 0) { L.announceStepSkip(); round = nx - 1; continue; }
+              }
+              continue;
+            }
             newVideos = workVideos.slice();
             newVideos[longestIdx] = sel.path;
             triedSubs.set(workKey + '|' + sel.path, true);
@@ -887,12 +901,12 @@ async function run(ctx, env = process.env) {
           totalDuration = 0;
           for (const p of newVideos) totalDuration += (await info(p)).duration || 0;
           workVideos = newVideos.slice();
-          if (totalDuration <= ladderAllowed) { durOk = true; break; }
+          if (totalDuration <= ladderAllowed) { durOk = true; okRound = round; break; }
           attempt = round + 1;
         }
         videos = workVideos.slice();
         if (!durOk) {
-          logger.error('日志复刻-时长检查', `总时长 ${round1(totalDuration)} 秒超过允许阈值（${THR_STEPS.length} 档 × ${RETRY_PER_STEP} 轮已用尽），请重选片段或调整日志`);
+          logger.error('日志复刻-时长检查', `总时长 ${round1(totalDuration)} 秒超过允许阈值（${ladder.THR_STEPS.length} 档 × ${L.perStep} 轮已用尽），请重选片段或调整日志`);
           logger.fail(job.name, `总时长超阈值：${round1(totalDuration)} 秒`);
           hasError = true;
           continue;
@@ -965,16 +979,14 @@ async function run(ctx, env = process.env) {
         }
       }
 
-      // ── 时长与加速 ──
-      let needSpeed = false;
-      let speedRatio = 1.0;
-      if (totalDuration > maxDuration && totalDuration <= maxDuration * speedThreshold) {
-        needSpeed = true;
-        speedRatio = totalDuration / maxDuration;
-        if (speedRatio > 2.0) speedRatio = 2.0;
+      // ── 时长与加速（共用底座唯一实现：按达标档位给出倍率与超限判定） ──
+      const fin = L.finalize(totalDuration, okRound);
+      const needSpeed = fin.needSpeed;
+      const speedRatio = fin.speedRatio;
+      if (needSpeed) {
         logger.warn(`总时长 ${totalDuration} 秒超设定，将加速 ${Math.round(speedRatio * 1000) / 1000}x`);
-      } else if (totalDuration > maxDuration * speedThreshold) {
-        logger.error('日志复刻-时长检查', `总时长 ${totalDuration} 秒超过允许阈值，请重选片段或调整日志`);
+      } else if (fin.exceeded) {
+        logger.error('日志复刻-时长检查', `总时长 ${totalDuration} 秒超过允许阈值（达标档位允许加速至 ${L.speedOf(okRound).toFixed(2)}x），请重选片段或调整日志`);
         logger.fail(job.name, `总时长超阈值：${round1(totalDuration)} 秒`);
         hasError = true;
         continue;

@@ -11,6 +11,9 @@ const { probe } = require('../../base/probe');
 const { acquireLock } = require('../../base/lock');
 const { stripQuotes, exists, sortKey, renameWithRetry } = require('../../base/paths');
 const { pickCandidate, pickRandom, failKey, triedPathsFor } = require('../../base/retry');
+// 「加速换档重试」策略：本模块是它的原始出处，现已抽到 base/ladder.js 由批量与复刻共用。
+// 这里不再内联任何档位常量 —— 改动档位语义请改 ladder.js，否则两侧行为会再次分叉。
+const ladder = require('../../base/ladder');
 
 // 缓存作用域位掩码（与 engines/base/cache.js 的 SCOPES 同源，惰性取用：
 // 持久层不可用时不应影响任务执行，故不在模块顶层 require）。
@@ -969,12 +972,16 @@ async function run(ctx, env = process.env) {
     //   仍凑不出组合再逐级加大加速倍率；倍率设硬顶，避免画面加速过狠。
     //   红线：输出时长始终以 maxTotalDuration 封顶（平台规则，超出无法过审）——
     //   加大倍率只放宽「允许的组合时长」，不改输出上限。
-    // 每档重试轮数直接取设置页「重试次数」的设定值：设定值即「实际的改档重试轮数」。
+    // 「每档轮数」直接取设置页「重试次数」的设定值：设定值即「实际的改档重试轮数」。
     // 此前用 Math.max(100, ...) 兜底，≤100 的设定值一律被抬成 100 —— 用户填的数形同虚设。
-    const RETRY_PER_STEP = Math.max(1, Math.round(cfg.maxRetry));
-    const THR_STEPS = [1, 1.25, 1.5, 1.75, 2];                        // 加速倍率梯度（相对用户设置）
-    const MAX_SPEED_RATIO = 2.0;                                      // 加速倍率硬顶（画面可接受范围）
-    const ladderRounds = RETRY_PER_STEP * THR_STEPS.length;
+    // 档位梯度、允许时长、提前进档一律走 L（base/ladder.js），本模块不保留私有副本。
+    const L = ladder.createRunner({
+      maxDuration: cfg.maxTotalDuration,
+      speedThreshold: cfg.speedThreshold,
+      maxRetry: cfg.maxRetry,
+      logger,
+    });
+    const ladderRounds = L.rounds;
 
     for (const outIndex of indexList) {
       logger.info('');
@@ -999,19 +1006,15 @@ async function run(ctx, env = process.env) {
       let retryCount = 0;
 
       // 当前生效的"允许组合时长"（随档位变化；输出上限不变，见上方红线说明）
-      let ladderAllowed = cfg.maxTotalDuration * cfg.speedThreshold;
+      let ladderAllowed = L.allowedOf(0);
       for (retryCount = 0; retryCount < ladderRounds; retryCount++) {
-        thrStep = Math.min(Math.floor(retryCount / RETRY_PER_STEP), THR_STEPS.length - 1);
-        ladderAllowed = Math.min(
-          cfg.maxTotalDuration * cfg.speedThreshold * THR_STEPS[thrStep],
-          cfg.maxTotalDuration * MAX_SPEED_RATIO
-        );
-        if (retryCount > 0 && retryCount % RETRY_PER_STEP === 0) {
+        thrStep = L.stepOf(retryCount);
+        ladderAllowed = L.allowedOf(retryCount);
+        if (L.isShift(retryCount)) {
           // 换档：清掉上一档的失败记忆与耗尽标记，否则候选一直被挡、换档等于没换
           exhaustedSrcs.clear();
           retryExcluded.clear();
-          logger.info(`⤴️  加大加速倍率至 ${(cfg.speedThreshold * THR_STEPS[thrStep]).toFixed(2)} 倍，继续尝试`
-            + `（输出时长仍以上限 ${cfg.maxTotalDuration}s 封顶）`);
+          L.announceShift(retryCount);
         }
         const tempParts = [];
         const tempPlans = [];
@@ -1114,9 +1117,9 @@ async function run(ctx, env = process.env) {
             if (retryTargetSrc < 0) {
               // 本档可替换源已全部用尽：若还有加速档位，提前进入下一档（放宽允许时长）再试，
               // 而不是直接判失败 —— 否则设定值给出的「每档 N 轮」跑不满、升档兜底形同虚设。
-              const nextStart = (thrStep + 1) * RETRY_PER_STEP;
-              if (thrStep < THR_STEPS.length - 1 && nextStart < ladderRounds) {
-                logger.info('⏭️  本档可替换源已用尽 → 提前进入下一档（放宽允许时长）继续尝试');
+              const nextStart = L.nextStepStart(retryCount);
+              if (nextStart >= 0) {
+                L.announceStepSkip();
                 retryCount = nextStart - 1; continue;
               }
               failReason = '所有源的可替换片段均已用尽（首段固定不参与替换）'; break;
@@ -1156,9 +1159,9 @@ async function run(ctx, env = process.env) {
           if (tempParts[pi] && tempParts[pi].duration > maxDur) { maxDur = tempParts[pi].duration; retryTargetSrc = pi; }
         }
         if (retryTargetSrc < 0) {
-          const nextStart2 = (thrStep + 1) * RETRY_PER_STEP;
-          if (thrStep < THR_STEPS.length - 1 && nextStart2 < ladderRounds) {
-            logger.info('⏭️  本档可替换源已用尽 → 提前进入下一档（放宽允许时长）继续尝试');
+          const nextStart2 = L.nextStepStart(retryCount);
+          if (nextStart2 >= 0) {
+            L.announceStepSkip();
             retryCount = nextStart2 - 1; continue;
           }
           failReason = `非首段源的可替换片段均已用尽，仍超出时长上限 ${cfg.maxTotalDuration} 秒`;
@@ -1191,7 +1194,7 @@ async function run(ctx, env = process.env) {
           const hints = [];
           if (deadNames.length) hints.push(`向已耗尽的源补充素材（${deadNames.join('、')}）`);
           hints.push(`放宽时长上限（当前 ${cfg.maxTotalDuration}s）或允许超出比例（当前 ${overPct}%）`);
-          if (thrStep >= THR_STEPS.length - 1) hints.push(`提高重试轮数（每档 ${Math.round(cfg.maxRetry)} 轮，${THR_STEPS.length} 档已全部用尽）`);
+          if (L.isLastStep(retryCount)) hints.push(`提高重试轮数（每档 ${Math.round(cfg.maxRetry)} 轮，${ladder.THR_STEPS.length} 档已全部用尽）`);
           diagText += ` ｜ 诊断：${isOver ? '最优组合仍超出' : '最优组合距上限还差'} ${gap.toFixed(1)}s`
             + `（可凑出 ${totalDuration.toFixed(1)}s / 上限 ${cfg.maxTotalDuration}s，允许超出 ${overPct}%，已重试 ${rounds} 轮）`
             + ` ｜ 源状态：${srcStat}`
@@ -1269,14 +1272,10 @@ async function run(ctx, env = process.env) {
         continue;
       }
 
-      // ── 加速判定 ──
-      let needSpeed = false;
-      let speedRatio = 1.0;
-      if (totalDuration > cfg.maxTotalDuration && totalDuration <= ladderAllowed) {
-        needSpeed = true;
-        speedRatio = totalDuration / cfg.maxTotalDuration;
-        if (speedRatio > 2.0) speedRatio = 2.0;
-      }
+      // ── 加速判定（共用底座唯一实现：按达标档位给出倍率；retryCount 即达标轮次） ──
+      const fin = L.finalize(totalDuration, retryCount);
+      const needSpeed = fin.needSpeed;
+      const speedRatio = fin.speedRatio;
 
       const n = currentParts.length;
       if (n === 0) {

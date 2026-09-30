@@ -460,6 +460,21 @@ class Api {
       this._runLog.logEvent(verb, action, summary, data);
     } catch (e) {}
   }
+  // 引擎原始行 → engine-<date>.log（方案 §五：唯一落盘方 = 主进程）。
+  // stdout 与 stderr 的每一行都落，任务置为终态后也不丢（内存 500 行窗口之外的后续行、
+  // 崩溃前最后输出的唯一去处）；ffmpeg 进度类高频行在 runlog 内按秒采样。
+  _engineLine(tag, line) {
+    try {
+      if (!this._runLog) this._runLog = require(path.join(this.enginesDir, 'base', 'runlog.js'));
+      this._runLog.engineLine(tag, line);
+    } catch (e) {}
+  }
+  _engineMark(tag, what) {
+    try {
+      if (!this._runLog) this._runLog = require(path.join(this.enginesDir, 'base', 'runlog.js'));
+      this._runLog.engineTaskMark(tag, what);
+    } catch (e) {}
+  }
   // 任务 env 的业务字段快照 —— 复现「成片命名 / 输出目录 / 续跑范围」的唯一凭据，
   // 任务记录一旦被清除就再也没有别处留存了。
   _envBrief(env) {
@@ -4586,6 +4601,7 @@ class Api {
         this._lg('RUN', 'task.start',
           '任务开始 · ' + task.type + ' · ' + String(task.title || '').slice(0, 60) + ' · pid=' + child.pid,
           { id: task.id, type: task.type, pid: child.pid, env: this._envBrief(task.env) });
+        this._engineMark(task.id, '任务开始 ' + task.type + ' · ' + String(task.title || '').slice(0, 60));
         this._emitTasks();
         // 任务真正开始：创建任务标记（含 env 快照，供失败重开精确还原）
         this._touchMarker(task);
@@ -4603,6 +4619,9 @@ class Api {
         const pushLine = (buf) => {
           const s = decodeLine(buf).replace(/\r$/, '').trim();
           if (!s) return;
+          // 引擎原始行全量落 engine-<date>.log（stdout/stderr 同路；必须在 status 检查之前 ——
+          // 任务终态后的收尾/崩溃行也要留档，见方案 §五.3「双份并存」）
+          this._engineLine(task.id, s);
           // ★ 引擎诊断通道（过程信息）：不进任务窗口日志（用户视图保持简洁），
           //   只收集到任务对象；任务失败时随 task.diag 落运行日志（保留 30 天）。
           //   这样「结论给用户、过程给排查」各得其所。
@@ -4742,6 +4761,7 @@ class Api {
           if (out.data.length) pushLine(out.data);
           if (err.data.length) pushLine(err.data);
           task.endedAt = Date.now();
+          this._engineMark(task.id, '任务结束 code=' + code);
           // 结算对账（复刻）：脚本内单条失败会 continue 并置 HasError → 退出码 1；
           // 若 exit 0 但存在失败记录（异常场景），也归为 error 并提示续跑，避免误判为全部成功
           // 软暂停：当前成片已完成、引擎被主动终止 —— 状态归为 paused（非停止/失败），
@@ -5689,7 +5709,9 @@ class Api {
       for (const f of names) {
         if (!tempRe.test(f)) continue;
         const p = path.join(dir, f);
-        const tmpPath = /\.tmp\.mp4$/i.test(f) ? p : '';   // 仅引擎临时产物可永久删除
+        // 仅引擎临时产物可永久删除：现行 `<随机>.tmp`（纯字母数字单段，tempNameFor 生成）
+        // + 历史形态 `*.tmp.mp4` / `*.mp4.tmp`；其它 .tmp（含点/横杠等非引擎命名）保守走改名留证
+        const tmpPath = (/(\.tmp\.mp4$|\.mp4\.tmp$)/i.test(f) || /^[0-9a-z]{6,}\.tmp$/i.test(f)) ? p : '';
         try {
           if (tmpPath) {
             if (dryRun) out.temps.push(f + '(演练：将删除)');
@@ -5889,12 +5911,14 @@ class Api {
     try {
       const o = (p && typeof p === 'object') ? p : {};
       const kind = String(o.kind || 'exception');
-      const msg = String(o.msg || o.message || '').slice(0, 300);
-      const stack = String(o.stack || '').slice(0, 1500);
+      // 不截断（方案附录 A / G1 收尾）：stack 全文入 data，超长由 briefData 分片多行承载；
+      // 摘要取首行（formatLine 会折叠换行，此处显式取首行保扫读）
+      const msg = String(o.msg || o.message || '');
+      const stack = String(o.stack || '');
       const where = String(o.where || '').slice(0, 80);
       const href = String(o.href || '').slice(0, 240);
       this._lg('UI', kind === 'rejection' ? 'ui.rejection' : 'ui.exception',
-        (msg || '前端异常（无错误消息）') + (where ? ' @ ' + where : ''),
+        (msg || '前端异常（无错误消息）').split('\n')[0] + (where ? ' @ ' + where : ''),
         { where, href, stack });
       return { ok: true };
     } catch (e) { return { ok: false, error: String(e && e.message || e) }; }

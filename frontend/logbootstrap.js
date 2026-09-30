@@ -1,0 +1,82 @@
+// -*- coding: utf-8 -*-
+// 前端日志引导（方案《日志体系方案.md》§五/§六）：全部窗口共用，替代各页面自带的重复钩子。
+//
+// 职责：
+//   1. 全局兜底三件套：error / unhandledrejection / console.error —— 一律落盘（report_ui_error），
+//      弹窗提示仍保留（经 window.vlToast，由各页面把自己的 toast 挂上来，见各页面顶部一行）。
+//   2. window.logError(where, err, extra)：就地 catch 的统一入口 —— toast + 落盘一次完成。
+//      业务 catch 逐步迁到它；新增代码禁止「只 toast 不落盘」。
+//
+// 约定：本文件必须在 txapi.js 之后、页面脚本之前引入；防重入（上报过程再出错不再递归上报）。
+(function () {
+  'use strict';
+  if (window.__vlLogBoot) return;
+  window.__vlLogBoot = true;
+
+  var _inReport = false;
+
+  /** 落盘（唯一出口）：兼容 txapi / call / api 三种通道形态；失败静默，绝不再抛 */
+  window.vlReportError = function (payload) {
+    if (_inReport) return;
+    _inReport = true;
+    try {
+      var p = payload || {};
+      var api = window.txapi;
+      if (api && api.report_ui_error) { api.report_ui_error(p); }
+      else if (typeof window.call === 'function') { window.call('report_ui_error', p); }
+      else if (window.api && window.api.report_ui_error) { window.api.report_ui_error(p); }
+    } catch (x) { /* 静默 */ }
+    _inReport = false;
+  };
+
+  /** 就地 catch 统一入口：toast（用户可见）+ 落盘（事后可查）一次完成。
+   *  @param {string} where  调用点标识，如 'app.deleteTask'
+   *  @param {Error|string} err
+   *  @param {{toast?:string, ctx?:object}} [extra] toast 自定义文案 / 附加结构化上下文 */
+  window.logError = function (where, err, extra) {
+    var e = (err instanceof Error) ? err : new Error(String(err == null ? '' : err));
+    var extra = extra || {};
+    try { if (typeof window.vlToast === 'function') window.vlToast(extra.toast || ('操作失败：' + e.message), true); } catch (x) {}
+    window.vlReportError({
+      kind: 'catch', msg: e.message, stack: e.stack || '',
+      where: String(where || ''), href: String(location.href || ''),
+      ctx: extra.ctx || null,
+    });
+  };
+
+  // ── 全局兜底三件套 ──
+  window.addEventListener('error', function (e) {
+    try { if (typeof window.vlToast === 'function') window.vlToast('界面异常：' + ((e && e.message) || '未知错误'), true); } catch (x) {}
+    window.vlReportError({
+      kind: 'exception', msg: String((e && e.message) || ''),
+      stack: String((e && e.error && e.error.stack) || ''),
+      where: 'window.error', href: String(location.href || ''),
+    });
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e && e.reason;
+    try { if (typeof window.vlToast === 'function') window.vlToast('操作失败：' + ((r && r.message) || r || '未知错误'), true); } catch (x) {}
+    window.vlReportError({
+      kind: 'rejection', msg: String((r && r.message) || r || ''),
+      stack: String((r && r.stack) || ''),
+      where: 'window.rejection', href: String(location.href || ''),
+    });
+  });
+  // console.error 也上报（很多库/分支只 console.error，界面毫无提示）—— 转发不吞：原输出保留
+  var _origConsoleError = console.error;
+  console.error = function () {
+    try {
+      var args = Array.prototype.slice.call(arguments);
+      var msg = args.map(function (a) {
+        try { return (a && a.stack) ? String(a.stack) : (typeof a === 'object' ? JSON.stringify(a) : String(a)); }
+        catch (x) { return String(a); }
+      }).join(' ');
+      window.vlReportError({
+        kind: 'console', msg: msg.slice(0, 4000),
+        stack: (args[0] && args[0].stack) ? String(args[0].stack) : '',
+        where: 'console.error', href: String(location.href || ''),
+      });
+    } catch (x) { /* 静默 */ }
+    return _origConsoleError.apply(console, arguments);
+  };
+})();

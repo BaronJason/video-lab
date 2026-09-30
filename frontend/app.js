@@ -3545,27 +3545,9 @@
     }
   }
 
-  // 全局错误兜底：未捕获异常 / 未处理的 Promise 拒绝一律弹提示 ——
-  // 教训（2026-09-23）：复刻弹窗里误用未声明的 `api` 导致 ReferenceError，
-  // 被就地 catch 静默吞掉，表现为「点了没反应」，排查代价很大。此处保证任何前端异常都可见。
-  window.addEventListener('error', function (e) {
-    try { toast('界面异常：' + ((e && e.message) || '未知错误'), true); } catch (x) {}
-    // 同时上报后端 → 落进 error-YYYY-MM-DD.log（此前只有 toast，事后无从回溯）
-    try {
-      var _rp = { kind: 'exception', msg: String((e && e.message) || ''), stack: String((e && e.error && e.error.stack) || '').slice(0, 1200), where: 'app.js', href: String(location.href || '') };
-      if (typeof call === 'function') call('report_ui_error', _rp);
-      else if (typeof api !== 'undefined' && api && api.report_ui_error) api.report_ui_error(_rp);
-    } catch (x2) {}
-  });
-  window.addEventListener('unhandledrejection', function (e) {
-    var r = e && e.reason;
-    try { toast('操作失败：' + ((r && r.message) || r || '未知错误'), true); } catch (x) {}
-    try {
-      var _rr = { kind: 'rejection', msg: String((r && r.message) || r || ''), stack: String((r && r.stack) || '').slice(0, 1200), where: 'app.js', href: String(location.href || '') };
-      if (typeof call === 'function') call('report_ui_error', _rr);
-      else if (typeof api !== 'undefined' && api && api.report_ui_error) api.report_ui_error(_rr);
-    } catch (x3) {}
-  });
+  // 全局兜底（error / unhandledrejection / console.error）统一由 log-bootstrap.js 注入（四窗口共用）；
+  // 这里只把本页 toast 挂上去，让兜底的弹窗行为保持不变。就地 catch 请用 window.logError(where, err)。
+  window.vlToast = toast;
 
   function init() {
     // 任务列表「定位」监听：异常隔离，不影响主界面初始化

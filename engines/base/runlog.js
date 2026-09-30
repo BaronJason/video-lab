@@ -42,6 +42,7 @@ function stampOf(d) {
 }
 function fileOf(day) { return path.join(logDir, 'app-' + day + '.log'); }
 function errFileOf(day) { return path.join(logDir, 'error-' + day + '.log'); }
+function engineFileOf(day) { return path.join(logDir, 'engine-' + day + '.log'); }
 
 /** 敏感值脱敏：令牌 / 口令一律不入日志。两道正则 ——
  *  ① 带引号的键（JSON 形态）："http_token":"abc"  → "http_token":"***"
@@ -193,6 +194,52 @@ function ui(action, msg, data) {
   logEvent('UI', String(action || 'ui.exception'), String(msg || '').slice(0, 300), data);
 }
 
+// ── 引擎原始行落盘（engine-<date>.log，方案 §五：唯一落盘方 = 主进程，引擎不写文件）──
+// 引擎 stdout/stderr 的**每一行**都经主进程转到这里：任务终态后仍会增长（内存 500 行窗口之外
+// 的后续行、崩溃前的最后输出，唯一去处）。多任务并发写同一文件会交错 → 每行带 [taskId] 前缀；
+// ffmpeg 进度等高频行按 ≤1 条/秒采样（§4.7），任务开始/结束写分隔行便于人读分段。
+let _engineDay = '';
+let _engineFd = null;
+let _engineLastTs = 0;        // 高频行采样：同秒内的进度行只落首条
+const ENGINE_PROGRESS_RE = /^\s*(frame\s*=|fps\s*=|q\s*=|size\s*=|time\s*=|bitrate\s*=|dup\s*=|drop\s*=|speed\s*=|elapsed\s*=)/;
+
+function engineOpen() {
+  const day = dayOf(new Date());
+  if (_engineFd !== null && day === _engineDay) return _engineFd;
+  try { if (_engineFd !== null) fs.closeSync(_engineFd); } catch (e) {}
+  try {
+    _engineFd = fs.openSync(engineFileOf(day), 'a');
+    _engineDay = day;
+  } catch (e) { _engineFd = null; }
+  return _engineFd;
+}
+
+function engineWrite(tag, line) {
+  try {
+    const fd = engineOpen();
+    if (fd === null) return;
+    fs.writeSync(fd, stampOf(new Date()) + '  [' + tag + ']  ' + line + '\n');
+  } catch (e) { /* 写日志永不影响主流程 */ }
+}
+
+/** 引擎原始行落盘（stdout 与 stderr 都走这里）。tag = taskId（跨进程串联的最小线索）。
+ *  高频 ffmpeg 进度行按秒采样；其余行全量。 */
+function engineLine(tag, line) {
+  const s = String(line == null ? '' : line).replace(/\r$/, '');
+  if (!s) return;
+  if (ENGINE_PROGRESS_RE.test(s)) {
+    const now = Date.now();
+    if (now - _engineLastTs < 1000) return;
+    _engineLastTs = now;
+  }
+  engineWrite(String(tag || 'engine'), s);
+}
+
+/** 任务边界标记（人读分段；任务开始/结束各一行，不受采样影响） */
+function engineTaskMark(tag, what) {
+  engineWrite(String(tag || 'engine'), '════ ' + String(what || '') + ' ════');
+}
+
 /** 文件大小可读化：供摘要里写「共 264.1 MB」 */
 function humanSize(bytes) {
   const n = Number(bytes) || 0;
@@ -230,10 +277,11 @@ function pruneOld(keepDays = KEEP_DAYS, keepErrorDays = ERROR_KEEP_DAYS) {
     for (const f of fs.readdirSync(logDir)) {
       const mA = /^app-(\d{4})-(\d{2})-(\d{2})\.log$/.exec(f);
       const mE = /^error-(\d{4})-(\d{2})-(\d{2})\.log$/.exec(f);
-      const m = mA || mE;
+      const mG = /^engine-(\d{4})-(\d{2})-(\d{2})\.log$/.exec(f);
+      const m = mA || mE || mG;
       if (!m) continue;
       const t = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
-      const cutoff = mA ? cutoffApp : cutoffErr;
+      const cutoff = mG ? cutoffApp : (mA ? cutoffApp : cutoffErr);
       if (t < cutoff) { try { fs.unlinkSync(path.join(logDir, f)); removed++; } catch (e) {} }
     }
     return { removed };
@@ -316,4 +364,5 @@ function readDay(day, opts) {
 }
 
 module.exports = { init, getDir, listDays, listErrorDays, readDay, logEvent, logEventSync, sys, run, del, add, mod, cfg, ipc, err, ui, humanSize, describeFiles,
+  engineLine, engineTaskMark, engineFileOf,
   pruneOld, close, scrub, briefArgs, chEvent, isSilentChannel, isErrorish, KEEP_DAYS, ERROR_KEEP_DAYS };

@@ -4188,7 +4188,10 @@ class Api {
     return '';
   }
 
-  // 校验某目录确属该任务：目录内存在任务产出清单（标记/日志解析）中的文件
+  // 校验某目录确属该任务：目录内存在任务产出清单（标记/日志解析）中的文件。
+  // ⚠ 只适用于**有清单**的任务（复刻/遮罩：完成行带路径）。批量任务的清单恒为空
+  // （batch 完成行不携带路径）→ 传本函数必得 false；批量的目录归属请用「引擎记录的
+  // batchOutDir + 运行时间窗」判定（见 clearDoneTasks 的 batch 分支）。
   _dirOwnsVideos(dir, videos) {
     if (!dir || !Array.isArray(videos) || !videos.length) return false;
     const target = path.resolve(dir);
@@ -4295,23 +4298,59 @@ class Api {
         catch (e) { if (fs.existsSync(p)) throw e; } // 原路径已不存在视为成功
       };
       for (const { t, marker } of marked) {
-        // 该任务精确产出的成片清单：优先任务标记（脚本逐条记录 ✅ 成片完成），缺失时回退任务日志行解析
+        // 该任务精确产出的成片清单：优先任务标记（复刻/遮罩逐条记录 `✅ 成片完成：<路径>`），
+        // 缺失时回退任务日志行解析。⚠ **batch 的完成行不带路径**（只报时长/加速倍率，见
+        // engines/base/logger.js 的 clipDoneBatch）→ 批量任务的清单恒为空，必须走下方时间窗兜底。
         const exactVideos = (marker && Array.isArray(marker.videos) ? marker.videos.slice() : [])
           .concat(this.collectDoneFromLog(t));
+        const titleBrief = String(t.title || '').slice(0, 40);
         if (t.type === 'batch') {
-          // 候选目录：日志中脚本实际创建的目录（权威）→ 推算目录。
-          // 两者都必须通过「目录内产出确属本任务」校验：同分钟同配置名的任务共享同一成片目录，
-          // 只凭"日志里有创建记录"就整目录删除，会误删重跑任务的成片 —— 找不到就是找不到，不猜。
-          const cand = this._taskOutDirFromLog(t) || (t.outDir ? path.resolve(t.outDir) : '');
-          if (!cand || !this._dirOwnsVideos(cand, exactVideos)) continue;
+          // 目录归属（**只用权威来源，不做推算**）：任务标记记录的真实输出目录（引擎
+          // 「✅ 创建输出目录：」行写入的 batchOutDir）→ 任务日志中的同一行 → 任务对象上的 outDir。
+          // ⚠ 绝不可用「按提交时间推算目录名」（_batchTaskOutDetail）作为删除依据：
+          //   同分钟同配置的多个任务会推出同一个目录，那是重跑/续跑的常态，据此整删会误伤他人产物。
+          const cand = (marker && marker.batchOutDir ? path.resolve(String(marker.batchOutDir)) : '')
+            || this._taskOutDirFromLog(t)
+            || (t.outDir ? path.resolve(t.outDir) : '');
+          if (!cand) {
+            errors.push(`未找到「${titleBrief}」的输出目录记录，未删除任何产物`);
+            continue;
+          }
           const abs = cand;
-          try { if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) continue; } catch (e2) { continue; }
-          // 目录内 mp4 全部属于本任务 → 独占，可整目录删除；否则说明与同分钟同名任务共享目录，
+          let isDir = false;
+          try { isDir = fs.existsSync(abs) && fs.statSync(abs).isDirectory(); } catch (e2) { isDir = false; }
+          // 目录不存在 = 已无产物（先前已清理 / 用户手动删除）→ 无需报错，视为已达成
+          if (!isDir) continue;
+          // 目录内 mp4 全部属于本任务 → 独占，可整目录删除；否则说明与重跑/续跑任务共享目录，
           // 降级为「只删本任务的成片」，避免波及他人产物
           let mp4s = [];
           try { mp4s = fs.readdirSync(abs).filter((f) => path.extname(f).toLowerCase() === '.mp4'); }
           catch (e) { errors.push('读取成片目录失败：' + abs); continue; }
           const owned = new Set(exactVideos.filter(Boolean).map((p) => path.resolve(p)));
+          // 清单缺失（batch 常态）→ 以**任务运行时间窗**界定本任务产物：
+          // 引擎先写临时名、编码成功才原子改名，故正式名成片的 mtime 必然落在 [startedAt, endedAt] 内；
+          // 容差仅取 ±2 秒（时钟/边界抖动），**不可放大** —— 容差一大，相邻同目录任务的时间窗就会重叠，
+          // 「删 17:50 不误删后续任务」的保证随之失效。
+          // 同目录串行执行由引擎互斥锁保证：任一时刻只有一个任务在产出，故时间窗天然互斥。
+          const winFrom = Number(t.startedAt || 0);
+          const winTo = Number(t.endedAt || 0);
+          if (owned.size === 0 && mp4s.length && winFrom > 0 && winTo > 0) {
+            for (const f of mp4s) {
+              const fp = path.join(abs, f);
+              try {
+                const m = fs.statSync(fp).mtimeMs;
+                if (m >= winFrom - 2000 && m <= winTo + 2000) owned.add(path.resolve(fp));
+              } catch (e) { /* 单文件 stat 失败不影响其余判定 */ }
+            }
+          }
+          // 归属确认不了就不动 —— 但必须把原因说清楚（旧实现静默 continue，用户以为软件没反应）
+          if (owned.size === 0 && mp4s.length) {
+            const why = (winFrom > 0 && winTo > 0)
+              ? `目录内 ${mp4s.length} 个成片均不在该任务运行时间窗内`
+              : '该任务缺少运行时间记录';
+            errors.push(`未能确认「${titleBrief}」的产物归属（${why}），已保留未删除`);
+            continue;
+          }
           const exclusive = mp4s.length > 0 && mp4s.every((f) => owned.has(path.resolve(path.join(abs, f))));
           const trashOwned = async () => {
             for (const f of mp4s) {

@@ -350,76 +350,68 @@ function selectVideo({ srcPath, track, folderData, excludedPaths, excludedSubGro
     return null;
   }
 
-  // ── 多子组分支 ──
-  let globalUsed = folderData.subUsedInRound;
-  const globalUsedSet = new Set(globalUsed);
-  const zeroGroups = [];
-  for (const group of folderData.subGroupList) {
-    if (globalUsedSet.has(group)) continue;
-    const files = folderData.subGroups.get(group) || [];
-    let hasZeroLeft = false;
-    for (const f of files) {
-      if (!roundUsedSet.has(f.fullName) && (track.usedCount.get(f.fullName) || 0) === 0) { hasZeroLeft = true; break; }
-    }
-    if (hasZeroLeft) zeroGroups.push(group);
-  }
-
-  let candidateGroups;
-  if (zeroGroups.length > 0) candidateGroups = zeroGroups;
-  else candidateGroups = folderData.subGroupList.filter((g) => !globalUsedSet.has(g));
-
-  if (candidateGroups.length === 0) {
-    plan.newSubRound = folderData.subRound + 1;
-    plan.newSubUsedInRound = [];
-    candidateGroups = [...folderData.subGroupList];
-    globalUsed = [];
-  } else {
-    plan.newSubRound = folderData.subRound;
-    plan.newSubUsedInRound = [...globalUsed];
-  }
-
+  // ── 多子组分支（组维度轮询）──
+  // 硬约束（用户定案 2026-10-04）：同一成片内，该源的不同片段必须来自**不同子组**。
+  // 降重由两条保证：① 组间按组使用计数均衡（subUsageCount 最少优先）
+  //                ② 组内按片段使用计数最少优先（selectVideoCandidate 内建）
+  // 旧实现以「组内存在全局从未用过的片段」作组间门槛，导致小组用一次即出局、
+  // 负载全压到最后一个大组（2026-10-04 实报「无可用片段」），已废除。
   const excludedSubSet = new Set(excludedSubGroups || []);
-  candidateGroups = candidateGroups.filter((g) => !excludedSubSet.has(g));
-  if (candidateGroups.length === 0) {
-    candidateGroups = folderData.subGroupList.filter((g) => !globalUsedSet.has(g));
-    if (candidateGroups.length === 0) {
-      plan.newSubRound = folderData.subRound + 1;
-      plan.newSubUsedInRound = [];
-      candidateGroups = [...folderData.subGroupList];
-    }
-  }
+  const allGroups = [...folderData.subGroupList];
 
-  const remaining = [...candidateGroups];
-  while (remaining.length > 0) {
-    // 取子组使用次数最少的一批，随机选一个子组
-    let minCount = Infinity;
-    for (const g of remaining) {
-      const c = folderData.subUsageCount.get(g) || 0;
-      if (c < minCount) minCount = c;
+  const pickFrom = (groups, useRoundUsed) => {
+    const remaining = [...groups];
+    while (remaining.length > 0) {
+      // 取子组使用次数最少的一批，随机选一个子组
+      let minCount = Infinity;
+      for (const g of remaining) {
+        const c = folderData.subUsageCount.get(g) || 0;
+        if (c < minCount) minCount = c;
+      }
+      const bestGroups = remaining.filter((g) => (folderData.subUsageCount.get(g) || 0) === minCount);
+      const selectedGroup = pickRandom(bestGroups, rng);
+      const files = folderData.subGroups.get(selectedGroup) || [];
+      const video = selectVideoCandidate({
+        ...common,
+        fileList: files,
+        roundUsed: useRoundUsed ? roundUsedSet : new Set(),
+      });
+      if (video) {
+        plan.selectedGroup = selectedGroup;
+        plan.incrementSubUsage = selectedGroup;
+        plan.newSubUsedInRound.push(selectedGroup);
+        return video;
+      }
+      const idx = remaining.indexOf(selectedGroup);
+      if (idx >= 0) remaining.splice(idx, 1);
     }
-    const bestGroups = remaining.filter((g) => (folderData.subUsageCount.get(g) || 0) === minCount);
-    const selectedGroup = pickRandom(bestGroups, rng);
-    const files = folderData.subGroups.get(selectedGroup) || [];
-    const video = selectVideoCandidate({ ...common, fileList: files });
-    if (video) {
-      plan.selectedGroup = selectedGroup;
-      plan.incrementSubUsage = selectedGroup;
-      plan.newSubUsedInRound.push(selectedGroup);
-      return { video, plan };
-    }
-    const idx = remaining.indexOf(selectedGroup);
-    if (idx >= 0) remaining.splice(idx, 1);
-  }
+    return null;
+  };
 
-  // 所有子组都没有候选：仅当本轮已用满全部素材时才推进轮次重选
-  if (track.roundUsed.length === folderData.allVideos.length) {
-    plan.newRound = track.round + 1;
-    plan.newRoundUsed = [];
+  // 组池：本轮（subRound）未选过的组优先 —— 轮询本体；全选过 → 推进 subRound 组维度重开一轮
+  let pool = allGroups.filter((g) => !folderData.subUsedInRound.includes(g));
+  if (pool.length === 0) {
     plan.newSubRound = folderData.subRound + 1;
     plan.newSubUsedInRound = [];
-    const video = selectVideoCandidate({ ...common, fileList: folderData.allVideos, roundUsed: new Set() });
-    if (video) return { video, plan };
+    pool = [...allGroups];
   }
+  pool = pool.filter((g) => !excludedSubSet.has(g));   // 硬约束：本片内组不重复
+  let video = pool.length > 0 ? pickFrom(pool, true) : null;
+  if (video) return { video, plan };
+
+  // 组池内无候选（本轮片段用满/被排除）→ 推进 subRound 让全部组重新参与，再按硬约束过滤重试
+  plan.newSubRound = folderData.subRound + 1;
+  plan.newSubUsedInRound = [];
+  const pool2 = allGroups.filter((g) => !excludedSubSet.has(g));
+  video = pool2.length > 0 ? pickFrom(pool2, true) : null;
+  if (video) return { video, plan };
+
+  // 仍无候选 → 忽略「本轮已用」跨轮复用（仍优先 usedCount 最少的片段；同片内文件不重复的约束不变）
+  plan.newRound = track.round + 1;
+  plan.newRoundUsed = [];
+  video = pool2.length > 0 ? pickFrom(pool2, false) : null;
+  if (video) return { video, plan };
+
   return null;
 }
 
@@ -1005,6 +997,19 @@ async function run(ctx, env = process.env) {
       const exhaustedSrcs = new Set();
       let retryCount = 0;
 
+      // 某源位置的「真实剩余候选数」（本轮未用 + 未被本片排除 + 未被跨轮失败记忆排除）。
+      // 用于两处：① 失败分支判定「素材真用尽」还是「组/排除状态受限」；② 诊断报告源状态。
+      const countRemain = (i, exMap) => {
+        const p = String(sourceRequests[i]);
+        const fd = folderVideos.get(p);
+        if (!fd) return 0;
+        const tr = usageTracker.get(p);
+        const used = new Set(tr ? tr.roundUsed : []);
+        const ex = new Set(exMap && exMap.get(p) ? exMap.get(p) : []);
+        if (i > 0) for (const k of triedPathsFor(retryExcluded, i)) ex.add(k);
+        return fd.allVideos.filter((f) => !used.has(f.fullName) && !ex.has(f.fullName)).length;
+      };
+
       // 当前生效的"允许组合时长"（随档位变化；输出上限不变，见上方红线说明）
       let ladderAllowed = L.allowedOf(0);
       for (retryCount = 0; retryCount < ladderRounds; retryCount++) {
@@ -1100,9 +1105,15 @@ async function run(ctx, env = process.env) {
 
         if (!allValid) {
           if (retryCount > 0) {
-            // 无沿用基础 → 该源确实无素材，替换其它源也补不齐，直接失败
+            // 无沿用基础 → 该源选不出片段，替换其它源也补不齐，直接失败。
+            // 文案按真实剩余候选区分成因（2026-10-04：旧文案把「组约束受限」也说成「无合规视频」，
+            // 与素材实况（94 个视频）矛盾，误导排查）。
             if (!staleParts.has(failSrcIdx)) {
-              failReason = `源「${path.basename(sourceRequests[failSrcIdx])}」无可用片段（无合规视频或候选已被排除）`;
+              const nm = path.basename(sourceRequests[failSrcIdx]);
+              const left = countRemain(failSrcIdx, sourceExcludedPaths);
+              failReason = left > 0
+                ? `源「${nm}」无可用片段（本成片内子组约束无法满足：该路径出现次数多于可用子组数）`
+                : `源「${nm}」无可用片段（素材已全部用尽）`;
               break;
             }
             exhaustedSrcs.add(failSrcIdx);
@@ -1184,15 +1195,21 @@ async function run(ctx, env = process.env) {
           const overPct = Math.round((cfg.speedThreshold - 1) * 100);
           const isOver = totalDuration > cfg.maxTotalDuration;
           const gap = isOver ? (totalDuration - cfg.maxTotalDuration) : (cfg.maxTotalDuration - totalDuration);
+          // 源状态按「真实剩余候选数」报告：旧的「仍可用/已耗尽」只反映 exhaustedSrcs 标记，
+          // 候选被排除集挡光时仍会显示「仍可用」，与「无可用片段」的报错自相矛盾（2026-10-04 实报）。
+          const remainOf = (i) => countRemain(i, sourceExcludedPaths);
           const srcStat = sourceRequests.map((p, i) => {
             const nm = path.basename(String(p));
-            return i === 0 ? `首段「${nm}」固定不替换` : `${exhaustedSrcs.has(i) ? '已耗尽' : '仍可用'}「${nm}」`;
+            if (i === 0) return `首段「${nm}」固定不替换`;
+            const left = remainOf(i);
+            const tag = left > 0 ? `可用候选还剩 ${left} 个` : (exhaustedSrcs.has(i) ? '已耗尽' : '已无可用候选');
+            return `${tag}「${nm}」`;
           }).join('；');
           const deadNames = sourceRequests.map((p, i) => i)
-            .filter((i) => i > 0 && exhaustedSrcs.has(i))
+            .filter((i) => i > 0 && remainOf(i) === 0)
             .map((i) => path.basename(String(sourceRequests[i])));
           const hints = [];
-          if (deadNames.length) hints.push(`向已耗尽的源补充素材（${deadNames.join('、')}）`);
+          if (deadNames.length) hints.push(`向已无可用候选的源补充素材（${deadNames.join('、')}）`);
           hints.push(`放宽时长上限（当前 ${cfg.maxTotalDuration}s）或允许超出比例（当前 ${overPct}%）`);
           if (L.isLastStep(retryCount)) hints.push(`提高重试轮数（每档 ${Math.round(cfg.maxRetry)} 轮，${ladder.THR_STEPS.length} 档已全部用尽）`);
           diagText += ` ｜ 诊断：${isOver ? '最优组合仍超出' : '最优组合距上限还差'} ${gap.toFixed(1)}s`

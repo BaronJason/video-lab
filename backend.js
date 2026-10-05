@@ -455,25 +455,22 @@ class Api {
 
   // 运行日志出口（懒加载；写日志永不影响主流程）
   _lg(verb, action, summary, data) {
-    try {
-      if (!this._runLog) this._runLog = require(path.join(this.enginesDir, 'base', 'runlog.js'));
-      this._runLog.logEvent(verb, action, summary, data);
-    } catch (e) {}
+    try { this._ensureRunLog().logEvent(verb, action, summary, data); } catch (e) {}
+  }
+  // runlog 单例（懒加载）。⚠ 这里**不读设置库**：本方法会在启动关键路径上被调用，
+  // 而读 settings.db 需要同步开库（启动期硬约束禁止）→ 级别恢复另走空闲队列（见 _restoreLogLevel）。
+  _ensureRunLog() {
+    if (!this._runLog) this._runLog = require(path.join(this.enginesDir, 'base', 'runlog.js'));
+    return this._runLog;
   }
   // 引擎原始行 → engine-<date>.log（方案 §五：唯一落盘方 = 主进程）。
   // stdout 与 stderr 的每一行都落，任务置为终态后也不丢（内存 500 行窗口之外的后续行、
   // 崩溃前最后输出的唯一去处）；ffmpeg 进度类高频行在 runlog 内按秒采样。
   _engineLine(tag, line) {
-    try {
-      if (!this._runLog) this._runLog = require(path.join(this.enginesDir, 'base', 'runlog.js'));
-      this._runLog.engineLine(tag, line);
-    } catch (e) {}
+    try { this._ensureRunLog().engineLine(tag, line); } catch (e) {}
   }
   _engineMark(tag, what) {
-    try {
-      if (!this._runLog) this._runLog = require(path.join(this.enginesDir, 'base', 'runlog.js'));
-      this._runLog.engineTaskMark(tag, what);
-    } catch (e) {}
+    try { this._ensureRunLog().engineTaskMark(tag, what); } catch (e) {}
   }
   // 任务 env 的业务字段快照 —— 复现「成片命名 / 输出目录 / 续跑范围」的唯一凭据，
   // 任务记录一旦被清除就再也没有别处留存了。
@@ -490,14 +487,12 @@ class Api {
   // 被删产物的可复盘清单（路径 + 大小 + 修改时间）—— 必须在删除之前调用
   _describeForLog(paths) {
     try {
-      if (!this._runLog) this._runLog = require(path.join(this.enginesDir, 'base', 'runlog.js'));
-      return this._runLog.describeFiles(paths);
+      return this._ensureRunLog().describeFiles(paths);
     } catch (e) { return { files: [], count: 0, bytes: 0, truncated: false }; }
   }
   _humanSize(n) {
     try {
-      if (!this._runLog) this._runLog = require(path.join(this.enginesDir, 'base', 'runlog.js'));
-      return this._runLog.humanSize(n);
+      return this._ensureRunLog().humanSize(n);
     } catch (e) { return String(n) + ' B'; }
   }
 
@@ -3589,6 +3584,9 @@ class Api {
     try { this._prewarmHasOutputAsync(); } catch (e) {}
     // 维护性任务统一入队（启动期不做任何同步扫盘）：过期锁清理等
     try { this._idleEnqueue('cleanlocks:' + this.root, () => this._cleanupStaleLocks()); } catch (e) {}
+    // 日志级别持久化恢复（日志体系方案 §三.4 遗留项：级别原为会话级，重启回 info）：
+    // 入空闲队列而不是启动路径 —— 读它需要同步打开 settings.db，那正是启动期硬约束禁止的。
+    try { this._idleEnqueue('loglevel:' + this.root, () => this._restoreLogLevel()); } catch (e) {}
   }
   // 启动后异步预热「成片是否仍在磁盘」判定所需的目录/文件元数据（restoreTasks 的延后部分）。
   // 为什么需要：_taskHasOutput 是**同步**判定（被 snapshotTasks 逐任务调用），而历史任务的成片
@@ -5969,25 +5967,38 @@ class Api {
   /** 运行日志读取（排查视图）：app/error/engine 三类 + lvl/mod 过滤（透传 runlog.readLog） */
   readLog(o) {
     try {
-      if (!this._runLog) this._runLog = require(path.join(this.enginesDir, 'base', 'runlog.js'));
-      return this._runLog.readLog(o || {});
+      return this._ensureRunLog().readLog(o || {});
     } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
   }
   getLogLevel() {
     try {
-      if (!this._runLog) this._runLog = require(path.join(this.enginesDir, 'base', 'runlog.js'));
-      return { ok: true, level: this._runLog.getLevel() };
+      const log = this._ensureRunLog();
+      return { ok: true, level: log.getLevel(), persisted: this.getAppSetting('log_level', '') || '' };
     } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
   }
-  /** 级别运行时切换（§三.4：排查临时切 debug；会话级，重启回 info —— 安全默认） */
+  /** 级别运行时切换（§三.4：排查临时切 debug）。**同时持久化**（settings.db scope='app'），
+   *  重启后由 _restoreLogLevel 恢复 —— 此前仅会话级，重启回 info，排查一次就要重切一次。 */
   setLogLevel(lvl) {
     try {
-      if (!this._runLog) this._runLog = require(path.join(this.enginesDir, 'base', 'runlog.js'));
-      this._runLog.setLevel(String(lvl));
-      const level = this._runLog.getLevel();
+      const log = this._ensureRunLog();
+      log.setLevel(String(lvl));
+      const level = log.getLevel();
+      try { if (this._useSettings() && this._settingsStore) this._settingsStore.set('app', 'log_level', level); } catch (e) {}
       this._lg('CFG', 'log.level', '日志级别切换 · ' + level, { level });
       return { ok: true, level };
     } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  }
+  /** 启动后台恢复持久化级别（由空闲队列调用，不在启动关键路径上）：
+   *  设置库里存过就恢复，让「切到 debug 排查」在重启后依然生效。 */
+  _restoreLogLevel() {
+    try {
+      const saved = String(this.getAppSetting('log_level', '') || '').trim();
+      if (!saved) return;
+      const log = this._ensureRunLog();
+      if (log.getLevel() === saved) return;
+      log.setLevel(saved);
+      this._lg('CFG', 'log.level', '日志级别已按持久化设置恢复 · ' + log.getLevel(), { level: log.getLevel() });
+    } catch (e) {}
   }
   /** 一键诊断包（§七）：该任务相关的 app/error/engine 行 + env 快照 + 任务标记 + 产物清单 → 单个 txt。
    *  包内含本机路径 → 文件头附提示（外发前自行打码）。 */
@@ -6004,11 +6015,10 @@ class Api {
       }
       if (!t) return { ok: false, error: '任务不存在' };
       id = t.id;
-      if (!this._runLog) this._runLog = require(path.join(this.enginesDir, 'base', 'runlog.js'));
       const opts = { grep: id, tail: 20000, maxBytes: 16 * 1024 * 1024 };
-      const app = this._runLog.readLog(Object.assign({ file: 'app' }, opts));
-      const error = this._runLog.readLog(Object.assign({ file: 'error' }, opts));
-      const engine = this._runLog.readLog(Object.assign({ file: 'engine' }, opts));
+      const app = this._ensureRunLog().readLog(Object.assign({ file: 'app' }, opts));
+      const error = this._ensureRunLog().readLog(Object.assign({ file: 'error' }, opts));
+      const engine = this._ensureRunLog().readLog(Object.assign({ file: 'engine' }, opts));
       const marker = this._loadMarker(t);
       const outs = Array.isArray(marker && marker.videos) ? marker.videos : [];
       const parts = [];
@@ -6018,10 +6028,10 @@ class Api {
       parts.push('⚠ 包内含本机路径与任务信息，请勿随意分享；外发前可自行将路径打码。');
       parts.push('');
       parts.push('════ 任务 env 快照（已脱敏）════');
-      parts.push(this._runLog.scrub(JSON.stringify(this._envBrief(t.env), null, 1)));
+      parts.push(this._ensureRunLog().scrub(JSON.stringify(this._envBrief(t.env), null, 1)));
       parts.push('');
       parts.push('════ 任务标记（产物归属）════');
-      parts.push(marker ? this._runLog.scrub(JSON.stringify(marker, null, 1).slice(0, 20000)) : '(无)');
+      parts.push(marker ? this._ensureRunLog().scrub(JSON.stringify(marker, null, 1).slice(0, 20000)) : '(无)');
       parts.push('');
       parts.push('════ 产物清单（' + outs.length + ' 个文件）════');
       parts.push(JSON.stringify(this._describeForLog(outs), null, 1));
@@ -6031,7 +6041,7 @@ class Api {
         parts.push(r.lines && r.lines.length ? r.lines.join('\n') : '(无匹配行)');
         parts.push('');
       }
-      const dir = path.join(this._runLog.getDir(), '..', 'diag');
+      const dir = path.join(this._ensureRunLog().getDir(), '..', 'diag');
       try { fs.mkdirSync(dir, { recursive: true }); } catch (e2) {}
       const file = path.join(dir, 'diag-' + String(id).replace(/[^\w-]/g, '') + '-' + Date.now().toString(36) + '.txt');
       fs.writeFileSync(file, parts.join('\n'), 'utf8');

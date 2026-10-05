@@ -5689,7 +5689,7 @@ class Api {
   // 复制是幂等的：引擎读到该副本后会再次把它移回归档位置（覆盖同名）。
   // 从成片目录的实际产物反推「还缺哪些序号」（续跑兜底，见 resumeTask ③ 段）。
   // 反解规则与引擎 parseOnlyNameIndex 完全一致：末段 = 可选后缀标识 + 序号 + 可选组后缀
-  // （如 `...-研究院-10C.mp4` → 10）。目录定位复用 _batchTaskOutDetail（含凌晨迁移回退）。
+  // （如 `...-示例A-10C.mp4` → 10）。目录定位复用 _batchTaskOutDetail（含凌晨迁移回退）。
   _batchMissingIndices(t, src) {
     try {
       const total = Number((t.env || {}).BATCH_COUNT) || 0;

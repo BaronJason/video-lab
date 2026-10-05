@@ -273,7 +273,7 @@
     read_log: function (o) { return invokeArgs('read_log', o); },
     get_log_level: function () { return invokeArgs('get_log_level'); },
     set_log_level: function (lvl) { return invokeArgs('set_log_level', lvl); },
-    export_diag_pack: function (id) { return invokeArgs('export_diag_pack', id); },
+    export_diag_pack: function (id, opts) { return invokeArgs('export_diag_pack', id, opts); },
     open_parent: function (p) { return invokeArgs('open_parent', p); },
     open_project_dir: function (p) { return invokeArgs('open_project_dir', p); },
     external_edit: function (p) { return invokeArgs('external_edit', p); },

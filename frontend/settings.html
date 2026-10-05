@@ -431,10 +431,11 @@
         </div>
       </div>
       <div class="form-group">
-        <div class="form-group__desc">一键诊断包：把「该任务相关的 app/error/engine 日志行 + 任务环境快照 + 产物清单」合成一个文本文件（日志目录 diag\ 下），反馈问题时直接发送。包内含本机路径，请勿随意分享。</div>
+        <div class="form-group__desc">一键诊断包：把「该任务相关的 app/error/engine 日志行 + 任务环境快照 + 产物清单」合成一个文本文件（日志目录 diag\ 下），反馈问题时直接发送。包内含本机路径，请勿随意分享；需要外发时用「路径打码」版本（盘符与各级目录折叠为 &lt;路径&gt;，只保留文件名）。</div>
         <div class="opt-row">
           <input type="text" class="form-input" id="diagTaskId" placeholder="任务 id（任务窗口卡片上可复制；留空取最近一个失败任务）" style="flex:1;min-width:0">
           <button type="button" class="btn btn-ghost" id="btnExportDiag">导出诊断包</button>
+          <button type="button" class="btn btn-ghost" id="btnExportDiagMasked">路径打码后导出</button>
         </div>
       </div>
     </section>

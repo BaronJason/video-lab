@@ -889,16 +889,24 @@
       });
     }
     // 一键诊断包（方案 §七）：相关日志行 + env 快照 + 产物清单 → 单个 txt
-    var btnDiag = document.getElementById('btnExportDiag');
-    if (btnDiag && api && api.export_diag_pack) btnDiag.addEventListener('click', function () {
-      var id = (document.getElementById('diagTaskId') || {}).value || '';
-      btnDiag.disabled = true;
-      api.export_diag_pack(id.trim()).then(function (r) {
-        btnDiag.disabled = false;
-        if (r && r.ok) { toast('诊断包已生成（日志目录 diag\\ 下），即将打开', 'ok'); if (api.open_parent) api.open_parent(r.path); }
-        else toast('导出失败：' + ((r && r.error) || '未知错误'), true);
-      }).catch(function () { btnDiag.disabled = false; setStatus('导出诊断包失败', true); });
-    });
+    // 第二个入口为「路径打码」版：外发前用，盘符与各级目录折叠为 <路径>，只保留文件名。
+    function bindDiagButton(btnId, maskPaths) {
+      var btn = document.getElementById(btnId);
+      if (!btn || !api || !api.export_diag_pack) return;
+      btn.addEventListener('click', function () {
+        var id = (document.getElementById('diagTaskId') || {}).value || '';
+        btn.disabled = true;
+        api.export_diag_pack(id.trim(), { maskPaths: !!maskPaths }).then(function (r) {
+          btn.disabled = false;
+          if (r && r.ok) {
+            toast(maskPaths ? '诊断包已生成（路径已打码，可安全外发），即将打开' : '诊断包已生成（日志目录 diag\\ 下），即将打开', 'ok');
+            if (api.open_parent) api.open_parent(r.path);
+          } else toast('导出失败：' + ((r && r.error) || '未知错误'), true);
+        }).catch(function () { btn.disabled = false; setStatus('导出诊断包失败', true); });
+      });
+    }
+    bindDiagButton('btnExportDiag', false);
+    bindDiagButton('btnExportDiagMasked', true);
     // 复制浏览器访问地址（带安全令牌，供用户手动填入其他设备/分享）
     var btnCopyUrl = document.getElementById('btnOpenBrowserUrl');
     if (btnCopyUrl) btnCopyUrl.addEventListener('click', function () {

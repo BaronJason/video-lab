@@ -15,12 +15,19 @@
 
   var _inReport = false;
 
+  // 当前任务 id：方案 §七 遗留项 —— VL_TASK_ID 原先只注入引擎，前端异常落盘后无法与任务日志关联。
+  // 页面在"当前任务"变化时调用 window.vlSetTaskId(id)（任务窗口最明确）；未设置时保持空，不臆造。
+  var _taskId = '';
+  window.vlSetTaskId = function (id) { _taskId = String(id == null ? '' : id).slice(0, 80); };
+  window.vlGetTaskId = function () { return _taskId; };
+
   /** 落盘（唯一出口）：兼容 txapi / call / api 三种通道形态；失败静默，绝不再抛 */
   window.vlReportError = function (payload) {
     if (_inReport) return;
     _inReport = true;
     try {
       var p = payload || {};
+      if (_taskId && !p.taskId) p.taskId = _taskId;   // 统一附上当前任务 id，主进程据此写入日志字段
       var api = window.txapi;
       if (api && api.report_ui_error) { api.report_ui_error(p); }
       else if (typeof window.call === 'function') { window.call('report_ui_error', p); }

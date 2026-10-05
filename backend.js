@@ -5956,9 +5956,11 @@ class Api {
       const stack = String(o.stack || '');
       const where = String(o.where || '').slice(0, 80);
       const href = String(o.href || '').slice(0, 240);
+      // 前端可带当前任务 id（logbootstrap 的 vlSetTaskId）：排查时前端异常能与任务日志串起来
+      const taskId = String(o.taskId || '').slice(0, 80);
       this._lg('UI', kind === 'rejection' ? 'ui.rejection' : 'ui.exception',
         (msg || '前端异常（无错误消息）').split('\n')[0] + (where ? ' @ ' + where : ''),
-        { where, href, stack });
+        { where, href, stack, taskId: taskId || undefined, ctx: (o.ctx && typeof o.ctx === 'object') ? o.ctx : undefined });
       return { ok: true };
     } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
   }
@@ -6002,7 +6004,26 @@ class Api {
   }
   /** 一键诊断包（§七）：该任务相关的 app/error/engine 行 + env 快照 + 任务标记 + 产物清单 → 单个 txt。
    *  包内含本机路径 → 文件头附提示（外发前自行打码）。 */
-  exportDiagPack(id) {
+  // 诊断包路径打码（外发前用）：只保留**文件名**，盘符与各级目录一律折叠 ——
+  // 目录名、盘符、任务名都可能含业务信息，而排查只需知道"是哪个文件"。
+  // 例：`E:\项目名\9月\0927\配置.txt` → `<路径>\配置.txt`。
+  // 兼容 JSON 里的反斜杠转义（`E:\\a\\b.txt`）—— 故按「一个或多个反斜杠」切分。
+  _maskDiagPaths(text) {
+    const s = String(text == null ? '' : text);
+    return s
+      .replace(/[A-Za-z]:\\+(?:[^\\/:*?"<>|\r\n]+\\+)*[^\\/:*?"<>|\r\n]*/g, (m) => {
+        const segs = m.split(/\\+/).filter(Boolean);
+        const base = segs.length ? segs[segs.length - 1] : '';
+        return base ? '<路径>\\' + base : '<路径>';
+      })
+      .replace(/\\\\[^\\/\s"',]+\\[^\\/\s"',\\]+/g, (m) => {
+        const segs = m.split(/\\+/).filter(Boolean);
+        const base = segs.length ? segs[segs.length - 1] : '';
+        return base ? '<路径>\\' + base : '<路径>';
+      });
+  }
+
+  exportDiagPack(id, opts) {
     try {
       let t = id ? this.tasks.get(id) : null;
       if (!t && !id) {
@@ -6043,10 +6064,12 @@ class Api {
       }
       const dir = path.join(this._ensureRunLog().getDir(), '..', 'diag');
       try { fs.mkdirSync(dir, { recursive: true }); } catch (e2) {}
-      const file = path.join(dir, 'diag-' + String(id).replace(/[^\w-]/g, '') + '-' + Date.now().toString(36) + '.txt');
-      fs.writeFileSync(file, parts.join('\n'), 'utf8');
-      this._lg('SYS', 'diag.export', '导出诊断包 · ' + t.type + ' · ' + path.basename(file), { id, path: file });
-      return { ok: true, path: file };
+      const file = path.join(dir, 'diag-' + String(id).replace(/[^\w-]/g, '') + '-' + Date.now().toString(36) + (opts && opts.maskPaths ? '-masked' : '') + '.txt');
+      // 路径打码：整包统一处理一次（日志行 / env 快照 / 产物清单都含路径）
+      const body = (opts && opts.maskPaths) ? this._maskDiagPaths(parts.join('\n')) : parts.join('\n');
+      fs.writeFileSync(file, body, 'utf8');
+      this._lg('SYS', 'diag.export', '导出诊断包 · ' + t.type + (opts && opts.maskPaths ? ' · 路径已打码' : '') + ' · ' + path.basename(file), { id, path: file, masked: !!(opts && opts.maskPaths) });
+      return { ok: true, path: file, masked: !!(opts && opts.maskPaths) };
     } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
   }
 

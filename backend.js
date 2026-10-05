@@ -942,7 +942,7 @@ class Api {
   //   现行做法：空闲期统一重扫一次（串行、节流、可中断/让路），任何外部变化都会在后台
   //   被发现并刷新前端；用持久化的 last_full_at 控制频率，避免每次启动都全量遍历。
   _enqueueScanVerify() {
-    this._idleEnqueue('scanverify:' + this.root, async () => {
+    this._verifyEnqueue('scanverify', this.root, async () => {
       // 频率控制：距上次全量重扫不足间隔就跳过
       let lastFull = 0;
       try { if (this._useDbCache()) lastFull = Number(this._cacheStore.getKv('scan_full_at:' + this.root) || 0) || 0; } catch (e) { lastFull = 0; }
@@ -1011,7 +1011,7 @@ class Api {
 
   // 缓存缺失（首次运行 / 新机器 / 缓存被清）→ 后台重建（扫描在空闲队列里做，不阻塞渲染）
   _enqueueScanRebuild() {
-    this._idleEnqueue('scanrebuild:' + this.root, async () => {
+    this._verifyEnqueue('scanrebuild', this.root, async () => {
       try {
         try { await this._collectAllTxtAsync({ force: true }); } catch (e) {}
         try { await this._collectLogFilesAsync({ force: true }); } catch (e) {}
@@ -2109,6 +2109,9 @@ class Api {
     // 连带主线程一起冻住几十秒（2026-09-26 冷启动实测 49.5 秒）。
     const YIELD = 24;
     let yields = 0;
+    // 阶段 5：接入统一让路查询（_verifyEnqueue 提供的 ctx.shouldYield）——
+    // 前台刚有活动/有任务在跑时多喘一口。纯增量：不改变原有让路节奏，只在忙时把间隔从 10ms 提到 30ms。
+    const shouldYield = (opts && typeof opts.shouldYield === 'function') ? opts.shouldYield : null;
     for (let i = 0; i < list.length; i++) {
       // 让路期间缓存可能已被重置/重载（取消预检测、切工作目录）→ 放弃本次清理，避免写回陈旧快照
       if (this._videoCache !== c) return 0;
@@ -2119,7 +2122,9 @@ class Api {
       if ((i + 1) % YIELD === 0) {
         await new Promise((r) => setImmediate(r));
         yields++;
-        if (yields % 4 === 0) await new Promise((r) => setTimeout(r, 10));   // 每 4 批让磁盘喘一口
+        let busy = false;
+        try { busy = shouldYield ? !!shouldYield() : false; } catch (e) { busy = false; }
+        if (busy || yields % 4 === 0) await new Promise((r) => setTimeout(r, busy ? 30 : 10));   // 每 4 批让磁盘喘一口
       }
     }
     // 记录「这批刚核验过」→ 有效期内（默认 7 天）不再重复访问磁盘：
@@ -2303,7 +2308,7 @@ class Api {
     const jobs = Math.min(MAX_JOBS, Math.ceil(pending / N));
     let queued = 0;
     for (let i = 0; i < jobs; i++) {
-      if (this._idleEnqueue('cachegc:' + i, () => this._gcVideoCache(null, { limit: N, idle: true }))) queued++;
+      if (this._verifyEnqueue('cachegc', i, (ctx) => this._gcVideoCache(null, { limit: N, idle: true, shouldYield: ctx.shouldYield }))) queued++;
     }
     try {
       if (this._lg) this._lg('SYS', 'cache.gc.queue',
@@ -2723,7 +2728,7 @@ class Api {
 
   // 启动期缓存缺失 → 后台一次性遍历，把所有复刻模式的日志清单都建好并落库
   _enqueueReplicaLogRebuild() {
-    this._idleEnqueue('repbuild:' + this.root, async () => {
+    this._verifyEnqueue('repbuild', this.root, async () => {
       const byMode = {};
       let modes = [];
       try { modes = REPLICA_MODES.slice(); } catch (e) { modes = []; }
@@ -3576,14 +3581,14 @@ class Api {
     // 输出目录校验：**一律入队**（异步、串行、节流）—— 不在启动窗口内打素材盘 IO，
     // 由空闲队列的启动保护期与让路机制决定何时真正执行（比"启动期判断"更准确）。
     if (pendingOut.length) {
-      this._idleEnqueue('outdirverify:' + this.root, () => this._verifyBatchOutDirs(pendingOut));
+      this._verifyEnqueue('outdirverify', this.root, () => this._verifyBatchOutDirs(pendingOut));
     }
     // 启动只读库：把已持久化的成片存在性结论载入内存（一次查询、零文件 IO），
     // 其余待校验项**只入队**（空闲队列串行执行，见 _prewarmHasOutputAsync / _idleKick）
     try { this._loadHasOutputFromStore(); } catch (e) {}
     try { this._prewarmHasOutputAsync(); } catch (e) {}
     // 维护性任务统一入队（启动期不做任何同步扫盘）：过期锁清理等
-    try { this._idleEnqueue('cleanlocks:' + this.root, () => this._cleanupStaleLocks()); } catch (e) {}
+    try { this._verifyEnqueue('cleanlocks', this.root, () => this._cleanupStaleLocks()); } catch (e) {}
     // 日志级别持久化恢复（日志体系方案 §三.4 遗留项：级别原为会话级，重启回 info）：
     // 入空闲队列而不是启动路径 —— 读它需要同步打开 settings.db，那正是启动期硬约束禁止的。
     try { this._idleEnqueue('loglevel:' + this.root, () => this._restoreLogLevel()); } catch (e) {}
@@ -3612,6 +3617,46 @@ class Api {
     this._idleJobs.push({ key, run });
     this._idleKick();
     return true;
+  }
+
+  // ── 阶段 5：统一空闲校验 worker（冷启动方案 §9.6）──
+  // 所有后台校验（索引重扫 / 复刻清单 / GC / 成片存在性 / 输出目录 / 锁清理）统一从本入口入队，
+  // 换来三件事：① **埋点统一** —— 每次校验一条 `verify.<kind>`（耗时 / 让路次数 / 成败），
+  // 排查不必再逐个猜是哪一项在跑；② **让路统一** —— job 内可用 `ctx.shouldYield()` 查询
+  // "前台刚有活动或有任务在跑"，据此自行分片让出；③ **命名统一** —— `<kind>:<scope>` 便于去重与观测。
+  // ⚠ 本入口只提供外壳，**不改各校验自身的业务逻辑**（避免一次性大改引入回归）。
+  _verifyEnqueue(kind, scope, run) {
+    const k = String(kind || 'verify');
+    const key = k + ':' + String(scope == null ? '' : scope);
+    return this._idleEnqueue(key, async () => {
+      const t0 = Date.now();
+      let yields = 0;
+      const ctx = {
+        kind: k,
+        shouldYield: () => this._shouldYieldToForeground(),
+        noteYield: () => { yields++; },
+      };
+      let ok = true;
+      let err = '';
+      try { await run(ctx); } catch (e) { ok = false; err = String((e && e.message) || e); }
+      try {
+        this._lg('SYS', 'verify.' + k,
+          '后台校验 · ' + k + ' · ' + (Date.now() - t0) + 'ms'
+          + (yields ? ' · 让路 ' + yields + ' 次' : '') + (ok ? '' : ' · 失败'),
+          { kind: k, ms: Date.now() - t0, yields, ok, error: err || undefined });
+      } catch (e) {}
+    });
+  }
+
+  /** 前台是否应当被让路：有任务在跑/排队，或最近刚有前台活动（读/点/任务操作）。
+   *  注意它是"查询"而非"中断" —— 由各 job 自己在安全点调用并分片让出。 */
+  _shouldYieldToForeground() {
+    try {
+      if (this.hasRunningTask && this.hasRunningTask()) return true;
+      if (this.hasQueuedTask && this.hasQueuedTask()) return true;
+      const fg = this._lastForegroundAt || 0;
+      return !!(fg && (Date.now() - fg) < IDLE_FOREGROUND_HOLD_MS);
+    } catch (e) { return false; }
   }
 
   _idleKick() {
@@ -3715,7 +3760,7 @@ class Api {
       if (memo && (now - memo.at) < ttl) return;
       const p = this._taskOutputProbes(t);
       if (!p) return;
-      if (this._idleEnqueue('hasoutput:' + t.id, () => this._probeTaskOutput(t, p))) queued++;
+      if (this._verifyEnqueue('hasoutput', t.id, () => this._probeTaskOutput(t, p))) queued++;
     });
     try {
       if (this._lg) this._lg('SYS', 'task.restore.hasoutput',

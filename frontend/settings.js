@@ -815,17 +815,17 @@
     var bdBtn = document.getElementById('btnPickBackupDir');
     if (bdBtn && api && api.pick_directory) {
       bdBtn.addEventListener('click', function () {
-        api.pick_directory('选择备份目录', _backupCfgDir || '').then(function (dir) {
+        api.pick_directory('选择备份文件夹', _backupCfgDir || '').then(function (dir) {
           if (typeof dir !== 'string' || !dir.trim()) { setStatus('已取消选择', false); return; }
           _backupCfgDir = dir.trim();
           api.save_settings({ backup_dir: _backupCfgDir }).then(function (r) {
-            if (r && r.ok) toast('备份目录已保存', 'ok');
-          }).catch(function () { setStatus('保存备份目录失败', true); });
+            if (r && r.ok) toast('备份文件夹已保存', 'ok');
+          }).catch(function () { setStatus('保存备份文件夹失败', true); });
           if (api.get_settings) api.get_settings().then(function (s) {
             var bdE = document.getElementById('backupDir');
             if (bdE && s && s.backup_root_effective) { bdE.value = s.backup_root_effective; bdE.title = '实际落盘位置：' + s.backup_root_effective; }
           }).catch(function () {});
-        }).catch(function () { setStatus('选择备份目录失败', true); });
+        }).catch(function () { setStatus('选择备份文件夹失败', true); });
       });
     }
     // 「关闭行为」「任务结束通知」：同属「改完立刻影响当前行为」的开关 → 即时保存

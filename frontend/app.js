@@ -2428,15 +2428,21 @@
     el.style.display = '';
   }
   function updateProbeMini(s) {
-    var el = $('probeMini'); if (!el || el.style.display === 'none') return;
+    var el = $('probeMini'); if (!el) return;
     var total = (s && s.total) || 0, done = (s && s.done) || 0;
     var pct = total > 0 ? Math.min(100, Math.round(done / total * 100)) : 0;
-    var lb = $('probeMiniLabel'); if (lb) lb.textContent = '预检测 ' + done + '/' + total;
-    var fl = $('probeMiniFill'); if (fl) fl.style.width = pct + '%';
     if (s && s.finished) {
+      // 本次进度从未在本窗口展示过（如别处窗口发起、本窗口只是收到广播）→ 不打扰状态栏
+      if (el.style.display === 'none') return;
       hideProbeMini();
       setStatus(s.cancelled ? '后台预检测已取消（已保存 ' + done + ' 个探测结果）' : '后台预检测完成：共检测 ' + total + ' 个视频');
+      return;
     }
+    // 进度可能来自别的窗口（设置页「维护-重建 / 刷新预缓存」）—— 收到就主动显示，
+    // 否则本窗口的迷你进度条一直隐藏，用户看不到任何进度（2026-10-07 实报）。
+    if (el.style.display === 'none') showProbeMini();
+    var lb = $('probeMiniLabel'); if (lb) lb.textContent = '预检测 ' + done + '/' + total;
+    var fl = $('probeMiniFill'); if (fl) fl.style.width = pct + '%';
   }
   function onResetProgress(s) {
     if (!s) return;

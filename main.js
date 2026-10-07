@@ -1669,9 +1669,16 @@ function registerIpc() {
   ipcMain.handle('remove_branch', (e, p, scope) => api.removeBranch(p, scope));
   ipcMain.handle('branch_other_txt', (e, p) => api.branchOtherTxt(p));
   ipcMain.handle('precheck', (e, paths, excludes) => api.precheck(paths, excludes));
-  ipcMain.handle('reset_precheck', (e) => { const sender = e.sender; return api.resetPrecheck((s) => { try { sender.send('reset_progress', s); } catch (err) {} if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('reset_progress', s); }); });
+  // 预检测重建/刷新的进度：发给调用方 + **所有窗口**（主界面状态栏有迷你进度条）——
+  // 只在设置页点「维护-重建」时，若只发 sender，主界面收不到任何进度（2026-10-07 实报）。
+  const broadcastResetProgress = (sender, s) => {
+    try { if (sender) sender.send('reset_progress', s); } catch (err) {}
+    for (const w of BrowserWindow.getAllWindows()) { try { w.webContents.send('reset_progress', s); } catch (err) {} }
+    if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('reset_progress', s);
+  };
+  ipcMain.handle('reset_precheck', (e) => { const sender = e.sender; return api.resetPrecheck((s) => broadcastResetProgress(sender, s)); });
   // 仅刷新预缓存：不删缓存，只对缺失/变化的视频增量更新（与重置同通道回报进度）
-  ipcMain.handle('refresh_precache', (e) => { const sender = e.sender; return api.refreshPrecache((s) => { try { sender.send('reset_progress', s); } catch (err) {} if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('reset_progress', s); }); });
+  ipcMain.handle('refresh_precache', (e) => { const sender = e.sender; return api.refreshPrecache((s) => broadcastResetProgress(sender, s)); });
   ipcMain.handle('clean_video_cache', (e) => api.cleanVideoCache());
   ipcMain.handle('cache_info', () => api.cacheInfo());
   ipcMain.handle('cache_stats', () => api.cacheStats());

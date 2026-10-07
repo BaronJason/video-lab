@@ -824,7 +824,7 @@ async function run(ctx, env = process.env) {
 
     if (allVideos.length === 0) {
       logger.info('');
-      logger.info(`❌ 路径 ${f} 过滤后无任何合规视频（分辨率/时长不符合）`);
+      logger.info(`❌ 路径 ${f} 过滤后无任何合规视频（分辨率/时长不符，或 FFprobe 不可用）`);
       return invalidInput('');
     }
 

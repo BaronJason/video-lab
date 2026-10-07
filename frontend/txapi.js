@@ -254,6 +254,7 @@
     on_env_fix_available: function (cb) { return onEvent('env_fix_available', cb); },
     on_env_fix_progress: function (cb) { return onEvent('env_fix_progress', cb); },
     on_env_fix_done: function (cb) { return onEvent('env_fix_done', cb); },
+    on_env_lost: function (cb) { return onEvent('env_lost', cb); },
     get_settings: function () { return invoke('get_settings', []); },
     save_settings: function (s) { return invokeArgs('save_settings', s); },
     pick_directory: function (title, defaultPath) { return invokeArgs('pick_directory', title, defaultPath); },

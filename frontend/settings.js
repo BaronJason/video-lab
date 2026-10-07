@@ -730,6 +730,8 @@
       api.reset_precheck().then(function (r) {
         brp.disabled = false;
         brp.textContent = '重建';
+        // 环境不可用时后端直接拦下（不返回 total/valid）—— 别把它显示成「重建了 0 个」
+        if (r && r.ok === false) { setStatus(String(r.error || '重建失败'), false); return; }
         setStatus('预检测缓存已重建：检测 ' + ((r && r.total) || 0) + ' 个视频，合规 ' + ((r && r.valid) || 0) + ' 个', true);
       }).catch(function (e) {
         brp.disabled = false;

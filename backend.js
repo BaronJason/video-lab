@@ -2555,6 +2555,9 @@ class Api {
   }
 
   async resetPrecheck(onProgress) {
+    // 使用前校验：环境失效时重建必然把全部素材判无效（白跑一遍），先拦住
+    const envG = this._envGuard('reset_precheck');
+    if (envG) return envG;
     this._videoCache = {};
     this._videoInfoCache = new Map();
     // 不在开始时删除物理缓存：探测全部完成后才经 _saveVideoCache 原子替换覆盖原缓存；
@@ -2591,6 +2594,8 @@ class Api {
   // 仅刷新预缓存：不删缓存、不重置，只对「缺失或 mtime 已变」的视频重新探测更新；
   // 命中（缓存有效）的路径直接跳过，进度按全量候选回报（起始即跳过数）
   async refreshPrecache(onProgress) {
+    const envG = this._envGuard('refresh_precache');
+    if (envG) return envG;
     const report = (s) => { if (onProgress) { try { onProgress(s); } catch (e) {} } };
     const allVideos = await this._gatherAllVideos();
     const total = allVideos.length;
@@ -3346,6 +3351,9 @@ class Api {
   // 从任务日志中提取人类可读的失败原因（不展示代码/堆栈）
   _deriveFailReason(task) {
     const lines = task.log || [];
+    // 环境是否仍可用：决定「无合格视频」到底是环境问题还是素材问题 ——
+    // 探测失败与确实不合规共用同一句日志，旧文案统一说「无合格视频」会把人引向分辨率/时长排查（2026-10-07 实报）。
+    const envBad = !this.quickEnvCheck().ok;
     const rules = [
       [/连续\s*\d+\s*次重试无法找到满足时长的组合/, '多次尝试仍无法找到符合时长要求的视频组合'],
       [/部分输入文件不存在/, '部分输入视频文件不存在'],
@@ -3353,7 +3361,7 @@ class Api {
       [/一次性编码失败/, '视频编码失败（请检查源视频与 ffmpeg）'],
       [/无法自动修复/, '存在缺失的视频片段且无法自动修复'],
       [/检测到\s*\d+\s*个片段不存在/, '存在缺失的视频片段'],
-      [/路径\s*.+?\s*过滤后无任何合规视频/, '路径下没有符合分辨率/时长要求的视频'],
+      [/路径\s*.+?\s*过滤后无任何合规视频/, envBad ? 'FFmpeg / FFprobe 不可用' : '没有符合分辨率/时长要求的视频'],
       [/以下路径无法通过索引自动修复/, '存在无法解析的视频路径，请检查 TXT 配置'],
       [/水印必须是有效PNG文件/, '水印文件无效（必须为 PNG 图片）'],
       [/无有效视频文件夹/, '没有可用的视频文件夹'],
@@ -3361,7 +3369,7 @@ class Api {
       [/检测到重复成片名/, '存在重复的成片名'],
       [/全局异常/, '运行过程中出现异常'],
       [/(脚本|任务)完成（有错误）/, '运行出错'],
-      [/ffmpeg|ffprobe/, '视频处理工具不可用'],
+      [/ffmpeg|ffprobe/, 'FFmpeg 组件不可用'],
     ];
     for (let i = lines.length - 1; i >= 0; i--) {
       const line = lines[i];
@@ -5395,6 +5403,8 @@ class Api {
    * @returns {{ok:boolean, taskId?:string, error?:string}}
    */
   runTool(spec) {
+    const envG = this._envGuard('run_tool');
+    if (envG) return envG;
     if (!this.shouldUseNodeEngine('tool')) return { ok: false, error: '程序文件不完整（缺少运行组件），请重新安装或校验程序文件' };
     const mod = this._toolSteps();
     if (!mod) return { ok: false, error: '程序文件不完整（缺少处理组件），请重新安装或校验程序文件' };
@@ -5465,6 +5475,8 @@ class Api {
    * 任何"先删旧产物"的动作都可能删掉唯一的那份视频（计划 §5.3）。
    */
   rerunToolTask(id) {
+    const envG = this._envGuard('rerun_tool');
+    if (envG) return envG;
     const t = this.tasks.get(id);
     if (!t) return { ok: false, error: '任务不存在' };
     if (t.type !== 'tool') return { ok: false, error: '该任务不是视频处理任务' };
@@ -5483,6 +5495,8 @@ class Api {
   }
 
   runBatch(filePath, count, group) {
+    const envG = this._envGuard('run_batch');
+    if (envG) return envG;
     if (!this.shouldUseNodeEngine('batch')) return { ok: false, error: '程序文件不完整（缺少运行组件），请重新安装或校验程序文件' };
     const notSet = this._settingsError('batch');
     if (notSet.length) return { ok: false, error: '批量拼接参数未设置：' + notSet.join('、') + '，请到 设置-批量拼接 中配置后再启动' };
@@ -5513,6 +5527,8 @@ class Api {
   }
 
   runReplica(logPath, mode = 1, entryVideo, opts) {
+    const envG = this._envGuard('run_replica');
+    if (envG) return envG;
     if (!this.shouldUseNodeEngine('replica')) return { ok: false, error: '程序文件不完整（缺少运行组件），请重新安装或校验程序文件' };
     const notSet = this._settingsError('replica');
     if (notSet.length) return { ok: false, error: '视频复刻参数未设置：' + notSet.join('、') + '，请到 设置-视频复刻 中配置后再启动' };
@@ -5550,6 +5566,8 @@ class Api {
   // 断点续跑：失败/中断/停止的复刻任务，仅续跑失败/未完成的成片，不删除已成功产物。
   // 从 failedVideos 或日志中提取失败成片名，构造 REPLICA_ONLY_NAMES 新任务。
   async continueReplica(id, opts) {
+    const envG = this._envGuard('continue_task');
+    if (envG) return envG;
     const t = this.tasks.get(id);
     if (!t) return { ok: false, error: '任务不存在' };
     const softPaused = t._softPaused === true && t.status === 'paused';
@@ -5923,6 +5941,8 @@ class Api {
   // 遮罩叠加任务：payload 来自主窗口遮罩叠加模式（mode/rawDirs/videos/maskDirs/watermark/outputDir），
   // 经环境变量 MASK_* 驱动内置引擎的 mask 模块；无设置页配置组，参数随任务提交
   runMask(p) {
+    const envG = this._envGuard('run_mask');
+    if (envG) return envG;
     if (!this.shouldUseNodeEngine('mask')) return { ok: false, error: '程序文件不完整（缺少运行组件），请重新安装或校验程序文件' };
     const errs = [];
     const dirs = Array.isArray(p && p.rawDirs) ? p.rawDirs.filter((d) => String(d).trim()) : [];
@@ -6128,6 +6148,8 @@ class Api {
 
   // 断点续跑：失败/中断/停止的遮罩叠加任务，仅续跑失败成片（MASK_ONLY_NAMES 过滤），不删已成功产物
   continueMask(id) {
+    const envG = this._envGuard('continue_mask');
+    if (envG) return envG;
     const t = this.tasks.get(id);
     if (!t) return { ok: false, error: '任务不存在' };
     if (t.status !== 'error' && t.status !== 'interrupted' && t.status !== 'stopped') return { ok: false, error: '仅失败/中断/停止的任务可继续制作' };
@@ -6783,6 +6805,35 @@ let themes = [];
       ffmpegPath: resolveBin('ffmpeg', cfgDir ? path.join(cfgDir, 'ffmpeg.exe') : ''),
       ffprobePath: resolveBin('ffprobe', cfgDir ? path.join(cfgDir, 'ffprobe.exe') : ''),
     };
+  }
+
+  // ── 使用前的轻量环境校验（毫秒级：只做 existsSync + where，不启动 ffmpeg 进程）──
+  // 启动时的完整探测（checkEnvAsync）只代表「启动那一刻」；环境在运行期间失效
+  // （PATH 被改动、组件被移走、安全软件清理入口）时不会重查，只能在使用时兜住 ——
+  // 否则要到素材探测失败才暴露，且旧文案把「探测失败」说成「分辨率/时长不符」（2026-10-07 实报）。
+  quickEnvCheck() {
+    const r = this._resolveFfmpegBin();
+    return {
+      ok: !!r.ffmpegPath && !!r.ffprobePath,
+      ffmpeg: !!r.ffmpegPath,
+      ffprobe: !!r.ffprobePath,
+      ffmpegPath: r.ffmpegPath,
+      ffprobePath: r.ffprobePath,
+    };
+  }
+  /** 环境不可用 → 记日志 + 首次提示（横幅/吐司，见 main.js onEnvLost）+ 返回简短拦截文案；可用返回 null */
+  _envGuard(where) {
+    const q = this.quickEnvCheck();
+    if (q.ok) { this._envLostNotified = false; return null; }
+    const miss = [!q.ffmpeg && 'FFmpeg', !q.ffprobe && 'FFprobe'].filter(Boolean).join(' / ');
+    const brief = miss + ' 不可用';
+    try { this._lg('ERR', 'env.lost', brief + ' · ' + String(where || ''), { ffmpeg: q.ffmpeg, ffprobe: q.ffprobe, where: where || '' }); } catch (e) {}
+    // 去重：同一次失效只提示一次（任务连发时不刷屏）；恢复可用后自动复位
+    if (!this._envLostNotified) {
+      this._envLostNotified = true;
+      try { if (typeof this.onEnvLost === 'function') this.onEnvLost({ missing: miss, ffmpeg: q.ffmpeg, ffprobe: q.ffprobe, where: where || '' }); } catch (e) {}
+    }
+    return { ok: false, error: brief + '，请到 设置-维护 修复组件' };
   }
 
   // 探测缓存：ffmpeg 路径 + 文件 大小/mtime 作指纹，命中即复用，避免每次启动重跑两个 ffmpeg 进程。

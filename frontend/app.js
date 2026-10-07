@@ -2464,6 +2464,8 @@
     return call('refresh_precache').then(function (r) {
       if (state.precheckBackground) hideProbeMini(); else hideBusy();
       cleanup();
+      // 环境不可用时后端直接拦下（无 total/updated）—— 别显示成「更新了 0 个」
+      if (r && r.ok === false) { setStatus(String(r.error || '刷新预缓存失败'), false); return; }
       setStatus('预缓存已刷新：本次更新 ' + ((r && r.updated) || 0) + ' 个视频，共 ' + ((r && r.total) || 0) + ' 个视频' + ((r && r.cancelled) ? '（已中断，失效缓存稍后后台清理）' : '，失效缓存已后台清理'));
       if (state.activeTxt && state.activeVersion) runPrecheck();
     }).catch(function (e) {
@@ -3417,9 +3419,14 @@
       showUpdateBanner({ __custom: {
         source: 'envfix',
         title: (info && info.hasFfmpeg) ? 'FFmpeg 组件不完整' : '缺少 FFmpeg 运行组件',
-        desc: '自动下载到本机（约 60 MB，无需手动配置）',
+        desc: '可自动下载修复',
         later: '暂不', now: '自动下载',
       } }, 'available');
+    });
+    // 运行期环境失效（用的时候才发现）：吐司比横幅更醒目，落在当前视野内
+    if (upd.on_env_lost) upd.on_env_lost(function (info) {
+      var who = (info && info.missing) ? info.missing : 'FFmpeg / FFprobe';
+      toast(who + ' 不可用，请在设置页修复组件', true);
     });
     if (upd.on_env_fix_progress) upd.on_env_fix_progress(function (info) {
       if (info && info.phase === 'download') {

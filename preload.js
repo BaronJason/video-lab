@@ -131,6 +131,7 @@ contextBridge.exposeInMainWorld('txapi', {
   on_env_fix_available: (cb) => { ipcRenderer.on('env_fix_available', (e, info) => { try { cb(info); } catch (err) {} }); },
   on_env_fix_progress: (cb) => { ipcRenderer.on('env_fix_progress', (e, info) => { try { cb(info); } catch (err) {} }); },
   on_env_fix_done: (cb) => { ipcRenderer.on('env_fix_done', (e, info) => { try { cb(info); } catch (err) {} }); },
+  on_env_lost: (cb) => { ipcRenderer.on('env_lost', (e, info) => { try { cb(info); } catch (err) {} }); },
   env_fix_start: () => invoke('env_fix_start'),
   on_update_progress: (cb) => { ipcRenderer.on('update_downloading', (e, info) => { try { cb(info); } catch (err) {} }); },
   on_update_status: (cb) => { ipcRenderer.on('update_status', (e, text) => { try { cb(text); } catch (err) {} }); },

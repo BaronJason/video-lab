@@ -666,6 +666,16 @@ api.onFfmpegProgress = (p) => {
   sendToMain('env_fix_progress', p);
   sendToSettings('env_fix_progress', p);
 };
+// 运行期环境失效（用的时候才发现的 ffmpeg/ffprobe 不可用）：
+// 横幅（可一键下载修复）+ 吐司（更醒目的即时提示）双通道，两个窗口都发。
+api.onEnvLost = (info) => {
+  const payload = { missing: (info && info.missing) || '', hasFfmpeg: !!(info && info.ffmpeg) };
+  sendToMain('env_fix_available', payload);
+  sendToSettings('env_fix_available', payload);
+  sendToMain('env_lost', payload);
+  sendToSettings('env_lost', payload);
+  if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('env_lost', payload);
+};
 
 // 主窗口与任务窗口：主窗口仅在原生模态对话框/载入遮罩时被禁用；任务列表窗口不随父窗口禁用
 let mainWin = null;

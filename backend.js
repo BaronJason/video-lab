@@ -4996,11 +4996,14 @@ class Api {
   }
 
   // 校验 批量/复刻 配置参数是否已设置：数字须>0，字符串须非空（txt_prefix 允许空）。返回缺失项标签，空数组=齐全
+  // ⚠ 复刻**不再校验** max_duration / speed_limit —— 这两项与批量拼接共用同一套（见 runReplica 内注释与
+  //    BATCH_MAX_DURATION 等取值来源都是 config.batch），复刻配置里根本没有这两个字段；
+  //   若仍按复刻必填校验，前端一保存就会把空值写进 replica 并导致所有复刻任务启动被拒（2026-10-08 实报）。
   _settingsError(group) {
     const cfg = this.config[group] || {};
     const nums = group === 'batch'
       ? [['max_duration', '最大时长(秒)'], ['max_retry', '重试次数'], ['speed_limit', '倍速阈值']]
-      : [['max_duration', '最大时长(秒)'], ['speed_limit', '倍速阈值'], ['dedup_ratio', '去重阈值']];
+      : [['dedup_ratio', '去重阈值']];
     const missing = [];
     for (const [k, label] of nums) if (!(parseFloat(cfg[k]) > 0)) missing.push(label);
     if (group === 'batch') {

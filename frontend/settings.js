@@ -19,7 +19,9 @@
   ];
   var state = {
     batch: { root: '', max_duration: '', max_retry: '', speed_limit: '', txt_prefix: [], producer: '', suffix_mark: '' },
-    replica: { max_duration: '', speed_limit: '', dedup_ratio: '', dedup_ratio_max: '', dedup_ratio_on: true, dedup_ratio_max_on: true },
+    // ⚠ 复刻不再携带 max_duration / speed_limit —— 这两项与批量拼接共用同一套（后端 runReplica 读 config.batch），
+    //   携带空字符串随保存写库会把后端校验/默认值覆盖掉，曾导致所有复刻任务启动被拒（2026-10-08 实报）
+    replica: { dedup_ratio: '', dedup_ratio_max: '', dedup_ratio_on: true, dedup_ratio_max_on: true },
     mask: { root: '', watermark_mov: '', watermark_alpha: '' }
   };
   // 轻量 Markdown 渲染（标题 / 有序无序列表 / 表格 / 引用 / 行内链接与粗体 / 代码块 / 空行）

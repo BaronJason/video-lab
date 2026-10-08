@@ -681,8 +681,7 @@
     var mConfirmMask = $('updateConfirmMask');
     if (mConfirmMask) mConfirmMask.addEventListener('click', function (e) { if (e.target === mConfirmMask) hideUpdateConfirm(); });
 
-    // 关闭按钮已移除：设置页的退出由外层控制
-    // （独立窗口：失焦且主窗口获焦时自动关闭；内嵌为主窗口面板后：由面板显隐控制）
+    // 关闭按钮已移除：退出由外层控制（独立窗口失焦自动关闭；内嵌后面板显隐控制）
     setupMultiTags('batchTxtPrefix', 'batchTxtPrefixTags', function () { return state.batch.txt_prefix; }, onBatchTagsChanged, 'batchTxtPrefixCaret');
     // 后缀/创作者改动需先同步 state 再刷新预览 —— updatePreview 读的是 state，
     // 只调刷新不回写 state 的话，预览永远不包含刚输入的内容

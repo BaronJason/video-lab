@@ -951,8 +951,7 @@ async function run(ctx, env = process.env) {
       indexList = Array.from(new Set(onlyIdx)).sort((a, b) => a - b);
       resumeMode = true;
     }
-    // 先声明模式与范围、再报总数：否则续跑时那句「开始批量生成（共 N 个）」
-    // 会被误读成「要重做 N 个」，看上去像重新开始
+    // 先声明模式与范围、再报总数：否则续跑时那句「开始批量生成（共 N 个）」会被误读成要重做 N 个
     logger.info(resumeMode
       ? `🔁 续跑模式：仅重做 ${indexList.length} 个成片（序号 ${indexList.join(', ')}）—— 本批总量 ${totalOutput} 个，其余保留既有产物`
       : `开始批量生成（共 ${totalOutput} 个）`);

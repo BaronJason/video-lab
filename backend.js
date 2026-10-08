@@ -212,8 +212,7 @@ function relativeDateLabel(relParts) {
     const p = relParts[i].trim();
     if (p && p !== '月份') return p;
   }
-  // 兜底标签：配置/日志直接位于根目录、路径里没有任何日期段时用它
-  // （前端显示不加括号）
+  // 兜底标签：配置/日志直接位于根目录、无任何日期段时用它（前端显示不加括号）
   return '根目录';
 }
 
@@ -3873,8 +3872,7 @@ class Api {
       .sort((a, b) => (a.resumeIdx ?? 1e9) - (b.resumeIdx ?? 1e9));
     if (!paused.length) return { ok: false, error: '没有暂停的任务' };
     for (const t of paused) {
-      // 继续只是重新入队，此刻还没真正跑起来：保留计时冻结，
-      // 由真正开始运行（_startNextQueued）时再并入总暂停时长
+      // 继续只是重新入队，此刻还没跑起来：保留计时冻结，由真正开始运行（_startNextQueued）时并入总暂停时长
       t.status = 'queued'; t.paused = false; delete t.resumeIdx;
       this._taskQueue.push(t.id);
       t.log.push('[全部继续]');
@@ -5659,8 +5657,7 @@ class Api {
     //   ⚠ 此处不得引用 `src`：它在本函数后面才声明（TDZ），会抛
     //   「Cannot access 'src' before initialization」，导致点「继续制作」直接失败。
     if (!failNames.size && t.type === 'batch') {
-      // 先清理**不可播放**的产物：半截文件也在磁盘上，
-      // 不清理会被当作"已完成"，导致该序号被永久跳过。
+      // 先清理**不可播放**的产物：半截文件留在磁盘上会被当作"已完成"，导致该序号被永久跳过。
       try { await this._pruneBrokenOutputs(t); } catch (e) {}
       const missing = this._batchMissingIndices(t, '');
       if (missing.length) {
@@ -5806,8 +5803,7 @@ class Api {
       out.dir = dir;
       let names = [];
       try { names = fs.readdirSync(dir); } catch (e) { return out; }
-      // ① 临时/残缺命名：引擎的临时产物（`*.mp4.tmp`）**直接删除**（无保留价值）；
-      //    其它可疑残留改名留证
+      // ① 临时/残缺命名：引擎的临时产物（`*.mp4.tmp`）**直接删除**（无保留价值）；其它可疑残留改名留证
       const tempRe = /(\.tmp\.mp4$|\.tmp$|\.part$|\.ytdl$|\.temp$|^\d+-temp|temp-\d+)/i;
       for (const f of names) {
         if (!tempRe.test(f)) continue;

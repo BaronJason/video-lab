@@ -281,8 +281,7 @@ function moveStorage(fromDir, toDir) {
     }
     for (const [srcPath] of moved) { if (fs.existsSync(srcPath)) recycleFile(srcPath); } // 跨盘复制留下的源文件
     if (api && typeof api.onStorageMoved === 'function') api.onStorageMoved(toDir);
-    // 运行日志随存储位置一起搬：否则切换后日志继续写在旧位置，用户在新位置找不到，
-    // 重启后又写到新位置，等于把历史割成两处。
+    // 运行日志随存储位置一起搬：否则切换后日志仍写旧位置、重启又写新位置，历史被割成两处。
     try {
       const oldLog = path.join(fromDir, 'log');
       const newLog = path.join(toDir, 'log');
@@ -902,8 +901,7 @@ function createTaskWindow() {
   // 首帧就绪后再显示：避免「先出现空白窗、再刷出内容」的闪烁观感
   taskWin.once('ready-to-show', async () => { await waitForWindowContent(taskWin); try { if (taskWin && !taskWin.isDestroyed()) { taskWin.show(); taskWin.focus(); } } catch (e) {} });
   taskWin.loadFile(path.join(__dirname, 'frontend', 'task.html'));
-  // 关闭只隐藏、不销毁（同工具窗）：任务窗常开常看，重建同样要重新加载整套皮肤资源。
-  // 应用真正退出时才销毁。
+  // 关闭只隐藏、不销毁（同工具窗）：常开常看，重建要重载整套皮肤资源；应用真正退出时才销毁。
   taskWin.on('close', (e) => {
     if (isQuitting) return;
     e.preventDefault();

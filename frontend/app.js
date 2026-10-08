@@ -552,8 +552,7 @@
           // 当前选中（正在编辑）的配置在任何搜索词下都保留渲染并保持高亮：
           // 若被搜索过滤移除，皮肤 chat-active 状态投影会误删 → 底部配置栏滑出消失
           if (!matched && !isActive) return;
-          // 名称排序按首字母分组、时间排序按月份分组：每个组的首个配置前插入分组标签行（含首组）；
-          // 复刻虚拟项目的固定子项不参与分组
+          // 名称排序按首字母分组、时间排序按月份分组；组首插入标签行（含首组）；复刻虚拟项目的固定子项不参与分组
           if (!isReplica) {
             var groupKey = (state.sortMode === 'time')
               ? monthOf(txt.latest)
@@ -1245,8 +1244,7 @@
     var watermark = state.configData ? (state.configData.watermark || '') : '';
     return { folders: folders, excludes: excludes, watermark: watermark };
   }
-  // 预检测：输入防抖后执行；不再弹前台遮罩，
-  // 检测进度与结果仍写回每行的预检测徽章，用户随时可看。
+  // 预检测：输入防抖后执行；不弹前台遮罩，进度与结果写回每行的预检测徽章，用户随时可看。
   var precheckDebounceTimer = null;
   var precheckOverlayCount = 0;
   var PRECHECK_DEBOUNCE_MS = 250; // 输入防抖窗口
@@ -2297,8 +2295,7 @@
     var line = logRowFor(video, logPath);
     if (line) highlightLogBlock(line, video, logPath);
   }
-  // 高亮整个成片块：从成片名行（"使用片段列表："上一行）到块内末尾水印png行；
-  // 跳过分隔线/空行；仅高亮行号列，不高亮文字
+  // 高亮整个成片块（成片名行 → 块内末尾水印 png 行）：跳过分隔线/空行，仅高亮行号列
   function highlightLogBlock(line, video, logPath) {
     var d = state.logContent;
     if (!d) return;
@@ -2475,8 +2472,7 @@
       setStatus('刷新预缓存失败：' + e.message);
     });
   }
-  // 刷新配置列表：先扫描历史遗留的重复外部 * 配置（与成片正本内容一致的副本），
-  // 确认后物理删除再刷新列表；无重复则直接刷新
+  // 刷新配置列表：先扫描与成片正本内容一致的重复外部 * 配置（确认后删除），再刷新列表
   function refreshConfigsFlow() {
     // 刷新会重拉列表并重载当前配置：未保存修改先弹窗确认
     checkConfigModifiedBeforeLeave(function () {
@@ -2815,8 +2811,7 @@
     setStatus('就绪');
   }
   function bindStaticEvents() {
-    // 预检测一律后台：只保留状态栏 probe-mini 上的取消按钮
-    //（原遮罩的「后台检测」与「取消预检测」按钮已随遮罩移除）
+    // 预检测一律后台：只保留状态栏 probe-mini 上的取消按钮（原遮罩按钮已随遮罩移除）
     var probeCancel = $('probeMiniCancel');
     if (probeCancel) probeCancel.addEventListener('click', function () { setStatus('正在取消后台预检测…'); call('cancel_precheck'); });
     document.addEventListener('vl:reset-center', function () {
@@ -3382,8 +3377,7 @@
     if (!upd) return;
     if (upd.on_update_available) upd.on_update_available(function (info) { showUpdateBanner(info, 'available'); });
     if (upd.on_update_progress) upd.on_update_progress(function (info) {
-      // 下载进行中：提示条最小化到状态栏，任务按钮左侧显示文字与进度条；
-      // 左下角状态栏同步更新，避免停留在「正在连接更新服务器」
+      // 下载进行中：提示条最小化到状态栏（任务按钮左侧显示文字与进度条），左下角状态栏同步更新
       hideUpdateBanner();
       showUpdateMini(info);
       var p = Math.max(0, Math.min(100, (info && info.percent) || 0));
@@ -3554,8 +3548,7 @@
     body.innerHTML = renderMdMd(content);
     var done = function () {
       overlay.remove();
-      // 用户确已看到 → 记录展示版本，避免下次重复弹出（标记在关闭时回写，
-      // 故静默到托盘启动时不会白消耗掉本次展示机会）
+      // 用户确已看到 → 记录展示版本，避免重复弹出（标记在关闭时回写，静默启动也不白消耗机会）
       try { call('ack_changelog_popup'); } catch (e) {}
     };
     card.querySelector('.modal-close').addEventListener('click', done);
@@ -4134,8 +4127,7 @@
   function dispatchSkinRefresh() {
     try { document.dispatchEvent(new CustomEvent('vl:skin-refresh')); } catch (e) {}
   }
-  // 退出遮罩模式：恢复批量模式的中间区头部（标题 + 配置列表/日志切换 + 日期分支），
-  // 并重建批量事件绑定与皮肤装饰
+  // 退出遮罩模式：恢复批量模式中间区头部（标题 / 列表 / 分支切换），并重建事件绑定与皮肤装饰
   function restoreBatchCenterTop() {
     var top = $('centerTop');
     if (!top) return;

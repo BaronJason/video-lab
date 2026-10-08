@@ -13,6 +13,9 @@ const { dialog, shell, BrowserWindow } = require('electron');
 
 const FRONTEND_DIR = path.join(__dirname, 'frontend');
 const ICON_DIR = path.join(__dirname, 'icon');
+// 前端资源版本指纹：每次进程启动都会变化 —— 注入到 HTML 里的 JS/CSS 引用 URL（?v=），
+// 让 URL 变化后浏览器必然重新拉取，彻底绕开"服务端已 no-cache、但浏览器仍持有历史强缓存"导致的旧文件不更新。
+const FRONTEND_VER = Date.now().toString(36);
 
 // 前台打开目录：本体点击时 Electron 窗口在前台，explorer 继承前台权限直接弹出；
 // 浏览器请求到达的是后台主进程（焦点在浏览器侧），shell.openPath 会使 explorer 新窗口被
@@ -371,6 +374,11 @@ function startHttpServer(opts) {
     fs.readFile(filePath, (err, data) => {
       if (err) { res.writeHead(404); res.end('Not Found'); return; }
       const ext = path.extname(filePath).toLowerCase();
+      // HTML 内的 JS/CSS 引用统一加 ?v=<版本指纹>：每次启动版本变化 → 资源 URL 变化 → 浏览器必然重拉。
+      // （仅改 HTML，不动 CSS 内 url()；正则排除已带 ? 的引用避免重复注入）
+      if (ext === '.html') {
+        data = Buffer.from(data.toString('utf8').replace(/(\b(?:src|href)=")([^"?]+\.(?:js|css))(")/g, '$1$2?v=' + FRONTEND_VER + '$3'));
+      }
       res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': 'no-cache, no-store, must-revalidate' });
       res.end(data);
     });

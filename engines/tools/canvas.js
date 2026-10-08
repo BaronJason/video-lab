@@ -228,24 +228,30 @@ function buildCanvasPlan(params, src, opts) {
   // 故各自经 split 分流（否则 -map 复用标签会报 "was already used elsewhere"）。
   const parts = [];
   const bgSegs = bgSegments(p, warnings).join(',');
+  // ⚠ 两条流都要把时间戳归零（`setpts=PTS-STARTPTS`）：预览用 `-ss` 前置定位取帧时，内容流
+  //   首帧 PTS 不为 0（seek 到关键帧后仍带着原时间轴），而背景（lavfi / 图片）从 0 起 ——
+  //   overlay 以**先到的时间轴**为准，`-frames:v 1` 拿到的第一帧就只有背景：
+  //   表现为「合成图只剩背景，而内容原帧正常」（2026-10-08 实报，且只在部分时间点出现）。
+  //   归零后两条流同时起步，任意时间点都能正确合成。
+  const TS0 = 'setpts=PTS-STARTPTS';
   if (forEncode) {
     // 正式处理：背景与内容各只被消费一次，直接落到合成（省掉预览用的分流，也少一层拷贝）
-    parts.push('[' + bgIdx + ':v]' + bgSegs + '[bg]');
-    parts.push(contentIn + cSeg.segs.join(',') + '[c]');
+    parts.push('[' + bgIdx + ':v]' + TS0 + ',' + bgSegs + '[bg]');
+    parts.push(contentIn + TS0 + ',' + cSeg.segs.join(',') + '[c]');
   } else {
     // 预览：背景与内容都得「既参与合成、又单独输出一张图」，故各自 split 分流
-    parts.push('[' + bgIdx + ':v]' + bgSegs + '[bgsrc]');
+    parts.push('[' + bgIdx + ':v]' + TS0 + ',' + bgSegs + '[bgsrc]');
     parts.push('[bgsrc]split=2[bg][bgout]');
-    parts.push(contentIn + 'split=2[craw][csrc]');
+    parts.push(contentIn + TS0 + ',split=2[craw][csrc]');
     parts.push('[csrc]' + cSeg.segs.join(',') + '[c]');
   }
   let composedLabel = forEncode ? (hasWm ? '[comp0]' : (finalLabel || '[comp0]')) : '[comp0]';
-  // ⚠ shortest=1 让 overlay 跟随**最短输入**（内容视频）收尾 —— 纯色/视频背景是无限流，
-  //   没有它输出会一直跟着背景走（成片被拉长或永不结束；输出级 -shortest 兜不住滤镜内部）。
-  //   图片背景**不能设**：它是单帧输入，设了会在第 1 帧后立刻结束（靠 repeatlast=1 续帧才对）。
-  const overlayShortest = (needSolid || bgIsVideo) ? ':shortest=1' : '';
-  parts.push('[bg][c]overlay=' + Math.round(offset.x) + ':' + Math.round(offset.y) + ':format=auto'
-    + overlayShortest + composedLabel);
+  // ⚠ 这里**不要**用 overlay 的 shortest=1：它让 overlay 跟随最短输入提前收尾 ——
+  //   预览用 -ss 定位取帧时（内容与背景各自 seek），两条流的首帧到达时机不同，
+  //   会出现「合成图只剩背景、内容原帧却正常」的**概率性**现象（2026-10-08 实报）。
+  //   无限背景的收尾交给**输出级 `-t`（= 内容时长）**（见 steps/canvas.js），确定且无竞态；
+  //   图片背景是单帧输入 + overlay 默认 repeatlast=1，本身就是有限流。
+  parts.push('[bg][c]overlay=' + Math.round(offset.x) + ':' + Math.round(offset.y) + ':format=auto' + composedLabel);
   if (hasWm) {
     parts.push('[' + wmIdx + ':v]format=rgba[wm]');
     const wmOut = forEncode ? (finalLabel || '[compWm]') : '[compWm]';

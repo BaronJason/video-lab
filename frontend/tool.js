@@ -27,7 +27,9 @@
 
   var state = {
     info: null,
-    sel: {},        // stepId → 是否勾选
+    // 画布合成**默认启用**（用户定案 2026-10-08）：在画布合成页配好参数、选好输入即可直接「开始处理」，
+    // 不必再额外勾选；步骤列表里的 canvas 勾选与画布合成页的开关双向联动，可随时取消。
+    sel: { canvas: true },
     values: {},     // stepId → { key: value }
     link: { resize: true },  // 转分辨率：比例锁链是否锁定（纯前端交互，不提交）
     root: '',
@@ -440,6 +442,9 @@
     var dirMode = $('outMode').value === 'directory';
     $('outDirRow').classList.toggle('tl-out__row--hide', !dirMode);
     $('outNameRow').classList.toggle('tl-out__row--hide', !dirMode);
+    // 文件名选「原名」时不需要后缀框（后缀只对「原名 + 后缀」有意义）
+    var sfx = $('outSuffix');
+    if (sfx) sfx.hidden = $('outNameMode').value !== 'suffix';
     $('outModeHint').textContent = dirMode
       ? '空文件夹 → 直接输出；已有文件 → 自动新建子文件夹'
       : '处理结果直接替换原文件（有备份可还原）';
@@ -451,6 +456,7 @@
   function bindOutputEvents() {
     $('outMode').addEventListener('change', syncOutputRows);
     $('outBackup').addEventListener('change', syncOutputRows);
+    $('outNameMode').addEventListener('change', syncOutputRows);   // 原名 ⇄ 原名+后缀：后缀框随之显隐
     $('btnPickDir').addEventListener('click', function () {
       if (!api || !api.pick_directory) { toast('后端不支持文件夹选择', 'error'); return; }
       api.pick_directory('选择要处理的文件夹', state.root || undefined).then(function (p) {
@@ -974,38 +980,32 @@
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
 
-  /** 吸附：内容盒中心/边靠近画布中心、三分线与边缘时给出参考线并吸合 */
+  /**
+   * 吸附（**四宫格**：只对齐**中线与四条边**，不用三分线 —— 用户定案 2026-10-08）。
+   * 内容盒的左/中/右三处，各自吸附画布的左边、中线、右边；上/中/下同理。
+   * ⚠ 取**距离最近**的一条线吸合：早先按"先命中先返回"处理，候选一多会互相竞争
+   *   —— 表现为「在顶部附近往上拖反而往下走、往下拖又往上走」（2026-10-08 实报）。
+   */
   function cvSnap(b, alt) {
-    var W = cvCanvasW(), H = cvCanvasH();
-    var showV = 0, showH = 0;
     if (alt) { cvDrawGuides(0, 0, false); return b; }
+    var W = cvCanvasW(), H = cvCanvasH();
     var vs = cvViewScale();
     var tol = cv.snap / Math.max(0.05, vs);
-    var vLines = [0, W / 3, W / 2, 2 * W / 3, W];
-    var hLines = [0, H / 3, H / 2, 2 * H / 3, H];
-    var targets = [
-      { v: b.x, w: 0 }, { v: b.x + b.w / 2, w: b.w / 2 }, { v: b.x + b.w, w: b.w },
-    ];
-    for (var i = 0; i < targets.length; i++) {
-      for (var j = 0; j < vLines.length; j++) {
-        if (Math.abs(targets[i].v - vLines[j]) <= tol) {
-          b.x += vLines[j] - targets[i].v; showV = vLines[j]; break;
+    var pick = function (cands, lines) {
+      var best = null;
+      for (var i = 0; i < cands.length; i++) {
+        for (var j = 0; j < lines.length; j++) {
+          var d = lines[j] - cands[i];
+          if (Math.abs(d) <= tol && (!best || Math.abs(d) < Math.abs(best.d))) best = { d: d, line: lines[j] };
         }
       }
-      if (showV) break;
-    }
-    var t2 = [
-      { v: b.y, w: 0 }, { v: b.y + b.h / 2, w: b.h / 2 }, { v: b.y + b.h, w: b.h },
-    ];
-    for (var k = 0; k < t2.length; k++) {
-      for (var m = 0; m < hLines.length; m++) {
-        if (Math.abs(t2[k].v - hLines[m]) <= tol) {
-          b.y += hLines[m] - t2[k].v; showH = hLines[m]; break;
-        }
-      }
-      if (showH) break;
-    }
-    cvDrawGuides(showV, showH, true);
+      return best;
+    };
+    var bx = pick([b.x, b.x + b.w / 2, b.x + b.w], [0, W / 2, W]);
+    if (bx) b.x += bx.d;
+    var by = pick([b.y, b.y + b.h / 2, b.y + b.h], [0, H / 2, H]);
+    if (by) b.y += by.d;
+    cvDrawGuides(bx ? bx.line : 0, by ? by.line : 0, true);
     return b;
   }
 
@@ -1087,7 +1087,8 @@
     cvPaintBox();
     cvBoxToParams(box);
     cvWriteBackInputs(['scale', 'dx', 'dy', 'w', 'h']);
-    if (cv.params.stretch) { $('cvStretch').checked = true; $('cvStretchRow').hidden = false; }
+    if (cv.params.stretch) { $('cvStretch').checked = true; }
+    cvSyncStretchUI();
   }
 
   function cvDragEnd() {
@@ -1137,7 +1138,7 @@
     onInput('cvScaleNum', function (el) { cv.params.scale = Math.min(3, Math.max(0.05, cvNum(el, 0.74))); cvWriteBackInputs(['scale']); return true; });
     onInput('cvStretch', function (el) {
       cv.params.stretch = !!el.checked;
-      $('cvStretchRow').hidden = !cv.params.stretch;
+      cvSyncStretchUI();
       if (cv.params.stretch && (!cv.params.w || !cv.params.h)) {
         var size = cvContentSize();
         cv.params.w = Math.round(size.w || 1280); cv.params.h = Math.round(size.h || 720);
@@ -1145,9 +1146,55 @@
       }
       return true;
     }, { immediate: true });
-    onInput('cvW', function (el) { cv.params.w = Math.max(2, cvNum(el, 1280)); return true; });
-    onInput('cvH', function (el) { cv.params.h = Math.max(2, cvNum(el, 720)); return true; });
-    onInput('cvPos', function (el) { cv.params.posMode = String(el.value); return true; }, { immediate: true });
+    // 拉伸宽高：与「转分辨率」同一套交互（常用比例 + 宽高联动 + 锁链解绑）
+    (function () {
+      var ratioEl = $('cvStretchRatio'), wEl = $('cvW'), hEl = $('cvH'), linkEl = $('cvStretchLink');
+      if (!ratioEl || !wEl || !hEl) return;
+      var pairOf = function (r) { return RESIZE_RATIOS[r] || null; };
+      var linked = function () { return ratioEl.value !== '自定义'; };   // 唯一判据：自定义 = 已解绑
+      var paintLink = function () { if (linkEl) linkEl.classList.toggle('tl-link--on', linked()); };
+      var sync = function () { cv.params.w = Math.max(2, cvNum(wEl, 1280)); cv.params.h = Math.max(2, cvNum(hEl, 720)); };
+      ratioEl.addEventListener('change', function () {
+        paintLink();
+        var a = pairOf(ratioEl.value);
+        if (a) hEl.value = String(even(Math.round(Math.max(2, cvNum(wEl, 1280)) * a[1] / a[0])));
+        sync();
+        cvRequestPreview({ immediate: false });
+      });
+      if (linkEl) linkEl.addEventListener('click', function () {
+        if (linked()) { ratioEl.value = '自定义'; toast('已解绑：宽高可自由设定', 'info'); }
+        else { ratioEl.value = '16:9'; var a = pairOf(ratioEl.value); hEl.value = String(even(Math.round(Math.max(2, cvNum(wEl, 1280)) * a[1] / a[0]))); toast('已锁定比例：改宽/高会按比例联动', 'info'); }
+        paintLink();
+        sync();
+        cvRequestPreview({ immediate: false });
+      });
+      wEl.addEventListener('input', function () {
+        var w = Math.max(2, cvNum(wEl, 1280));
+        var a = linked() ? pairOf(ratioEl.value) : null;
+        if (a) hEl.value = String(even(Math.round(w * a[1] / a[0])));
+        sync();
+        cvRequestPreview({ immediate: false });
+      });
+      hEl.addEventListener('input', function () {
+        var h = Math.max(2, cvNum(hEl, 720));
+        var a = linked() ? pairOf(ratioEl.value) : null;
+        if (a) wEl.value = String(even(Math.round(h * a[0] / a[1])));
+        sync();
+        cvRequestPreview({ immediate: false });
+      });
+      paintLink();
+    })();
+    onInput('cvPos', function (el) {
+      var prev = cv.params.posMode;
+      cv.params.posMode = String(el.value);
+      // 切换位置基准时把偏移归零：dx/dy 是**相对基准**的偏移，默认 dy=160 是给居中场景的；
+      // 选四角时若沿用旧偏移，内容会被推离角落，看上去"不在对应位置、边上留一大块空白"（2026-10-08 实报）。
+      if (prev !== cv.params.posMode) {
+        cv.params.dx = 0; cv.params.dy = 0;
+        cvWriteBackInputs(['dx', 'dy']);
+      }
+      return true;
+    }, { immediate: true });
     onInput('cvDx', function (el) { cv.params.dx = Math.round(cvNum(el, 0)); return true; });
     onInput('cvDy', function (el) { cv.params.dy = Math.round(cvNum(el, 160)); return true; });
     onInput('cvRadius', function (el) { cv.params.radius = Math.max(0, cvNum(el, 0)); cvWriteBackInputs(['radius']); return true; });
@@ -1313,6 +1360,23 @@
     }).catch(function (e) { toast('删除预设失败：' + ((e && e.message) || e), 'error'); });
   }
 
+  /** 拉伸相关 UI 同步：两行显隐 + 比例下拉与锁链状态（按当前宽高反推，预设加载后也一致） */
+  function cvSyncStretchUI() {
+    var on = !!cv.params.stretch;
+    var r1 = $('cvStretchRatioRow'), r2 = $('cvStretchWH');
+    if (r1) r1.hidden = !on;
+    if (r2) r2.hidden = !on;
+    var ratioEl = $('cvStretchRatio'), linkEl = $('cvStretchLink');
+    if (!ratioEl) return;
+    var rr = '自定义';
+    Object.keys(RESIZE_RATIOS).forEach(function (k) {
+      var a = RESIZE_RATIOS[k];
+      if (a[0] * Number(cv.params.h) === a[1] * Number(cv.params.w)) rr = k;   // 交叉相乘，避开浮点
+    });
+    ratioEl.value = rr;
+    if (linkEl) linkEl.classList.toggle('tl-link--on', rr !== '自定义');
+  }
+
   /** 把参数写回全部控件（用于预设加载与初始化） */
   function cvApplyParamsToInputs() {
     cv.syncing = true;
@@ -1325,8 +1389,8 @@
       set('cvBgBlur', p.bgBlur); set('cvBgBlurVal', p.bgBlur);
       set('cvScale', p.scale); set('cvScaleNum', p.scale);
       var st = $('cvStretch'); if (st) st.checked = !!p.stretch;
-      $('cvStretchRow').hidden = !p.stretch;
       set('cvW', p.w); set('cvH', p.h);
+      cvSyncStretchUI();
       set('cvPos', p.posMode); set('cvDx', p.dx); set('cvDy', p.dy);
       set('cvRadius', p.radius); set('cvRadiusVal', p.radius);
       set('cvBorderW', p.borderW); set('cvBorderWVal', p.borderW);

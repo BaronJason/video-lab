@@ -88,6 +88,7 @@ module.exports = {
       bgKind: VID_RE.test(bgPath) ? 'video' : 'image',
       wmPath: exists(wm) ? wm : '',
       contentW: cw, contentH: ch,
+      duration: Number(info.duration) || 0,
       note: '画布合成 → ' + bgPick + (exists(wm) ? '，含水印' : ''),
     };
   },
@@ -112,8 +113,11 @@ module.exports = {
     const wmIn = d.wmPath ? inputs[2] : null;
     if (wmIn && wmIn.path) chain.addInput(wmIn.path, wmIn.args || []);
 
-    // 背景是循环 / 无限流 → 必须 -shortest，否则输出永不结束
+    // 背景可能是循环 / 无限流（视频 -stream_loop -1、纯色 lavfi）→ 输出级用 `-t` **精确截到内容时长**：
+    // 比 -shortest 确定 —— 后者在「overlay 输出跟着长流走」时兜不住（实测成片被拉长到背景长度）。
+    // 若 canvas 之后还有变速等步骤，作用于的正是这 dur 秒合成画面，语义仍然正确。
     chain.outArg('-shortest');
+    if (d.duration > 0) chain.outArg('-t', String(d.duration));
 
     chain.afterVideo(function (tail, out) {
       return String(plan.filterComplex || '')

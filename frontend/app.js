@@ -3314,6 +3314,7 @@
     _bannerShown = false;
   }
   // 状态栏下载进度（任务按钮左侧）：左侧「更新 vX」+ 中间细进度条 + 右侧百分比
+  // info.label 可覆盖左侧文案（FFmpeg 组件下载用「下载组件」，不写死「更新中」以免误导）
   function showUpdateMini(info) {
     var el = $('updateMini');
     var fill = $('updateMiniFill');
@@ -3323,7 +3324,7 @@
     var p = Math.max(0, Math.min(100, (info && info.percent) || 0));
     var latest = (info && info.latest) || '';
     if (fill) fill.style.width = p + '%';
-    if (lab) lab.textContent = latest ? ('更新 v' + latest) : '更新中…';
+    if (lab) lab.textContent = (info && info.label) || (latest ? ('更新 v' + latest) : '更新中…');
     if (txt) txt.textContent = p + '%';
     el.style.display = 'inline-flex';
   }
@@ -3429,13 +3430,23 @@
       var who = (info && info.missing) ? info.missing : 'FFmpeg / FFprobe';
       toast(who + ' 不可用，请重新下载组件', true);
     });
+    // 组件下载进度：**进度事件自闭环**（done / error 也在这里收尾）——
+    // ⚠ 不能只靠 env_fix_done：那条事件只在「界面点重新下载」的 IPC 路径发出，
+    //   浏览器/HTTP 触发（如运维脚本、自动巡检）或其它入口触发时收不到，
+    //   进度条会永久停在 99%（2026-10-08 实报：HTTP 触发下载后状态栏卡在「更新中… 99%」）。
     if (upd.on_env_fix_progress) upd.on_env_fix_progress(function (info) {
       if (!info) return;
       if (info.phase === 'check') { setStatus('正在检查 FFmpeg 组件…'); return; }
       if (info.phase === 'download') {
         hideUpdateBanner();
-        showUpdateMini({ percent: info.percent });
-        setStatus('正在下载 FFmpeg ' + ((info && info.percent) || 0) + '%');
+        showUpdateMini({ percent: info.percent, label: '下载组件' });
+        setStatus('正在下载 FFmpeg 组件 ' + ((info && info.percent) || 0) + '%');
+        return;
+      }
+      if (info.phase === 'done') { hideUpdateMini(); if (info.auto !== false) setStatus('FFmpeg 组件已就绪'); return; }
+      if (info.phase === 'error') {
+        hideUpdateMini();
+        setStatus('FFmpeg 组件下载失败：' + (info.error || '未知原因'), true);
       }
     });
     if (upd.on_env_fix_done) upd.on_env_fix_done(function (info) {

@@ -117,8 +117,8 @@ function createRunner({ maxDuration, speedThreshold, maxRetry, logger } = {}) {
 
     /**
      * 成片最终验收（唯一实现）：按达标档位判定「是否需要加速 / 倍率多少 / 是否超限」。
-     * 调用方不得再自己算 needSpeed / speedRatio —— 此前两侧各写一份（一边写死 speedThreshold、
-     * 一边 clamp 写死 2.0），口径分叉后实测达标率与理论值对不上，根因即此。
+     * ⚠ 调用方不得再自己算 needSpeed / speedRatio：两侧各写一份（一边写死 speedThreshold、
+     * 一边 clamp 写死 2.0）会让口径分叉，达标率与理论值对不上。
      * @param {number} totalDuration 组合总时长（重复消除等后续改动后须以最终值重新调用）
      * @param {number} okRound       达标时所处的轮次（0 = 未换档）
      * @returns {{needSpeed:boolean, speedRatio:number, exceeded:boolean}}

@@ -60,10 +60,9 @@ function ticksBigOfFile(videoPath) {
 /** video_cache 持久层：VL_CACHE_DB 指向的 cache.db，由主进程注入（backend 的 _spawnEngine）。
  *  库未注入或不可用时返回 null，缓存退化为内存态（不影响出片，只是每次重探）。
  *  收益：全量读为库内全表读（数千条约 3ms），写回只落本次新探测的条目而非重写全量。
- *  ⚠ 不要求库"已存在"（2026-09-27 修正）：`CacheStore.open()` 自己会建目录与库文件，
- *    此前多一道 `existsSync` 前置检查 → **库还没被创建时引擎直接放弃写库**，
- *    使用计数与现场探测结果被静默丢弃（首次运行/新机器/隔离环境必现，只是常规路径下
- *    主进程先建好了库才掩盖了它 —— 由 P5 端到端套件暴露）。 */
+ *  ⚠ 不要加 `existsSync` 前置检查：`CacheStore.open()` 自己会建目录与库文件 ——
+ *    前置检查会让**库还没被创建时引擎直接放弃写库**，使用计数与现场探测结果被静默丢弃
+ *    （首次运行 / 新机器 / 隔离环境必现；常规路径下因主进程先建好了库而被掩盖）。 */
 function openVideoStore() {
   const dbPath = String(process.env.VL_CACHE_DB || '').trim();
   if (!dbPath) return null;
@@ -351,11 +350,11 @@ function selectVideo({ srcPath, track, folderData, excludedPaths, excludedSubGro
   }
 
   // ── 多子组分支（组维度轮询）──
-  // 硬约束（用户定案 2026-10-04）：同一成片内，该源的不同片段必须来自**不同子组**。
+  // **硬约束**：同一成片内，该源的不同片段必须来自**不同子组**。
   // 降重由两条保证：① 组间按组使用计数均衡（subUsageCount 最少优先）
   //                ② 组内按片段使用计数最少优先（selectVideoCandidate 内建）
-  // 旧实现以「组内存在全局从未用过的片段」作组间门槛，导致小组用一次即出局、
-  // 负载全压到最后一个大组（2026-10-04 实报「无可用片段」），已废除。
+  // ⚠ 不要用「组内存在全局从未用过的片段」作组间门槛：小组用一次即出局、
+  //   负载会全压到最后一个大组（表现为「无可用片段」）。
   const excludedSubSet = new Set(excludedSubGroups || []);
   const allGroups = [...folderData.subGroupList];
 
@@ -892,10 +891,10 @@ async function run(ctx, env = process.env) {
   logger.lockAcquired('开始执行拼接任务');
 
   let hasError = false;
-  // 当前加速档位（0 基）：定义在**函数级**，因为除了「档位循环」内部，
-  // 失败诊断（round / fail 事件）也要读它 —— 先前它用 const 定义在 retryCount 循环体内，
-  // 循环外的引用一旦执行就是 `thrStep is not defined`（2026-09-27 实测：第 16 个成片
-  // 首次出现「超阈值未达标」才走到该路径，前 15 个正常，报错后整批中断）。
+  // 当前加速档位（0 基）：必须定义在**函数级** —— 除了「档位循环」内部，
+  // 失败诊断（round / fail 事件）也要读它。
+  // ⚠ 若用 const 定义在 retryCount 循环体内，循环外引用会抛 `thrStep is not defined`
+  //   （只在首个「超阈值未达标」成片才走到该路径，报错后整批中断）。
   let thrStep = 0;
   try {
     // ── 创建输出目录 ──
@@ -965,7 +964,7 @@ async function run(ctx, env = process.env) {
     //   红线：输出时长始终以 maxTotalDuration 封顶（平台规则，超出无法过审）——
     //   加大倍率只放宽「允许的组合时长」，不改输出上限。
     // 「每档轮数」直接取设置页「重试次数」的设定值：设定值即「实际的改档重试轮数」。
-    // 此前用 Math.max(100, ...) 兜底，≤100 的设定值一律被抬成 100 —— 用户填的数形同虚设。
+    // ⚠ 不要用 Math.max(100, ...) 之类兜底：会把 ≤100 的设定值一律抬成 100，用户填的数形同虚设。
     // 档位梯度、允许时长、提前进档一律走 L（base/ladder.js），本模块不保留私有副本。
     const L = ladder.createRunner({
       maxDuration: cfg.maxTotalDuration,
@@ -1106,8 +1105,8 @@ async function run(ctx, env = process.env) {
         if (!allValid) {
           if (retryCount > 0) {
             // 无沿用基础 → 该源选不出片段，替换其它源也补不齐，直接失败。
-            // 文案按真实剩余候选区分成因（2026-10-04：旧文案把「组约束受限」也说成「无合规视频」，
-            // 与素材实况（94 个视频）矛盾，误导排查）。
+            // 文案要按**真实剩余候选**区分成因：⚠ 笼统说「无合规视频」会与素材实况矛盾，误导排查
+            //（「组约束受限」与「素材用尽」是两回事）。
             if (!staleParts.has(failSrcIdx)) {
               const nm = path.basename(sourceRequests[failSrcIdx]);
               const left = countRemain(failSrcIdx, sourceExcludedPaths);
@@ -1195,8 +1194,8 @@ async function run(ctx, env = process.env) {
           const overPct = Math.round((cfg.speedThreshold - 1) * 100);
           const isOver = totalDuration > cfg.maxTotalDuration;
           const gap = isOver ? (totalDuration - cfg.maxTotalDuration) : (cfg.maxTotalDuration - totalDuration);
-          // 源状态按「真实剩余候选数」报告：旧的「仍可用/已耗尽」只反映 exhaustedSrcs 标记，
-          // 候选被排除集挡光时仍会显示「仍可用」，与「无可用片段」的报错自相矛盾（2026-10-04 实报）。
+          // 源状态按「真实剩余候选数」报告：⚠ 只看 exhaustedSrcs 标记会在候选被排除集挡光时
+          // 仍显示「仍可用」，与「无可用片段」的报错自相矛盾。
           const remainOf = (i) => countRemain(i, sourceExcludedPaths);
           const srcStat = sourceRequests.map((p, i) => {
             const nm = path.basename(String(p));
@@ -1219,9 +1218,8 @@ async function run(ctx, env = process.env) {
           userHow = hints.join('；');
         } catch (e3) { /* 诊断失败不影响主流程 */ }
         // 命名前的失败：输出「序号」协议行 —— 后端据此记录 failedIndices，续跑时按序号补做。
-        // ⚠ 顺序很关键（2026-09-27 实报）：**必须先记序号、再写诊断**。
-        //   此前 failIndex 排在诊断之后，而诊断引用了作用域越界的变量（thrStep）抛错 →
-        //   序号从未落盘 → 任务虽然标为失败，续跑却报「没有找到需要完成的成片」，只能整批重做。
+        // ⚠ 顺序很关键：**必须先记序号、再写诊断** —— 诊断一旦抛错（如引用作用域越界的变量），
+        //   序号就没机会落盘 → 任务虽标为失败，续跑却报「没有找到需要完成的成片」，只能整批重做。
         //   诊断属于"锦上添花"，绝不能阻断"记录失败序号"这条主流程。
         logger.failIndex(outIndex, userMsg);
         try {
@@ -1232,8 +1230,8 @@ async function run(ctx, env = process.env) {
             exhausted: Array.from(exhaustedSrcs).map((i) => i + 1) });
         } catch (eDiag) { /* 诊断失败绝不影响失败序号与后续流程 */ }
         // 时长凑不满不是程序 bug：明确归为「素材或配置」，并把可操作建议透给用户
-        // （补素材 / 放宽时长上限），而不是笼统的「反馈日志」。此前未传 hint，落到默认
-        // 「反馈日志」且误归为「程序」，用户看不懂、也不会去补素材或调参数。
+        // （补素材 / 放宽时长上限）。⚠ 不传 hint 会落到默认的「反馈日志」并被误归为「程序」，
+        // 用户看不懂、也不会去补素材或调参数。
         const failHint = userHow
           ? { who: '素材或配置', how: userHow }
           : { who: '程序', how: '若反复出现，请把运行日志（log 目录里的 error-日期.log）反馈以便定位' };
@@ -1268,11 +1266,11 @@ async function run(ctx, env = process.env) {
       let finalOutName = `${nameItems.join('-')}-${suffixStr}${outIndex}.mp4`.replace(/-{2,}/g, '-');
       let finalOut = path.join(outDir, finalOutName);
       // ★ 先写临时名，编码成功后再原子改名：
-      //   此前 ffmpeg 直接写正式名，一旦「编码到一半意外停止」（进程被杀 / 断电 / 编码器崩溃），
+      //   ⚠ 不要直接写正式名：一旦「编码到一半意外停止」（进程被杀 / 断电 / 编码器崩溃），
       //   磁盘上会留下**正式名的半截文件** —— 后果有两层：
       //     ① 用户会把它当成品拿走，但根本放不出来；
       //     ② 续跑按产物反推「还缺哪些序号」时会把它算作已完成 → 该序号被永久跳过且不报错。
-      //   改为临时名后：**正式名 ⇔ 完整可播放产物**，反推逻辑不必再猜。
+      //   用临时名后：**正式名 ⇔ 完整可播放产物**，反推逻辑不必再猜。
       // 临时名 = `<随机>.tmp`（tempNameFor 统一生成）：与正式名完全无关，用户一眼可辨「这不是视频」，
       // 不会被误当成品传给客户；ffmpeg 无法从 `.tmp` 推断容器，故 encArgs 显式 `-f mp4` 强制 mp4 封装。
       const tmpOut = tempNameFor(finalOut);
@@ -1330,7 +1328,7 @@ async function run(ctx, env = process.env) {
       logger.clipDuration(targetDur);
       const { code, stderr } = await runFfmpeg(inputArgs.concat(encArgs), { onProgress: (line) => logger.raw(line) });
       if (code !== 0) {
-        // ffmpeg 的真实报错此前被丢弃（只留「编码失败」）—— 退出码与 stderr 尾部一并带出：
+        // ffmpeg 的真实报错要带出来，不能只留「编码失败」—— 退出码与 stderr 尾部一并带出：
         // 结论进用户视图，完整尾部进诊断通道（任务失败时落运行日志）
         const ffTail = logger.ffmpegTail(stderr);
         logger.diag('ffmpeg.fail', { step: 'batch.encode', n: outIndex, code, tail: ffTail });

@@ -1201,7 +1201,7 @@
           else if (done === cnt) { toast('已全部启动 ' + cnt + ' 个批量复刻脚本', 'ok'); }
         }).catch(function () { done++; });
       });
-      // 已确认启动后才退出选择模式（此前是弹窗前就清空，导致再点另一个按钮无反应）
+      // ⚠ 必须确认启动后才退出选择模式：弹窗前就清空会导致再点另一个按钮无反应
       state.selectMode = false; state.selectedLogPaths = {};
       buildLogList();
     });
@@ -2389,7 +2389,7 @@
     }).catch(function (e) { toast('打开失败：' + e.message, true); });
   }
   // 用系统默认程序打开文件（用于「打开文件 / 打开成片 / 打开片段 / 打开日志」）——
-  // 与 openInShell 的定位语义区分开：此前两者都调 open_folder_select，导致「打开文件」实际只是定位
+  // 与 openInShell 的定位语义区分开：⚠ 两者都调 open_folder_select 会让「打开文件」实际只是定位
   function openFileInShell(p) {
     return call('open_path', p).then(function (r) {
       if (r && r.ok === false) { toast('打开失败：' + (r.error || '文件不存在'), true); return; }
@@ -2439,7 +2439,7 @@
       return;
     }
     // 进度可能来自别的窗口（设置页「维护-重建 / 刷新预缓存」）—— 收到就主动显示，
-    // 否则本窗口的迷你进度条一直隐藏，用户看不到任何进度（2026-10-07 实报）。
+    // ⚠ 否则本窗口的迷你进度条一直隐藏，用户看不到任何进度。
     if (el.style.display === 'none') showProbeMini();
     var lb = $('probeMiniLabel'); if (lb) lb.textContent = '预检测 ' + done + '/' + total;
     var fl = $('probeMiniFill'); if (fl) fl.style.width = pct + '%';
@@ -2891,7 +2891,7 @@
           return;
         }
         // 展开/切换：整个流程（状态变更 + 原项目收回动画 + 重建展开）都放到确认通过之后执行。
-        // ⚠ 必须先确认再动：此前状态与收回动画在确认前就跑，用户点「取消」会看到动画进行一半突然跳回
+        // ⚠ 必须先确认再动：否则状态与收回动画在确认前就跑，点「取消」会看到动画进行一半突然跳回
         //。
         var doExpand = function () {
           state.expandedProject = pname;
@@ -3433,7 +3433,7 @@
     // 组件下载进度：**进度事件自闭环**（done / error 也在这里收尾）——
     // ⚠ 不能只靠 env_fix_done：那条事件只在「界面点重新下载」的 IPC 路径发出，
     //   浏览器/HTTP 触发（如运维脚本、自动巡检）或其它入口触发时收不到，
-    //   进度条会永久停在 99%（2026-10-08 实报：HTTP 触发下载后状态栏卡在「更新中… 99%」）。
+    //   进度条会永久停在 99%（HTTP 通道触发的下载就收不到收尾事件）。
     if (upd.on_env_fix_progress) upd.on_env_fix_progress(function (info) {
       if (!info) return;
       if (info.phase === 'check') { setStatus('正在检查 FFmpeg 组件…'); return; }
@@ -3456,7 +3456,7 @@
         setStatus('FFmpeg 下载失败：' + ((info && (info.error || info.message)) || '未知原因'), true);
         return;
       }
-      // 启动自动下载成功：**静默**（用户定案 10-08「不需要确认」）—— 只更新状态栏，不弹横幅
+      // 启动自动下载成功：**静默**（不弹确认、不弹横幅）—— 只更新状态栏
       if (info.auto) { setStatus('FFmpeg 组件已就绪'); checkEnv(); return; }
       showUpdateBanner({ __custom: {
         source: 'envfix',
@@ -3649,7 +3649,7 @@
           mark.className = 'status-bar__envwarn';
           mark.style.display = '';
         } else if (miss.length) {
-          // 组件缺失 = 应用正在自动下载（不再引导用户去 README 手动安装 —— 用户定案 2026-10-08）
+          // 组件缺失 = 应用正在自动下载（不要引导用户手动安装组件）
           mark.textContent = '运行组件未就绪：' + miss.join('、') + '（正在自动下载）';
           mark.title = '应用会自动下载所需组件；若长时间未就绪，点上方提示条重新下载';
           mark.className = 'status-bar__envwarn';
@@ -5405,7 +5405,7 @@
       if (Object.prototype.hasOwnProperty.call(maskState.rawSel, d) && maskState.rawSel[d].length) vids[d] = maskState.rawSel[d];
     }
     // 勾选遮罩（跨文件夹按 mov 名称前缀分组选择）：完整路径交给脚本精筛，
-    // 所在目录去重后作为遮罩目录；修复此前 themeSel 未定义导致任务参数缺失的问题
+    // 所在目录去重后作为遮罩目录（原实现漏传 themeSel，会导致任务参数缺失）
     var selMaskFull = Object.keys(maskState.maskSel);
     var maskDirsSet = {};
     selMaskFull.forEach(function (fp) { maskDirsSet[String(fp).replace(/[\\/][^\\/]+$/, '')] = true; });

@@ -864,7 +864,7 @@
         if (!(r && r.ok)) toast('打开失败：' + ((r && r.error) || '路径不存在'), true);
       }).catch(function () { setStatus('打开失败', false); });
     });
-    // 日志查看器（方案 §七）：文件类型 + 级别 + 关键词过滤
+    // 日志查看器：文件类型 + 级别 + 关键词过滤
     var btnLogView = document.getElementById('btnLogViewLoad');
     if (btnLogView && api && api.read_log) btnLogView.addEventListener('click', function () {
       var file = (document.getElementById('logViewFile') || {}).value || 'app';
@@ -890,7 +890,7 @@
         }).catch(function () {});
       });
     }
-    // 一键诊断包（方案 §七）：相关日志行 + env 快照 + 产物清单 → 单个 txt
+    // 一键诊断包：相关日志行 + env 快照 + 产物清单 → 单个 txt
     // 第二个入口为「路径打码」版：外发前用，盘符与各级目录折叠为 <路径>，只保留文件名。
     function bindDiagButton(btnId, maskPaths) {
       var btn = document.getElementById(btnId);

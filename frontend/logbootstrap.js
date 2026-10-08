@@ -1,5 +1,5 @@
 // -*- coding: utf-8 -*-
-// 前端日志引导（方案《日志体系方案.md》§五/§六）：全部窗口共用，替代各页面自带的重复钩子。
+// 前端日志引导：全部窗口共用，替代各页面自带的重复钩子。
 //
 // 职责：
 //   1. 全局兜底三件套：error / unhandledrejection / console.error —— 一律落盘（report_ui_error），
@@ -15,7 +15,7 @@
 
   var _inReport = false;
 
-  // 当前任务 id：方案 §七 遗留项 —— VL_TASK_ID 原先只注入引擎，前端异常落盘后无法与任务日志关联。
+  // 当前任务 id：VL_TASK_ID 原先只注入引擎，前端异常落盘后无法与任务日志关联 —— 此处补齐前端侧。
   // 页面在"当前任务"变化时调用 window.vlSetTaskId(id)（任务窗口最明确）；未设置时保持空，不臆造。
   var _taskId = '';
   window.vlSetTaskId = function (id) { _taskId = String(id == null ? '' : id).slice(0, 80); };

@@ -311,7 +311,7 @@ async function run(ctx, env = process.env) {
           '-i', j.vidPath, '-i', srcForDur,
           '-filter_complex', '[1:v]setpts=PTS-STARTPTS[ov];[0:v][ov]overlay=0:0[outv]',
           // 音频来源：遮罩自带音轨时用遮罩音轨；遮罩没有音频流时回退原视频音轨，
-          // 否则成片会完全没有声音（此前固定取 1:a?，遮罩无声即输出无音轨）
+          // ⚠ 否则成片会完全没有声音（固定取 1:a? 时，遮罩无声即输出无音轨）
           '-map', '[outv]', '-map', maskHasAudio ? '1:a?' : '0:a?',
           '-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'vbr', '-cq', '25',
           '-c:a', 'aac', '-b:a', '192k',
@@ -354,7 +354,7 @@ async function run(ctx, env = process.env) {
           fs.appendFileSync(logFile, lines.join('\r\n') + '\r\n', 'utf8');
         }
       } else {
-        // 合成失败：把 ffmpeg 的 stderr 尾部带出来（此前只有一句「退出码 N」）
+        // 合成失败：把 ffmpeg 的 stderr 尾部带出来（不能只留一句「退出码 N」）
         if (maskFfTail) logger.diag('ffmpeg.fail', { step: 'mask.synth', name: j.outName, code, tail: maskFfTail });
         logger.fail(j.outName, `编码失败（退出码 ${code}）`);
         hasError = true;

@@ -179,7 +179,7 @@
     var initRect = sidebar.getBoundingClientRect();
     if (initRect.width > 0) applyWidth(initRect.width);
 
-    // 无「搜索让位」机制：女仆/装饰在点击与输入搜索时均保持显示（用户定案 2026-09-21）
+    // 无「搜索让位」机制：女仆/装饰在点击与输入搜索时均保持显示
 
     // ── dispose：移除本皮肤所有装饰元素、投影属性与监听，完整还原 ──
     return function dispose() {

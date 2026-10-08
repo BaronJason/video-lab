@@ -307,22 +307,21 @@ function moveStorage(fromDir, toDir) {
   }
 }
 function defaultRoot() { return path.dirname(projectDir()); }
-// 已废弃的配置键：PS1 双轨期遗留（scripts_dir = 旧脚本目录、use_node_engine = 引擎开关）。
+// 已废弃的配置键（写入设置库前一律剔除）：scripts_dir（旧脚本目录）、use_node_engine（引擎开关）。
 // 代码已不再读取，但不显式剔除就会随 saveConfig 一直写回磁盘，成为永久残留。
 const OBSOLETE_CONFIG_KEYS = ['scripts_dir', 'use_node_engine'];
 // ── 配置读取：settings.db 为唯一业务来源，config.json 不参与业务键读取 ──
-// 用户定案：软件读 setting 而不读 config，**拒绝回退** —— config 会被逐步简化，
-// 任何「config 缺失就回退读它」的路径都会在未来变成取到 undefined 的隐患（表现为设置莫名丢失）。
-// 因此：业务键一律只从 settings.db 取；库里没有就用 DEFAULT_CONFIG 的默认值，绝不回头读 config.json。
+// ⚠ 业务键一律只从 settings.db 取，**不得回退读 config.json**：config 会被逐步简化，
+// 任何「config 缺失就回退读它」的路径都会变成取到 undefined 的隐患（表现为设置莫名丢失）；
+// 库里没有就用 DEFAULT_CONFIG 的默认值。
 // config.json 仍保留并写入全部键，但只为「回滚旧版本」服务（旧版本读 config.json 时能拿到完整值）。
 const CONFIG_ANCHOR_KEYS = ['config_storage'];   // 唯一仍需从 config.json 读的键
 
 // ── 批量模式的工作目录：唯一真相 = `config.batch.root` ──
-// 用户定案（2026-09-26）：工作路径本就是**批量模式**的工作目录，不是整个软件的，各模式的工作目录
-// 由各模式自己承接（遮罩已有自己的 `mask.root`）。故顶层 `root` 迁入 `batch.root` 与之一致。
+// 工作路径属于**批量模式**而非整个软件：各模式的工作目录由各模式自己承接（遮罩有自己的 `mask.root`）。
 // 读取一律用 getBatchRoot()；写入一律用 setBatchRoot()。
-// 顶层 `root` 只在「落盘 config.json」时作为**兼容镜像**保留 —— 旧版本回滚仍读它；
-// 它**不再写入 settings.db**（否则下次 loadConfig 读回来会形成两个真相，见 saveConfig）。
+// 顶层 `root` 只在「落盘 config.json」时作为**兼容镜像**保留（旧版本回滚仍读它）；
+// 它**不写入 settings.db**（否则下次 loadConfig 读回来会形成两个真相，见 saveConfig）。
 function getBatchRoot(cfg) {
   const b = cfg && cfg.batch;
   return (b && typeof b === 'object' && typeof b.root === 'string') ? b.root.trim() : '';
@@ -340,9 +339,9 @@ let _pendingRootMigration = '';
 let _pendingRootCleanup = false;
 
 // 直读 settings.db 的 app scope（**不依赖 api**）。
-// ⚠ 必需存在的原因（2026-09-26 实测事故）：启动早期要先用 settings 里的 root 才能定位工作目录，
-//   而 api 的构造又必须先有 root —— 若此时只能靠 api 读设置，就形成死循环，root 只能取默认值，
-//   表现为「工作目录被解析成程序目录的上一级」（实测 root 变成 D:\Tools，冷启动全量扫描 29.7 秒）。
+// ⚠ 必需存在的原因：启动早期要先用 settings 里的 root 才能定位工作目录，而 api 的构造又必须先有 root ——
+//   若此时只能靠 api 读设置，就形成死循环，root 只能取默认值，
+//   表现为「工作目录被解析成程序目录的上一级」（进而在该盘做全量扫描，冷启动被拖到数十秒）。
 //   故本函数直接从 storageDir() 派生库路径读一次，专供启动首阶段使用。
 //   库读不到一律返回 null（调用方保持默认值，不回退 config.json）。
 function readSettingsAppDirect() {
@@ -416,7 +415,7 @@ function loadConfig() {
     //    （详规见 seedSettingsFromConfig 注释）。
     const seed = seedSettingsFromConfig(disk, app);
     for (const k of Object.keys(seed)) cfg[k] = seed[k];
-    // ④ 兼容镜像：迁移后 settings 里已无顶层 root，用 batch.root 回填 ——
+    // ④ 兼容镜像：settings 里已无顶层 root，用 batch.root 回填 ——
     //    保证 config.json 的 root 键跟随更新（旧版本回滚时读到的是**当前**工作路径）。
     //    该镜像只在写 config.json 时使用，不会写回 settings（见 saveConfig）。
     if (!Object.prototype.hasOwnProperty.call(app, 'root')) {
@@ -426,7 +425,7 @@ function loadConfig() {
   } else {
     // 设置库确实读不到（api 与直读两条路都失败）—— 保持默认值，不回退 config.json。
     // ⚠ 此处**不可引用 api**：顶层首调时 const api 尚在 TDZ，即使 typeof 也会抛 ReferenceError
-    //   （曾因此让整个启动崩溃）。readSettingsApp 内部已做 try 探测，走到这里就是真读不到。
+    //   （会让整个启动崩溃）。readSettingsApp 内部已做 try 探测，走到这里就是真读不到。
     try { runLog.sys('app.config', '设置库不可用：本次按默认值运行（不回退 config.json）', {}); } catch (e) {}
   }
   // ④ 锚点键：仅 config_storage（定位数据目录所必需，库路径由它派生，无法自举）
@@ -457,7 +456,7 @@ function readConfigDisk() {
 // ⚠ 不参与引导的键（SEED_EXCLUDE_KEYS）必须显式排除，否则会出现「删了又被灌回来」：
 //   顶层 `root` 是 config.json 的**兼容镜像**（真相在 batch.root），迁移时会被删掉；
 //   而 loadConfig() 每次调用（如 get_settings）都会跑一次本引导 —— 若 root 参与引导，
-//   它会被 config.json 的同名键立刻灌回 settings（2026-09-26 实测：删键后 536ms 就被灌回）。
+//   它会被 config.json 的同名键立刻灌回 settings（删掉马上又回来）。
 const SEED_EXCLUDE_KEYS = CONFIG_ANCHOR_KEYS.concat(OBSOLETE_CONFIG_KEYS).concat([
   'root',   // 兼容镜像键：只写 config.json，真相是 batch.root
 ]);
@@ -480,7 +479,7 @@ function seedSettingsFromConfig(disk, app) {
 // 保存配置：以「实际变更的键」为单位落盘，避免每次保存全量重写两侧。
 //  ① settings.db（唯一读取来源）：写入本次变更的键；
 //  ② config.json（仅为回滚旧版本而留的兼容快照）：**只更新本文件原本就有的键** ——
-//     代码新引入的键不写进去（旧版本不认识它们，写了只是污染；用户定案：软件本身没有的键就不要添加）。
+//     代码新引入的键不写进去（旧版本不认识它们，写了只是污染）。
 // 变更判定以 _configBaseline（最近一次落盘的快照）为基准，而非入参本身 —— 调用方普遍
 // 先改内存 config 再 saveConfig(config)，若拿入参自比会得出「零变更」。
 // 返回本次实际变更的键名数组（供调用方按需广播/重排定时器）。
@@ -543,7 +542,7 @@ function _configValueEqual(a, b) {
 // 落盘统一由 saveConfig 完成：settings.db 是唯一读取来源，config.json 仅作旧版本兼容快照
 // （只更新它原本就有的键）。故此处只做「把提交值合入 cfg」，不再区分新旧键、不再单独落库。
 // ⚠ 必须是模块级函数：HTTP 版 save_settings（buildHttpExtraRoutes 内）与 IPC 版都要调用，
-//    若定义在 registerIpc 内则 HTTP 路径取不到（曾因此报 mergeAppSettings is not defined，
+//    若定义在 registerIpc 内则 HTTP 路径取不到（会报 mergeAppSettings is not defined，
 //    浏览器端保存应用级设置静默失败）。
 function mergeAppSettings(cfg, s) {
   if (!s || typeof s !== 'object') return cfg;
@@ -738,7 +737,7 @@ function trayIcon() {
   return _trayIcon;
 }
 function showMainWindow() {
-  // 托盘唤出计时：用户反馈「点托盘要等很久，窗口迟迟不出现」。
+  // 托盘唤出计时：用于定位「点托盘要等很久、窗口迟迟不出现」。
   // 主进程只能测到 show() 调用本身返回的耗时；窗口是否真的画出来要看渲染侧首帧，
   // 故同时向渲染进程要一次 rAF 双帧确认，两个数字分开记 —— 若 show() 很快而首帧很慢，
   // 说明卡在渲染/合成（主进程事件循环被占住时最典型）。
@@ -773,7 +772,7 @@ function createTray() {
   tray = new Tray(trayIcon());
   tray.setToolTip('Video Lab');
   // 左键直接唤起主窗口；右键唤出自绘托盘菜单
-  // ⚠ 点击留痕放在回调**最前**：若用户反馈「图标在、点不动」，这两条能区分两种情况 ——
+  // ⚠ 点击留痕放在回调**最前**：出现「图标在、点不动」时，这两条能区分两种情况 ——
   //   ① 日志里没有「托盘收到点击」→ 事件根本没送达主进程（托盘对象异常）
   //   ② 有「托盘收到点击」但没有后续「托盘唤出主窗口」→ 回调执行了但被卡在 show() 之前
   tray.on('click', () => {
@@ -862,7 +861,7 @@ async function showTrayMenu() {
   trayMenuWin.focus();
 }
 // 视频处理工具窗口：独立于主窗口的**非模态**窗口（可与主窗口并排、同时操作；
-// 关掉窗口不影响正在跑的任务；任务结果回主窗口任务列表查看 —— 计划 §七）
+// 关掉窗口不影响正在跑的任务；任务结果回主窗口任务列表查看）
 let toolWin = null;
 function createToolWindow() {
   // 复用已有窗口：关闭时只 hide 不销毁，这里需显式 show 回前台（focus 不会让隐藏窗口出现）
@@ -1041,7 +1040,7 @@ function sendToSettings(channel, payload) {
   try { if (mainWin && !mainWin.isDestroyed() && mainWin.webContents && !mainWin.webContents.isDestroyed()) mainWin.webContents.send(channel, payload); } catch (e) {}
   if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll(channel, payload);
 }
-// 更新链路日志：按用户要求不再写入 Cache/update/update.log 缓存，保留调用点为 no-op
+// 更新链路日志：不落盘（保留调用点，便于需要时接回）
 function writeUpdateLog(line) {}
 // Electron net 请求：走 Chromium 网络栈（跟随系统代理），自动跟随重定向
 function netGet(url, timeoutMs) {
@@ -1456,7 +1455,7 @@ async function applyUpdate() {
 // 浏览器侧请求这些路由时，复用与 ipcMain handler 相同的逻辑
 function buildHttpExtraRoutes() {
   return {
-    // ── agent 友好接口（计划 §8.3）：三条均为纯新增，不改动任何现有接口 ──
+    // ── agent 友好接口：三条均为纯新增，不改动任何现有接口 ──
     // 读运行日志：任务记录/标记/成片都可能被清除，运行日志是事后唯一证据
     get_runlog: (args) => {
       const o = (args && args[0]) || {};
@@ -1680,7 +1679,7 @@ function registerIpc() {
   ipcMain.handle('branch_other_txt', (e, p) => api.branchOtherTxt(p));
   ipcMain.handle('precheck', (e, paths, excludes) => api.precheck(paths, excludes));
   // 预检测重建/刷新的进度：发给调用方 + **所有窗口**（主界面状态栏有迷你进度条）——
-  // 只在设置页点「维护-重建」时，若只发 sender，主界面收不到任何进度（2026-10-07 实报）。
+  // ⚠ 必须广播到所有窗口：只在设置页点「维护-重建」时，若只发 sender，主界面收不到任何进度。
   const broadcastResetProgress = (sender, s) => {
     try { if (sender) sender.send('reset_progress', s); } catch (err) {}
     for (const w of BrowserWindow.getAllWindows()) { try { w.webContents.send('reset_progress', s); } catch (err) {} }
@@ -1981,7 +1980,7 @@ function registerIpc() {
     return { ok: true };
   });
   // 设置页：通用「选择目录」对话框（parent 取调用方窗口，引导窗口/设置窗口/主窗口通用）
-  let settingsPickingDir = false; // 目录选择中的互斥标记（此前被误删，导致 pick_directory 报 ReferenceError）
+  let settingsPickingDir = false; // 目录选择中的互斥标记（勿删：pick_directory 依赖它）
   ipcMain.handle('pick_directory', async (e, title, defaultPath) => {
     settingsPickingDir = true;
     try {
@@ -2015,7 +2014,7 @@ function registerIpc() {
   // 运行日志目录（设置页「维护」区展示与打开）
   ipcMain.handle('get_log_dir', () => ({ ok: true, dir: runLog.getDir() }));
   // 自愈目录落盘：`api.config` 是构造期浅拷贝（backend 构造里 Object.assign），与顶层 config **不是同一对象**
-  // —— ensureFfmpeg 只改 api 侧内存，不显式写库的话下载目录重启即丢（既有缺陷，2026-10-08 修）。
+  // ⚠ ensureFfmpeg 只改 api 侧内存，不显式写库的话下载目录重启即丢，必须在这里回写。
   function persistFfmpegDir(dir) {
     if (!dir) return;
     config.ffmpeg_dir = dir;
@@ -2039,13 +2038,13 @@ function registerIpc() {
     if (r.ok) persistFfmpegDir(r.dir);
     return r;
   });
-  // 启动检测 FFmpeg 环境：**确证缺失即静默自动下载**（用户定案 2026-10-08）
+  // 启动检测 FFmpeg 环境：**确证缺失即静默自动下载**
   //   · 组件不内置只是为了省体积，不该把「体积优化」转成用户的决策负担 → 不弹确认；
   //   · 下载进度走状态栏（env_fix_progress，见 api.onFfmpegProgress）；
   //   · 只有**下载失败**才提示（横幅可重试 + 吐司），此时才需要用户介入。
   // ⚠ 用异步版（不阻塞事件循环）；且延迟到窗口就绪之后再跑，避免与首帧竞争
   // ⚠ 冷启动首次加载 ffmpeg 可能超时 → probeFailed：此时**不下载也不弹窗**，延后 10 秒重探一次 ——
-  //   早先把「超时」当成「缺滤镜」，害得冷启动必然误报「FFmpeg 组件不完整」（热态重跑却正常）
+  //   ⚠ 不要把「超时」当成「缺滤镜」：否则冷启动必然误报「FFmpeg 组件不完整」（热态重跑却正常）
   runAfterWindowLoad(() => {
     const probe = (allowRetry) => {
       api.checkEnvAsync().then((env) => {
@@ -2068,7 +2067,7 @@ function registerIpc() {
     };
     setTimeout(() => probe(true), 500);
   });
-  ipcMain.handle('list_dir', async (e, dir) => api.listDir(dir));   // 工具页目录浏览对话框（preload 已定义，此前漏注册）
+  ipcMain.handle('list_dir', async (e, dir) => api.listDir(dir));   // 工具页目录浏览对话框（preload 已定义，此处必须注册）
   ipcMain.handle('open_path', async (e, p) => { const target = path.resolve(p); if (fs.existsSync(target)) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '路径不存在' }; });
   ipcMain.handle('open_parent', async (e, p) => { const target = path.dirname(path.resolve(p)); if (fs.existsSync(target)) { const err = await shell.openPath(target); return err ? { ok: false, error: err } : { ok: true }; } return { ok: false, error: '路径不存在' }; });
   // 打开「文件夹」类操作的统一入口，按目标类型分流：
@@ -2219,7 +2218,7 @@ function createWindow() {
   mainWin = new BrowserWindow({ title: 'Video Lab', width: 1360, height: 860, minWidth: 1120, minHeight: 700, frame: false, show: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false, nodeIntegrationInSubFrames: true } });
   mainWin.loadFile(path.join(__dirname, 'frontend', 'index.html'));
   // 页面加载完成即放行「窗口加载后」初始化。注册必须紧跟 loadFile：
-  // 此前是在第一次 runAfterWindowLoad 调用时才注册，而那时页面往往已经加载完，
+  // ⚠ 若推迟到第一次 runAfterWindowLoad 调用时才注册，那时页面往往已经加载完，
   // 监听永不触发 → 只能等 3 秒兜底 → 托盘 / HTTP 就绪被无谓推迟约 2.7 秒。
   try {
     mainWin.webContents.once('did-finish-load', () => {
@@ -2231,13 +2230,13 @@ function createWindow() {
   // 扫描（缓存未命中时）全程后台进行，不推迟显示、也不弹扫描小窗。
   mainWin.once('ready-to-show', () => {
     logTiming('主窗口 ready-to-show（首帧可显示）');
-    // 冷启动定位用：把「回调返回」与 show() 各自夹出来。冷态曾出现 ready-to-show 之后
-    // 事件循环被冻 24 秒（3 秒兜底定时器被推迟到 25.3 秒才跑），此处三条埋点可一次判定
+    // 冷启动定位用：把「回调返回」与 show() 各自夹出来。冷态出现过 ready-to-show 之后
+    // 事件循环被冻数十秒（3 秒兜底定时器被推迟到二十多秒才跑）的情形 —— 此处三条埋点可一次判定
     // 卡点究竟在 show() 之内、还是其后的初始化里。
     setImmediate(() => logTiming('ready-to-show 回调后 setImmediate'));
     if (IS_AUTOSTART) return;
     // 不再因扫描而推迟显示：扫描全程后台进行，窗口首帧就绪即显示，
-    // 列表由后台扫描完成后自动填充。"等扫描完再显示主窗口"正是此前启动冻结感的来源。
+    // 列表由后台扫描完成后自动填充。⚠ 不要"等扫描完再显示主窗口"：那是启动冻结感的来源。
     logTiming('即将 show()');
     mainWin.show();
     logTiming('show() 返回');
@@ -2312,8 +2311,7 @@ function closeGuidePanel() {
 async function ensureConfig() {
     const br = getBatchRoot(config);   // 工作目录取自批量模式的 batch.root
     // ⚠ 工作目录可能在机械盘：主进程**不得**同步 stat —— 冷态首次访问会冻结事件循环
-    //   （2026-09-26 冷启动实测 ready-to-show 之后卡 124 秒，正是此处 existsSync/statSync）。
-    //   改用 fs.promises 异步判断，且只判一次（原实现对同一路径做了两次）。
+    //   （曾出现 ready-to-show 之后卡上百秒）。改用 fs.promises 异步判断，且只判一次。
     let ok = false;
     if (br) {
       try { const st = await fs.promises.stat(br); ok = st.isDirectory(); } catch (e) { ok = false; }
@@ -2373,8 +2371,8 @@ app.whenReady().then(async () => {
     if (!getBatchRoot(config)) return;        // 未配置工作路径：无扫描可言
     // 缓存未命中（首次启动 / 工作目录结构变化）时才预热全量扫描，实测冷态可达 20-30 秒。
     // 扫描全程后台：主窗口立即显示、界面可交互 —— 不弹小窗、也不推迟显示
-    //（此前"弹小窗 + 等扫描完才显示主窗口"正是启动冻结感的来源）。
-    // ⚠ 判定必须走**异步版**（isScanCacheFreshAsync）：同步版会在机械盘冷态首次访问时冻结主进程达 117 秒。
+    // ⚠ 不要"弹小窗 + 等扫描完才显示主窗口"：那是启动冻结感的来源。
+    // ⚠ 判定必须走**异步版**（isScanCacheFreshAsync）：同步版会在机械盘冷态首次访问时冻结主进程上百秒。
     const runWarmScan = () => {
       logTiming('启动需要全量扫描（后台进行）');
       const _s = process.hrtime.bigint();
@@ -2401,8 +2399,8 @@ app.whenReady().then(async () => {
     if (IS_AUTOSTART && mainWin && !mainWin.isDestroyed()) mainWin.hide();
     logTiming('窗口加载后：托盘 / HTTP 就绪');
     // 数据缓存失效清理：**窗口就绪后 15 秒**的空闲期增量执行（限量 600 条 + 细让路 + 批间小睡）。
-    // 绝不放在启动关键路径：冷态全量核验近万条机械盘路径曾把事件循环冻住 49.5 秒（2026-09-26 实测，
-    // 窗口 1.4 秒已画出来、用户却点不动近一分钟）。清理是维护任务，摊到多次启动完成即可。
+    // ⚠ 绝不放在启动关键路径：冷态全量核验近万条机械盘路径会把事件循环冻住几十秒
+    //   （窗口已画出来、用户却点不动近一分钟）。清理是维护任务，摊到多次启动完成即可。
     // 启动后空闲期（15s）：先做 video_cache 失效核验，再做缓存治理
     // （保守失效 + 保留期 + 释放显著时 VACUUM）—— 恢复默认「用户无需手动清缓存」
     setTimeout(() => {

@@ -477,7 +477,7 @@
         return;
       }
       // 视频处理任务：产物即被覆盖的源视频，删除只允许「仅从列表移除」——
-      // 用轻量确认气泡说明清楚，不提供任何会碰文件的选项（计划 §5.3）
+      // 用轻量确认气泡说明清楚，不提供任何会碰文件的选项
       if (cur.type === 'tool') {
         confirmPopover({
           title: '删除任务记录',
@@ -1009,7 +1009,7 @@
     tasks = tasks || [];
     state.tasks = tasks;   // 留一份快照：清除弹窗要据此判断清单里是否含视频处理任务
     // 把「当前任务」告知日志兜底：前端异常落盘时会带上该 id，便于与任务日志/引擎日志串链
-    // （方案 §七 遗留项：VL_TASK_ID 原先只注入引擎）。优先进行中/暂停的任务，其次最近一条。
+    // 。优先进行中/暂停的任务，其次最近一条。
     try {
       if (window.vlSetTaskId) {
         var act = tasks.filter(function (x) { return x && (x.status === 'running' || x.status === 'paused'); })[0] || tasks[0];

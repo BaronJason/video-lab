@@ -409,8 +409,7 @@ class CacheStore {
     const verifyTtlMs = (opts && opts.verifyTtlMs != null) ? Number(opts.verifyTtlMs) : VERIFY_TTL_MS;
     const limit = Number(opts && opts.limit) > 0 ? Number(opts.limit) : 0;
     // **关键**：只把「超过校验 TTL 未验」的条目列为待核验，并用 SQL 限量取出。
-    // 原来无差别地把全表（本机实测 9985 条）拉进内存逐条核验 —— 冷态在机械盘上要几十秒
-    // （2026-09-26 实测把主进程事件循环冻了 49.5 秒）。
+    // ⚠ 不能无差别地把全表拉进内存逐条核验 —— 冷态在机械盘上要几十秒，会冻住主进程事件循环。
     let rows = [];
     try {
       // missing 的条目**总是**核验（数量少，且「文件被放回 → 复活并保留使用计数」依赖它），
@@ -695,7 +694,7 @@ class CacheStore {
 
   // ── 缓存治理（自动/手动清理 · 体积与构成统计）──
   // 为什么需要：库体积的大头是 clip_index（每行存「整目录的视频清单」）与 txt_content（TXT 全文），
-  // 而它们此前既无「文件是否存在」的判定、也无删除接口 —— 只要工作路径变化或测试跑过一次，
+  // 而它们既无「文件是否存在」的判定、也无删除接口 —— 只要工作路径变化或测试跑过一次，
   // 那些条目就永久驻留。以下接口供 backend 的「保守清理」（只删已失效路径）与设置页统计使用。
   listClips(prefix) {
     return this.open().prepare('SELECT dir FROM clip_index WHERE dir LIKE ?').all(String(prefix || '') + '%')

@@ -28,7 +28,7 @@ const DIAG_PREFIX = '@@VLDIAG@@';
 class Logger {
   constructor({ stream = process.stdout, diagLimit = 3000, taskId = '' } = {}) {
     this._out = stream;
-    // taskId 贯穿（方案 §五.4）：backend 经 env 注入 VL_TASK_ID，诊断事件携带同一 id，
+    // taskId 贯穿：backend 经 env 注入 VL_TASK_ID，诊断事件携带同一 id，
     // 任务失败随 task.diag 落运行日志 → 跨进程可用同一个 id 串出完整链路。
     this._taskId = String(taskId || process.env.VL_TASK_ID || '');
     // 诊断环形缓冲：只驻内存，不进 stdout —— 任务窗口（用户视图）保持简洁；

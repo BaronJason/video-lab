@@ -194,7 +194,7 @@ function directVideos(dir) {
 
 /**
  * 读取「原配置」的素材池 —— 复刻的替换候选应当来自**配置里声明的素材目录**，
- * 而不是"缺失片段所在的那一层子目录"。理由（用户定案）：只换同目录编号 ≈ 换汤不换药，
+ * 而不是"缺失片段所在的那一层子目录"。理由：只换同目录编号 ≈ 换汤不换药，
  * 「换了不如用原配置重跑一遍批量」；只有从配置素材池里挑新片段才是真正的换新内容。
  * 配置正本位于拼接日志同目录（引擎会把配置移入成片文件夹作为正本）。
  * 语法与批量引擎完全一致：普通行 = 素材目录（递归）、`=` 前缀 = 不轮询子目录、`-` 前缀 = 排除、
@@ -544,7 +544,7 @@ async function selectVariancePaths({
   const replaceDetails = [];
   const equivalentDetails = [];
   const skippedOverCap = [];   // 会把占比推过上限而暂缓替换的位置（保下限时回补）
-  // 策略（用户定案）：① 第一段永不主动替换（批量拼接重试的硬规则）② 越靠后越优先替换
+  // 策略：① 第一段永不主动替换（批量拼接重试的硬规则）② 越靠后越优先替换
   //   ③ 上限优先于顺序：靠后位置会超上限就跳过、继续往前找能在上限内完成的位置
   //   ④ 下限优先于上限：往前找遍仍不达标时回补，允许略微超上限（宁多不少）
 
@@ -975,7 +975,7 @@ async function run(ctx, env = process.env) {
       // 占比口径统一走 calcDedupRatio（唯一真相）：分母 = 实际播放列表时长和，分子 = 非等效差异位的播放时长。
       // 旧口径对 baseVideos 逐位 probe：原文件已不存在时 od=0，缺失位（本例 89.3s）从分母蒸发
       // → 「下限高能过、下限低反而失败」的悖论（选位账 37.2% / 校验账 33.2%）。
-      // 下限未达标 → 先回补（定案「宁多不少」），找遍仍不达标才不出片；超上限 → 告警。
+      // 下限未达标 → 先回补（宁多不少），找遍仍不达标才不出片；超上限 → 告警。
       if (mode === 2 && job.videos.length) {
         const baseVideos = job.origVideos || job.videos;
         const eqSet = new Set(job.missingEquivalentIndices || []);
@@ -983,7 +983,7 @@ async function run(ctx, env = process.env) {
         const minTxt = cfg.dedupMinOn ? round1(cfg.dedupMin * 100) + '%' : '未启用';
         const maxTxt = (cfg.dedupMaxOn && cfg.dedupMax > 0) ? round1(cfg.dedupMax * 100) + '%' : '未启用';
 
-        // 回补（用户定案 2026-09-23「④ 下限优先于上限：宁多不少，找遍仍不达标则回补」）：
+        // 回补（下限优先于上限：宁多不少，找遍仍不达标则回补）：
         // 按「越靠后越优先」对「尚未与原版不同的位 / 等效填充位」追加替换，直到达标或候选枯竭。
         // 等效位被换成非等效后要移出 eqSet，否则校验仍把它当"内容相近"而不计分子。
         if (cfg.dedupMinOn && ratioFinal < cfg.dedupMin) {

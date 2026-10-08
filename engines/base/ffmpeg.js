@@ -38,9 +38,8 @@ function nvencArgs(cq, codec) {
  */
 function runFfmpeg(args, { onProgress, signal, cwd, env, binary, captureStdout = false } = {}) {
   // FFmpeg 路径：**只认** backend 注入的 VL_FFMPEG_BIN（启动自动下载到「数据目录\ffmpeg」后的路径）。
-  // ⚠ 不再回退裸名 `ffmpeg`（用户定案 2026-10-08）：引擎此前会静默借用系统 PATH，
-  //   于是出现「主进程判定组件缺失并拦下任务，引擎却照样跑起来」的口径不一致；
-  //   现在缺注入即明确失败，由主进程在启动时自动下载补齐。
+  // ⚠ 不得回退裸名 `ffmpeg`：引擎静默借用系统 PATH 会造成「主进程判定缺失并拦下任务、
+  //   引擎却照样跑起来」的口径不一致；缺注入即明确失败，由主进程在启动时自动下载补齐。
   binary = binary || process.env.VL_FFMPEG_BIN || '';
   if (!binary) {
     return Promise.resolve({ code: -1, stderr: '', stdout: '', error: 'FFmpeg 组件缺失（未注入 VL_FFMPEG_BIN）' });

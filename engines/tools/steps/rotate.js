@@ -1,6 +1,6 @@
 // 步骤 · 旋转 / 镜像
 //
-// 实现极简（计划 §1.2）：transpose / hflip / vflip。
+// 实现极简：transpose / hflip / vflip。
 // ★ 旋转 90/270 会交换宽高 —— 若同时勾了「转分辨率」，两者的先后会影响结果，
 //   因此本步在决定时给出注记提醒（位次上 resize 在前、rotate 在后，见注册表）。
 'use strict';

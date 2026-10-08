@@ -6,7 +6,7 @@
 //   ★ 刻意不用 blackdetect —— 原脚本注释说明：blackdetect 对"结尾黑屏"不可靠
 //   （黑段结束需要后续非黑帧才判定，单帧黑屏也检不出）。
 //
-// 本步骤只负责「分析 + 产出待删区间」，裁剪由 pipeline 统一归约（计划 §13.2）。
+// 本步骤只负责「分析 + 产出待删区间」，裁剪由 pipeline 统一归约。
 'use strict';
 
 const { runFfmpeg } = require('../../base/ffmpeg');

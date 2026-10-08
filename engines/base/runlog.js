@@ -1,4 +1,4 @@
-// 运行日志（面向排查）：《日志体系方案.md》的唯一实现 —— 改动日志相关代码前先读该方案。
+// 运行日志（面向排查）：行格式与级别说明见下。
 //
 // 文件划分（<存储根>\log\）：
 //   app-YYYY-MM-DD.log      全量事件（人读 + 结构化两用），保留 7 天
@@ -6,13 +6,13 @@
 //   engine-YYYY-MM-DD.log   引擎原始 stdout/stderr（[taskId] 前缀 + 任务标记 + ffmpeg 行秒级采样），保留 7 天
 //   超 32MB 滚动为 -2/-3 序号；跨天未超保留期的旧文件压缩为 .gz（pruneAsync，空闲期调用）
 //
-// 行格式（方案 §4.2，人读单行 + 结构化尾）：
+// 行格式：
 //   2026-09-30 15:30:01.123  info   backend   task.artifacts.remove  删 3 个成片 · 共 264.1 MB  · {"pid":123,"taskId":"task_1","verb":"DEL","data":{...}}
 //   └ 时间(毫秒)            └ lvl  └ mod     └ ev(点分)            └ msg                     └ 结构化字段
 //
 // 级别：fatal/error/warn/info/debug（小写）；默认 info，setLevel 运行时切换。
 // 写入：error/warn/fatal 同步追加（事后唯一证据）；info/debug 缓冲 500ms/256 条批量落盘，exit 时冲刷。
-// 去重（§4.5）：正文只在 app 落一次；error 只写索引行（短正文副本 + ref:app@<字节偏移>）。
+// 去重：正文只在 app 落一次；error 只写索引行（短正文副本 + ref:app@<字节偏移>）。
 'use strict';
 
 const fs = require('node:fs');
@@ -58,7 +58,7 @@ function scrub(s) {
     .replace(/\b((?:[a-z_]*token[a-z_]*|password|passwd|secret)\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}]+)/gi, '$1***');
 }
 
-/** 结构化细节压成单行 + 脱敏；超长不截断：分片多行（↳[i/n]），语义不丢（§4.3） */
+/** 结构化细节压成单行 + 脱敏；超长不截断：分片多行（↳[i/n]），语义不丢 */
 function briefData(data, max = 2000) {
   if (data == null) return '';
   try {
@@ -128,7 +128,7 @@ function chEvent(transport, channel, args, result, ms) {
 
 const VERB_LVL = { ERR: 'error', UI: 'error', DIAG: 'info', SYS: 'info', RUN: 'info', ADD: 'info', MOD: 'info', CFG: 'info', DEL: 'info', IPC: 'info' };
 
-/** §八：单文件 32MB → -2/-3 滚动（先挪已有序号再让位当前文件） */
+/** 单文件 32MB → -2/-3 滚动（先挪已有序号再让位当前文件） */
 function rotateIfNeeded(file) {
   try {
     if (!fs.existsSync(file) || fs.statSync(file).size < MAX_FILE_BYTES) return;
@@ -171,8 +171,8 @@ process.on('exit', () => { try { flushBuffer(); } catch (e) {} });
 
 function firstLine(s) { return String(s || '').split('\n')[0]; }
 
-/** 单行格式化（§4.2）。data 以**原对象**进 meta（JSON 只序列化一次，杜绝双重转义）；
- *  超长（>2000 字符）时主行不带 data，分片以 ↳[i/n] 续行跟随（§4.3：语义不丢） */
+/** 单行格式化。data 以**原对象**进 meta（JSON 只序列化一次，杜绝双重转义）；
+ *  超长（>2000 字符）时主行不带 data，分片以 ↳[i/n] 续行跟随 */
 function formatLine(lvl, mod, ev, msg, data, taskId, verb) {
   const s = scrub(String(msg || '').replace(/\s*\n\s*/g, ' '));
   const meta = { pid: process.pid };
@@ -208,7 +208,7 @@ function log(lvl, mod, ev, msg, data, bind) {
     const line = formatLine(lvl, mod, ev, msg, data, bind && bind.taskId, bind && bind.verb);
     const day = dayOf(new Date());
     if (lvl === 'error' || lvl === 'fatal' || lvl === 'warn') {
-      // 失败/异常：同步写（§六.7）；error 文件只写索引行（短正文副本 + ref，§4.5）
+      // 失败/异常：同步写；error 文件只写索引行（短正文副本 + ref:app@<偏移>）
       const ok = syncAppend(fileOf(day), line);
       let offset = 0;
       if (ok) { try { offset = Math.max(0, fs.statSync(fileOf(day)).size - Buffer.byteLength(line, 'utf8')); } catch (e) {} }
@@ -275,7 +275,7 @@ function err(action, e, data) {
 /** 前端异常上报（垫片：verb UI → lvl error） */
 function ui(action, msg, data) { logEvent('UI', String(action || 'ui.exception'), String(msg || ''), data); }
 
-// ── 引擎原始行（engine-<date>.log；方案 §五：唯一落盘方 = 主进程）──
+// ── 引擎原始行（engine-<date>.log；唯一落盘方 = 主进程）──
 let _engineDay = '';
 let _engineFd = null;
 let _engineLastTs = 0;
@@ -307,7 +307,7 @@ function engineWrite(tag, line) {
   } catch (e) { /* 写日志永不影响主流程 */ }
 }
 
-/** 引擎原始行落盘（stdout/stderr 同路）。tag = taskId。ffmpeg 进度行秒级采样（§4.7）。 */
+/** 引擎原始行落盘（stdout/stderr 同路）。tag = taskId。ffmpeg 进度行秒级采样。 */
 function engineLine(tag, line) {
   const s = String(line == null ? '' : line).replace(/\r$/, '');
   if (!s) return;
@@ -351,7 +351,7 @@ function describeFiles(paths, { max = 60 } = {}) {
 
 const FILE_RE = /^(app|error|engine)-(\d{4})-(\d{2})-(\d{2})(?:-(\d+))?\.log(\.gz)?$/;
 
-/** 异步清理 + 压缩（§八）：超保留期删除；跨天未压缩未超期 → gzip（异步，空闲期调用） */
+/** 异步清理 + 压缩：超保留期删除；跨天未压缩未超期 → gzip（异步，空闲期调用） */
 async function pruneAsync(keepDays = KEEP_DAYS, keepErrorDays = ERROR_KEEP_DAYS) {
   if (!logDir) return { removed: 0, compressed: 0 };
   let removed = 0, compressed = 0;
@@ -428,7 +428,7 @@ const listErrorDays = () => listFiles('error');
 const listEngineDays = () => listFiles('engine');
 
 /**
- * 读取日志（排查视图；app/error/engine 三类 + lvl/mod 过滤，方案 §七）。
+ * 读取日志（排查视图；app/error/engine 三类 + lvl/mod 过滤）。
  * 文件可能很大，只保留末尾窗口。
  * @param {{file?:'app'|'error'|'engine', day?:string, lvl?:string, mod?:string, grep?:string, tail?:number, maxBytes?:number}} opts
  */

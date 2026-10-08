@@ -3,7 +3,7 @@
 // 每个步骤是一个独立模块，自声明 schema（前端据此**自动渲染表单**，无需改前端）
 // 与在 pipeline 中的固定位次。新增能力 = 加一个文件 + 在 STEP_FILES 里登记。
 //
-// 执行位次固定不可调（计划 §七、§13.4）：
+// 执行位次固定不可调：
 //   内容（trim → dropframes → deblack → reverse）
 //   → 画面（resize → overlay → rotate）
 //   → 时长（speed）

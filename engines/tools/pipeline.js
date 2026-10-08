@@ -1,6 +1,6 @@
 // 视频处理工具 · 编排（pipeline）
 //
-// 四段式（计划 §三）：
+// 四段式：
 //   ① 分析 —— probeDetail 拿全（时长/分辨率/帧率/码率/音轨）；需逐帧的步骤（去黑屏）单独扫
 //   ② 决策 —— 各步骤算出：待删区间 / 缩放目标 / 倍率 / 目标 CQ
 //   ③ 处理 —— **合并成一条滤镜链，一次 ffmpeg 调用**（避免重复编码伤画质与效率）
@@ -11,7 +11,7 @@
 //   · 音画同步 —— 视频 select 与音频 aselect 用**同一条件串**
 //
 // 唯一的例外是「码率控制」的**目标体积·精确模式**：它必须试编码 → 测码率 → 调 CQ 再编码，
-// 天然无法一遍完成（计划 §13.1 已单列）。除它之外任何步骤都不允许多遍编码。
+// 天然无法一遍完成。除它之外任何步骤都不允许多遍编码。
 'use strict';
 
 const fs = require('node:fs');
@@ -183,7 +183,7 @@ async function processFile(file, steps, opts) {
   } else {
     // ── 码率上限 / 目标体积：先按 10% 样本试算定 CQ，再整片只编码一遍 ──
     // NVENC 没有 2-pass，反复整片重编码（原脚本做法）代价太大且画质被反复损失 ——
-    // 计划 §14.4 定案：样本试算 → 整片一遍出片（画质只损失一次）。
+    // 样本试算 → 整片一遍出片（画质只损失一次）。
     const from = isFinite(ramp.initialCq) ? ramp.initialCq : 26;
     const to = isFinite(ramp.maxCq) ? ramp.maxCq : 40;
     const inc = ramp.increment;
@@ -269,8 +269,8 @@ async function measureBitrateKbps(file) {
   const { spawn } = require('node:child_process');
   return new Promise((resolve) => {
     let out = '';
-    // 与 base/probe.js 统一口径：只认注入的 VL_FFPROBE_BIN（本处此前用裸名 ffprobe，
-    // 同文件内两种口径并存 —— 去掉 PATH 回退后会在这里静默失败，2026-10-08 修）
+    // 与 base/probe.js 统一口径：只认注入的 VL_FFPROBE_BIN
+    // ⚠ 不要用裸名 ffprobe：同文件内两种口径并存会在无 PATH 时静默失败
     const bin = process.env.VL_FFPROBE_BIN || '';
     if (!bin) return resolve(0);
     let child;

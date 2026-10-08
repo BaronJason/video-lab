@@ -47,7 +47,7 @@ function probe(videoPath) {
  * 那是**成片素材**的口径；工具面对任意分辨率的视频，若沿用 valid 会把合法素材判成无效。
  *
  * 另返回 isVfr —— 帧率删帧类操作依赖帧号，VFR 源上帧号不可靠，调用方应据此警告
- * 或改按时间戳处理（计划 §14.6）。
+ * 或改按时间戳处理。
  *
  * @param {string} videoPath
  * @returns {Promise<{probeOk:boolean, duration:number, width:number, height:number,

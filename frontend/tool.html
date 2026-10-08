@@ -170,6 +170,13 @@
     .cv-side { order: 2; flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
     .cv-bars { display: flex; flex-direction: column; gap: 6px; }
     .cv-bar__sep { width: 1px; height: 16px; background: var(--border-neutral-l2); margin: 0 2px; }
+    .cv-apply { padding: 6px 8px 4px; border: 1px solid var(--border-neutral-l1); border-radius: var(--radius-6); margin-bottom: 4px; }
+    /* 对话框文本输入（自绘，替代 Electron 不支持的 window.prompt） */
+    .modal__field { margin: 2px 0 12px; }
+    .modal__input { width: 100%; height: 32px; padding: 0 10px; box-sizing: border-box;
+      border-radius: var(--radius-6); border: 1px solid var(--border-neutral-l2);
+      background: var(--bg-input-default); color: var(--text-default); font-size: 13px; }
+    .modal__input:focus { outline: none; border-color: var(--brand-500); }
     .cv-stage { position: relative; background: #14161a; border: 1px solid var(--border-neutral-l1);
                 border-radius: var(--radius-8); padding: 10px; }
     .cv-canvas { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #0d0f12;
@@ -305,6 +312,12 @@
         </div>
 
         <div class="cv-params">
+          <div class="cv-apply">
+            <label class="opt-check opt-check--sm" title="勾选后「开始处理」会对上方清单里的全部视频逐个合成；参数与预览共用，背景每个视频独立随机">
+              <input type="checkbox" id="cvEnable"><span class="opt-check__box"></span><span>启用画布合成（批量）</span>
+            </label>
+            <div class="tl-hint">勾选后随「开始处理」对清单内<b>全部视频逐个合成</b>；这里的参数就是合成用的参数（与预览同一套），背景每个视频独立随机。</div>
+          </div>
           <div class="cv-group">画布尺寸</div>
           <div class="cv-row">
             <span class="tl-label">宽 × 高</span>
@@ -396,7 +409,7 @@
             <button class="tl-btn" id="cvPresetSave">保存当前</button>
             <button class="tl-btn" id="cvPresetDelete">删除</button>
           </div>
-          <div class="tl-hint">本页参数用于画布合成；「开始处理」与输出设置仍在下方统一入口。</div>
+          <div class="tl-hint">本页参数用于画布合成（需勾选上方「启用画布合成」才会参与「开始处理」）；输出方式与备份沿用下方统一入口。</div>
         </div>
       </div>
     </div>

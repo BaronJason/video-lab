@@ -172,7 +172,14 @@ function bgSegments(p, warnings) {
  *   @param {string} [src.bgColorValue] 纯色背景值（bgMode=color，优先于 params.bgColor）
  * @returns {{ffmpegInputs:Array, filterComplex:string, maps:object, meta:object}}
  */
-function buildCanvasPlan(params, src) {
+function buildCanvasPlan(params, src, opts) {
+  // opts（可选）—— 让**正式处理**复用同一套表达式，只换标签与出口：
+  //   forEncode  : true 时只产出合成结果（不做预览用的 split 第二路出口）
+  //   contentLabel / outLabel : 内容层入口标签 / 最终输出标签（正式处理由工具滤镜链传入）
+  const o = opts || {};
+  const forEncode = o.forEncode === true;
+  const contentIn = o.contentLabel ? String(o.contentLabel) : '[0:v]';
+  const finalLabel = o.outLabel ? String(o.outLabel) : '';
   const norm = normalizeParams(params);
   const p = norm.params;
   const warnings = norm.warnings.slice();
@@ -186,8 +193,14 @@ function buildCanvasPlan(params, src) {
   // 背景输入以**调用方已解析的 src.bgPath** 为准（bgMode=dir 的候选挑选在调用方完成，本模块只管表达式）；
   // 视频背景需无限循环填充 —— 正式处理时必须与 -shortest 成对，否则编码永不结束。
   const bgIsVideo = s.bgKind ? (s.bgKind === 'video') : /\.(mp4|mov|mkv|avi)$/i.test(String(s.bgPath || ''));
+  // ⚠ 背景输入的可结束性由**滤镜级 shortest=1** 负责（见下方 overlay 段），这里不要再加 -t 上限：
+  //   上限比内容短时会把成片截短（内容 5 分钟、上限 60 秒 → 只出 60 秒）。
+  //   · 图片背景 → **单帧输入**（不加 -loop 1），靠 overlay 默认 repeatlast=1 持续贴上
+  //     （与 steps/overlay.js 的既有做法一致：那里早已写明图片不该加 -loop 1）
+  //   · 视频背景 → -stream_loop -1 循环填充（无限流，由 shortest=1 收尾）
+  //   · 纯色背景 → lavfi 源（无限流，同上）
   if (s.bgPath) {
-    ffmpegInputs.push({ path: s.bgPath, args: bgIsVideo ? ['-stream_loop', '-1'] : ['-loop', '1'] });
+    ffmpegInputs.push({ path: s.bgPath, args: bgIsVideo ? ['-stream_loop', '-1'] : [] });
   } else if (p.bgMode === 'image' || p.bgMode === 'video') {
     warnings.push('背景文件未提供，已按纯色处理');
   }
@@ -214,16 +227,30 @@ function buildCanvasPlan(params, src) {
   // 注：同一 filter 输出标签只能被消费一次 —— 背景层与内容层都要「既参与合成、又单独输出」，
   // 故各自经 split 分流（否则 -map 复用标签会报 "was already used elsewhere"）。
   const parts = [];
-  parts.push('[' + bgIdx + ':v]' + bgSegments(p, warnings).join(',') + '[bgsrc]');
-  parts.push('[bgsrc]split=2[bg][bgout]');
-  parts.push('[0:v]split=2[craw][csrc]');
-  parts.push('[csrc]' + cSeg.segs.join(',') + '[c]');
-  parts.push('[bg][c]overlay=' + Math.round(offset.x) + ':' + Math.round(offset.y) + ':format=auto[comp0]');
-  let composedLabel = '[comp0]';
+  const bgSegs = bgSegments(p, warnings).join(',');
+  if (forEncode) {
+    // 正式处理：背景与内容各只被消费一次，直接落到合成（省掉预览用的分流，也少一层拷贝）
+    parts.push('[' + bgIdx + ':v]' + bgSegs + '[bg]');
+    parts.push(contentIn + cSeg.segs.join(',') + '[c]');
+  } else {
+    // 预览：背景与内容都得「既参与合成、又单独输出一张图」，故各自 split 分流
+    parts.push('[' + bgIdx + ':v]' + bgSegs + '[bgsrc]');
+    parts.push('[bgsrc]split=2[bg][bgout]');
+    parts.push(contentIn + 'split=2[craw][csrc]');
+    parts.push('[csrc]' + cSeg.segs.join(',') + '[c]');
+  }
+  let composedLabel = forEncode ? (hasWm ? '[comp0]' : (finalLabel || '[comp0]')) : '[comp0]';
+  // ⚠ shortest=1 让 overlay 跟随**最短输入**（内容视频）收尾 —— 纯色/视频背景是无限流，
+  //   没有它输出会一直跟着背景走（成片被拉长或永不结束；输出级 -shortest 兜不住滤镜内部）。
+  //   图片背景**不能设**：它是单帧输入，设了会在第 1 帧后立刻结束（靠 repeatlast=1 续帧才对）。
+  const overlayShortest = (needSolid || bgIsVideo) ? ':shortest=1' : '';
+  parts.push('[bg][c]overlay=' + Math.round(offset.x) + ':' + Math.round(offset.y) + ':format=auto'
+    + overlayShortest + composedLabel);
   if (hasWm) {
     parts.push('[' + wmIdx + ':v]format=rgba[wm]');
-    parts.push(composedLabel + '[wm]overlay=0:0:format=auto[compWm]');
-    composedLabel = '[compWm]';
+    const wmOut = forEncode ? (finalLabel || '[compWm]') : '[compWm]';
+    parts.push(composedLabel + '[wm]overlay=0:0:format=auto' + wmOut);
+    composedLabel = wmOut;
   }
 
   // 越界提示：缩放系数与位置组合可能让内容超出画布（例如 1080×1920 素材按 0.74 缩放后比 1080 高的画布更高）——

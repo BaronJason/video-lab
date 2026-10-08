@@ -24,7 +24,8 @@ function createChain(opts) {
   const aParts = [];     // 音频侧的简单滤镜
   const after = [];      // 消费视频尾流的复杂片段：[fn(tail, out) => '...']
   const rawParts = [];   // 需要自定义标签的复杂片段（concat 等）
-  const inputs = [];     // 额外输入（叠加图片等），按顺序追加到 -i 之后
+  const inputs = [];     // 额外输入（叠加图片 / 合成背景等），按顺序追加到 -i 之后
+  const outArgs = [];    // 输出级选项（-shortest 等），追加到 -map 之后
 
   const api = {
     hasAudio,
@@ -41,8 +42,27 @@ function createChain(opts) {
     /** 追加原始 filter_complex 片段（多输入场景，标签由调用方自管） */
     raw(expr) { if (expr) rawParts.push(String(expr)); return api; },
 
-    /** 登记一个额外输入（返回其在 ffmpeg 参数里的序号：0 是主输入，故从 1 起） */
-    addInput(path) { inputs.push(String(path)); return inputs.length; },
+    /**
+     * 追加**输出级**选项（置于 -map 之后）。
+     * 目前只有画布合成用：背景是循环流（图片 -loop 1 / 视频 -stream_loop -1），
+     * 必须用 -shortest 让输出跟随最短流（内容视频）—— 否则背景会无限延长、编码永不结束。
+     */
+    outArg() {
+      for (let i = 0; i < arguments.length; i++) outArgs.push(String(arguments[i]));
+      return api;
+    },
+
+    /**
+     * 登记一个额外输入（返回其在 ffmpeg 参数里的序号：0 是主输入，故从 1 起）。
+     * args 为该输入的**输入级选项** —— 必须排在 `-i` 之前，例如：
+     *   · 视频背景：['-stream_loop','-1']（无限循环，**必须配 -shortest**，否则编码永不结束）
+     *   · 图片背景：['-loop','1']（单图循环，同样需要 -shortest 收尾）
+     *   · 纯色背景：['-f','lavfi']（配 color=...:s=WxH:r=30 源）
+     */
+    addInput(path, args) {
+      inputs.push({ path: String(path), args: Array.isArray(args) ? args.map(String) : [] });
+      return inputs.length;
+    },
 
     isEmpty() { return !vParts.length && !aParts.length && !after.length && !rawParts.length; },
 
@@ -76,10 +96,14 @@ function createChain(opts) {
       for (const r of rawParts) segs.push(r);
 
       const inputArgs = [];
-      inputs.forEach((p) => { inputArgs.push('-i', p); });
+      inputs.forEach((inp) => {
+        for (const a of inp.args) inputArgs.push(a);   // 输入级选项必须在 -i 之前
+        inputArgs.push('-i', inp.path);
+      });
 
       const args = ['-filter_complex', segs.join(';'), '-map', '[vout]'];
       if (hasAudio) args.push('-map', '[aout]');
+      for (const a of outArgs) args.push(a);
       return { fc: segs.join(';'), args, inputArgs };
     },
   };

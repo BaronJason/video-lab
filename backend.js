@@ -5517,6 +5517,7 @@ class Api {
       contentW: cInfo.width, contentH: cInfo.height, contentPath: contentPath,
       bgPath: bgPath, bgKind: bgKind, watermarkPath: wmOk ? wmPath : '',
       bgColorValue: params.bgColor,
+      duration: cInfo.duration || 0,   // 背景输入按内容时长设上限（否则背景是无界流）
     };
     if (wmPath && !wmOk) src._wmMissing = true;
 
@@ -5604,7 +5605,9 @@ class Api {
       }
       // 磁盘产物上限（超出按 mtime 淘汰，避免长期堆积）
       this._canvasPreviewTrimAsync(outDir, 150);
-      this._lg('UI', 'canvas.preview', '画布合成预览 · ' + pvW + '×' + pvH + ' · ' + (Date.now() - startedAt) + 'ms'
+      // ⚠ verb 用 RUN（info）：VERB_LVL 把 UI 映射为 error 级，而预览是**正常**操作 ——
+      //   用 UI 会让每次预览都进 error 日志与 30 天 error 索引（噪音，2026-10-08 修正）
+      this._lg('RUN', 'canvas.preview', '画布合成预览 · ' + pvW + '×' + pvH + ' · ' + (Date.now() - startedAt) + 'ms'
         + ' · 内容盒 ' + result.meta.contentBox.w + '×' + result.meta.contentBox.h
         + ' @' + result.meta.contentBox.x + ',' + result.meta.contentBox.y
         + (result.meta.warnings.length ? ' · ' + result.meta.warnings.join('；') : ''),

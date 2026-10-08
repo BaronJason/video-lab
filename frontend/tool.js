@@ -79,6 +79,13 @@
       var html = '<button type="button" class="modal-close" title="关闭">✕</button>'
         + '<div class="modal__title">' + esc(opts.title) + '</div>';
       if (opts.message) html += '<div class="modal__message">' + opts.message + '</div>';
+      // 文本输入（可选）：**不要用 window.prompt** —— Electron 渲染进程不支持它，
+      // 会直接抛 "prompt() is not supported."（表现为界面异常且功能不可用，2026-10-08 实报）。
+      if (opts.input) {
+        html += '<div class="modal__field"><input type="text" class="modal__input"'
+          + ' placeholder="' + esc(opts.input.placeholder || '') + '"'
+          + ' value="' + esc(opts.input.value || '') + '"></div>';
+      }
       html += '<div class="modal__actions">';
       (opts.buttons || []).forEach(function (b) {
         var cls = 'modal-btn' + (b.danger ? ' modal-btn--danger' : '') + (b.primary ? ' modal-btn--primary' : '');
@@ -88,14 +95,30 @@
       card.innerHTML = html;
       overlay.appendChild(card);
       document.body.appendChild(overlay);
+      var inputEl = card.querySelector('.modal__input');
       var done = function (v) { overlay.remove(); resolve(v); };
       overlay.addEventListener('click', function (e) { if (e.target === overlay) done(null); });
       var closeBtn = card.querySelector('.modal-close');
       if (closeBtn) closeBtn.addEventListener('click', function () { done(null); });
       var btns = card.querySelectorAll('.modal-btn');
       (opts.buttons || []).forEach(function (b, i) {
-        btns[i].addEventListener('click', function () { done(b.value); });
+        btns[i].addEventListener('click', function () {
+          // 有输入框时：主按钮返回**输入内容**，其余（取消/关闭）返回 null
+          if (!inputEl) { done(b.value); return; }
+          done(b.primary ? inputEl.value : null);
+        });
       });
+      if (inputEl) {
+        inputEl.focus();
+        inputEl.select();
+        inputEl.addEventListener('keydown', function (ev) {
+          if (ev.key === 'Enter') {
+            ev.preventDefault();
+            var pb = card.querySelector('.modal-btn--primary');
+            if (pb) pb.click();
+          } else if (ev.key === 'Escape') { ev.preventDefault(); done(null); }
+        });
+      }
     });
   }
 
@@ -232,6 +255,7 @@
     div.className = 'tl-step' + (on ? ' tl-step--on tl-step--open' : '');
     div.setAttribute('data-step-id', step.id);
     var params = (step.id === 'resize') ? resizeFieldsHtml()
+      : (step.id === 'canvas') ? '<span class="tl-field__hint">参数在「画布合成」页设置（那里可实时预览）；与本页勾选是同一个开关</span>'
       : (step.schema || []).filter(function (sc) { return fieldVisible(step.id, sc); })
         .map(function (sc) { return paramField(step.id, sc); }).join('');
     div.innerHTML = '<div class="tl-step__head">'
@@ -274,6 +298,8 @@
   //   委托在容器上的 change 收不到，就会出现「勾上了但参数还是灰的」（实测踩到）。
   function setStepOn(sid, on) {
     state.sel[sid] = !!on;
+    // 画布合成：步骤列表的勾选与「画布合成」页的「启用」是同一个开关，必须双向一致
+    if (sid === 'canvas') { var ce = $('cvEnable'); if (ce) ce.checked = !!on; }
     var node = $('stepGroups').querySelector('[data-step-id="' + sid + '"]');
     if (node) {
       node.classList.toggle('tl-step--on', !!on);
@@ -508,6 +534,13 @@
       Object.keys(src).forEach(function (k) { if (visible[k]) dst[k] = coerce(src[k]); });
       params[id] = dst;
     });
+    // 画布合成：参数取专属面板（与预览同一套参数与滤镜链构造）；「目录随机」时把候选清单一并带上，
+    // 使正式处理与预览用**同一批候选**（否则两边各自枚举，范围可能不一致）
+    if (state.sel.canvas) {
+      var cp = Object.assign({}, cv.params);
+      if (cp.bgMode === 'dir' && (cv.bgList || []).length) cp.bgList = cv.bgList.slice();
+      params.canvas = cp;
+    }
     return {
       spec: {
         root: state.files.length ? '' : state.root,
@@ -1186,6 +1219,8 @@
     });
 
     // 预设
+    // 「启用画布合成」与步骤列表里的 canvas 勾选是同一个开关（双向一致）
+    $('cvEnable').addEventListener('change', function () { setStepOn('canvas', !!this.checked); });
     $('cvPresetApply').addEventListener('click', cvApplyPreset);
     $('cvPresetSave').addEventListener('click', cvSavePreset);
     $('cvPresetDelete').addEventListener('click', cvDeletePreset);
@@ -1202,6 +1237,8 @@
       cv.bgTotal = r.matched || 0;
       cv.bgIndex = 0;
       cv.bgName = r.matched ? String(r.list[0].name || '') : '';
+      // 候选清单留存：提交处理时随参数带给引擎，保证「预览看到哪一批，处理就用哪一批」
+      cv.bgList = (r.list || []).map(function (x) { return x.path; });
       setStatus('背景候选 ' + r.matched + ' / 扫描 ' + r.scanned + ' 个文件' + (r.matched ? '' : '（要求 1920×1080）'));
       cvUpdateBgInfo();
       cvRequestPreview({ immediate: true });
@@ -1230,16 +1267,25 @@
   }
 
   function cvSavePreset() {
-    var name = window.prompt('预设名称（例如「带货竖版·0.74」）', '');
-    if (name == null) return;
-    name = String(name).trim();
-    if (!name) { toast('预设名称不能为空', 'error'); return; }
-    if (!api || !api.canvas_preset_save) return;
-    api.canvas_preset_save(name, cv.params).then(function (r) {
-      if (!r || !r.ok) { toast('保存预设失败：' + ((r && r.error) || '未知原因'), 'error'); return; }
-      toast('已保存预设：' + name, 'ok');
-      cvLoadPresets(name);
-    }).catch(function (e) { toast('保存预设失败：' + ((e && e.message) || e), 'error'); });
+    var sel = $('cvPreset');
+    var cur = sel ? String(sel.value || '') : '';
+    // 用自绘输入对话框取名字：**不能用 window.prompt**（Electron 渲染进程不支持，会抛异常）
+    showDialog({
+      title: '保存参数预设',
+      message: '给当前画布参数起个名字（保存在本机，两个版本共用）',
+      input: { value: cur, placeholder: '例如：带货竖版·0.74' },
+      buttons: [{ label: '取消', value: false }, { label: '保存', value: true, primary: true }],
+    }).then(function (v) {
+      if (v == null || v === false) return;
+      var name = String(v).trim();
+      if (!name) { toast('预设名称不能为空', 'error'); return; }
+      if (!api || !api.canvas_preset_save) return;
+      api.canvas_preset_save(name, cv.params).then(function (r) {
+        if (!r || !r.ok) { toast('保存预设失败：' + ((r && r.error) || '未知原因'), 'error'); return; }
+        toast('已保存预设：' + name, 'ok');
+        cvLoadPresets(name);
+      }).catch(function (e) { toast('保存预设失败：' + ((e && e.message) || e), 'error'); });
+    });
   }
 
   function cvApplyPreset() {
@@ -1304,6 +1350,9 @@
     cvApplyParamsToInputs();
     cvLoadPresets();
     cvUpdateBgInfo();
+    // 与步骤列表的勾选对齐（例如预设/复用上次勾选时，面板开关也要显示实际状态）
+    var ce0 = $('cvEnable');
+    if (ce0) ce0.checked = !!state.sel.canvas;
     // 输入变化后的自动预览统一由 renderInputHint → cvLoadSamples(true) 负责（不再单独挂按钮监听，
     // 否则会在样本清单异步扫描完成前触发渲染，白报一次「未选择视频」）
     window.addEventListener('resize', function () { if (cv.box.w) cvPaintBox(); });

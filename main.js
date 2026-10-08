@@ -1781,6 +1781,12 @@ function registerIpc() {
   ipcMain.handle('get_tool_prefs', () => api.getToolPrefs());
   ipcMain.handle('save_tool_prefs', (e, prefs) => api.saveToolPrefs(prefs));
   ipcMain.handle('rerun_tool_task', (e, id) => api.rerunToolTask(id));
+  // 画布合成（竖转横）：单帧预览与参数预设（预览与正式处理共用同一滤镜链构造，见 engines/tools/canvas.js）
+  ipcMain.handle('canvas_preview_frame', (e, payload) => api.canvasPreviewFrame(payload));
+  ipcMain.handle('canvas_list_backgrounds', (e, dir) => api.canvasListBackgrounds(dir));
+  ipcMain.handle('canvas_preset_list', () => api.canvasPresetList());
+  ipcMain.handle('canvas_preset_save', (e, name, params) => api.canvasPresetSave(name, params));
+  ipcMain.handle('canvas_preset_delete', (e, name) => api.canvasPresetDelete(name));
   ipcMain.handle('pick_image', async (e, prev) => {
     const w = winOf(e) || mainWin;
     const r = await dialog.showOpenDialog(w || undefined, {

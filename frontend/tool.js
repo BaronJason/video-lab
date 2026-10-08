@@ -607,6 +607,629 @@
     });
   }
 
+  // ════════════ 画布合成（竖转横）：单帧预览 + 参数双向同步 ════════════
+  // 舞台三层结构：背景层底图（精确渲染的纯背景）＋ 内容层（拖动期用内容原帧做本地几何变换，
+  // 零延迟可跟手）＋ 覆盖层（手柄与吸附参考线）；非拖动状态显示精确合成图。
+  // 数据流：参数区 ↔ cv.params ↔ 预览。拖动只改本地几何 —— 与滤镜表达式数学等价（同一套偏移/缩放
+  // 公式），因此不会出现「拖动所见与出片不同」；松手后再由主进程按同一套滤镜链渲染精确帧校正
+  // （圆角、边框、模糊等本地无法精确呈现的效果以精确帧为准）。
+  var cv = {
+    ready: false,
+    params: {
+      bgMode: 'dir', bgDir: '', bgPath: '', bgColor: '#000000', watermark: '',
+      targetW: 1920, targetH: 1080,
+      scale: 0.74, stretch: false, w: 1280, h: 720,
+      posMode: 'center', dx: 0, dy: 160,
+      radius: 0, borderW: 0, borderColor: '#ffffff', bgBlur: 0,
+    },
+    at: 0,
+    duration: 0,
+    bgIndex: 0, bgTotal: 0, bgName: '',
+    box: { x: 0, y: 0, w: 0, h: 0 },   // 内容盒（画布像素；精确渲染后以服务端元数据为准）
+    meta: null,
+    drag: null,
+    seq: 0,
+    timer: 0,
+    busyRetry: 0,
+    syncing: false,                    // 程序性写入控件时置真，避免与用户输入形成回环
+    snap: 10,                          // 吸附阈值（显示像素）
+  };
+
+  function cvCss(el, obj) { if (el) { for (var k in obj) el.style[k] = obj[k]; } }
+  function cvNum(el, fallback) {
+    var v = Number(el && el.value);
+    return isFinite(v) ? v : fallback;
+  }
+  function cvCanvasW() { return Math.max(16, Number(cv.params.targetW) || 1920); }
+  function cvCanvasH() { return Math.max(16, Number(cv.params.targetH) || 1080); }
+
+  /** 画布像素 → 显示像素的比例（手柄拖动与吸附阈值换算用） */
+  function cvViewScale() {
+    var el = $('cvCanvas');
+    if (!el) return 1;
+    var r = el.getBoundingClientRect();
+    return r.width > 0 ? r.width / cvCanvasW() : 1;
+  }
+
+  function cvSetBadge(text, kind) {
+    var el = $('cvBadge');
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'cv-badge' + (kind ? ' cv-badge--' + kind : '');
+  }
+
+  function cvShowWarnings(list) {
+    var el = $('cvWarn');
+    if (!el) return;
+    var arr = (list || []).filter(Boolean);
+    el.textContent = arr.length ? ('· ' + arr.join('\n· ')) : '';
+    el.style.whiteSpace = 'pre-line';
+  }
+
+  /** 预览源：优先用「选择视频」显式挑中的文件（目录需先挑样本，避免为预览而全量扫描） */
+  function cvContentPath() {
+    if (state.files && state.files.length) return state.files[0];
+    return '';
+  }
+
+  /** 内容盒按参数推算（与滤镜表达式同一套公式，抽取自共享模块的语义） */
+  function cvContentSize() {
+    if (cv.params.stretch && cv.params.w && cv.params.h) {
+      return { w: Math.round(cv.params.w), h: Math.round(cv.params.h) };
+    }
+    var srcW = (cv.meta && cv.meta.contentSrcW) || 0;
+    var srcH = (cv.meta && cv.meta.contentSrcH) || 0;
+    if (!srcW || !srcH) return { w: 0, h: 0 };
+    var bw = cv.params.borderW > 0 ? Math.round(cv.params.borderW) : 0;
+    return {
+      w: Math.round(srcW * cv.params.scale) + bw * 2,
+      h: Math.round(srcH * cv.params.scale) + bw * 2,
+    };
+  }
+
+  /** 位置基准（偏移为 0 时的左上角坐标） */
+  function cvBaseOffset(w, h) {
+    var W = cvCanvasW(), H = cvCanvasH();
+    switch (cv.params.posMode) {
+      case 'tl': return { x: 0, y: 0 };
+      case 'tr': return { x: W - w, y: 0 };
+      case 'bl': return { x: 0, y: H - h };
+      case 'br': return { x: W - w, y: H - h };
+      case 'custom': return { x: 0, y: 0 };
+      default: return { x: (W - w) / 2, y: (H - h) / 2 };
+    }
+  }
+
+  function cvComputeBox() {
+    var size = cvContentSize();
+    if (!size.w || !size.h) return null;
+    var base = cvBaseOffset(size.w, size.h);
+    return { x: base.x + (Number(cv.params.dx) || 0), y: base.y + (Number(cv.params.dy) || 0), w: size.w, h: size.h };
+  }
+
+  /** 把内容盒写到 DOM（拖动期每帧调用，保证零延迟跟手） */
+  function cvPaintBox() {
+    var W = cvCanvasW(), H = cvCanvasH();
+    var b = cv.box;
+    var p = {
+      left: (b.x / W * 100) + '%', top: (b.y / H * 100) + '%',
+      width: (b.w / W * 100) + '%', height: (b.h / H * 100) + '%',
+    };
+    var vs = cvViewScale();
+    var extra = { borderRadius: Math.max(0, cv.params.radius * vs) + 'px' };
+    if (cv.params.borderW > 0) {
+      extra.border = Math.max(1, cv.params.borderW * vs) + 'px solid ' + cv.params.borderColor;
+    } else extra.border = '1px solid var(--brand-500)';
+    cvCss($('cvFg'), p);
+    var box = $('cvBox');
+    cvCss(box, Object.assign({}, p, extra));
+  }
+
+  /** 把内容盒反解回参数（拖动结束时用；custom 模式直接写绝对坐标） */
+  function cvBoxToParams(b) {
+    if (cv.params.posMode === 'custom') { cv.params.dx = Math.round(b.x); cv.params.dy = Math.round(b.y); return; }
+    var base = cvBaseOffset(b.w, b.h);
+    cv.params.dx = Math.round(b.x - base.x);
+    cv.params.dy = Math.round(b.y - base.y);
+  }
+
+  function cvWriteBackInputs(keys) {
+    cv.syncing = true;
+    try {
+      var map = {
+        scale: 'cvScaleNum', dx: 'cvDx', dy: 'cvDy', w: 'cvW', h: 'cvH',
+        targetW: 'cvTW', targetH: 'cvTH', radius: 'cvRadius', borderW: 'cvBorderW', bgBlur: 'cvBgBlur',
+      };
+      (keys || Object.keys(map)).forEach(function (k) {
+        var el = $(map[k]);
+        if (!el) return;
+        el.value = String(cv.params[k]);
+        if (k === 'scale') { var s = $('cvScale'); if (s) s.value = String(cv.params[k]); }
+        if (k === 'radius') { var rv = $('cvRadiusVal'); if (rv) rv.textContent = String(cv.params.radius); }
+        if (k === 'borderW') { var bv = $('cvBorderWVal'); if (bv) bv.textContent = String(cv.params.borderW); }
+        if (k === 'bgBlur') { var gv = $('cvBgBlurVal'); if (gv) gv.textContent = String(cv.params.bgBlur); }
+      });
+    } finally { cv.syncing = false; }
+  }
+
+  function cvSyncBgRows() {
+    var m = cv.params.bgMode;
+    $('cvBgDirRow').hidden = m !== 'dir';
+    $('cvBgPathRow').hidden = !(m === 'image' || m === 'video');
+  }
+
+  function cvRequestPreview(opts) {
+    if (cv.timer) { clearTimeout(cv.timer); cv.timer = 0; }
+    var delay = (opts && opts.immediate) ? 0 : 200;
+    cv.timer = setTimeout(function () { cv.timer = 0; cvDoPreview(); }, delay);
+  }
+
+  function cvDoPreview() {
+    if (!api || !api.canvas_preview_frame) { cvSetBadge('接口不可用', 'err'); return; }
+    var contentPath = cvContentPath();
+    if (!contentPath) {
+      cvSetBadge('未选择视频', 'err');
+      cvShowWarnings(['请先在顶部用「选择视频」挑一个用于预览的样本文件（预览只取它的若干帧，不影响原始文件）']);
+      return;
+    }
+    var mySeq = ++cv.seq;
+    cvSetBadge(cv.timer ? '渲染中…' : '渲染中…', '');
+    var payload = {
+      contentPath: contentPath,
+      at: cv.at,
+      bgIndex: cv.bgIndex,
+      params: Object.assign({}, cv.params),
+      watermarkPath: cv.params.watermark,
+      previewScale: 0.5,
+    };
+    api.canvas_preview_frame(payload).then(function (r) {
+      if (mySeq !== cv.seq) return;                    // 丢弃过期响应（拖动中会产生多份请求）
+      if (!r || !r.ok) {
+        if (r && String(r.error) === 'BUSY') {         // 主进程并发已满：稍后用最新参数重试
+          if (cv.busyRetry < 6) { cv.busyRetry++; cvRequestPreview({ immediate: false }); }
+          else { cvSetBadge('渲染繁忙', 'err'); }
+          return;
+        }
+        cv.busyRetry = 0;
+        cvSetBadge('预览失败', 'err');
+        cvShowWarnings([(r && r.error) || '预览失败']);
+        return;
+      }
+      cv.busyRetry = 0;
+      cvApplyResult(r);
+    }).catch(function (e) {
+      if (mySeq !== cv.seq) return;
+      cvSetBadge('预览失败', 'err');
+      cvShowWarnings([String((e && e.message) || e)]);
+    });
+  }
+
+  function cvApplyResult(r) {
+    var meta = r.meta || {};
+    cv.meta = meta;
+    if (meta.duration > 0) {
+      cv.duration = meta.duration;
+      var range = $('cvAtRange');
+      if (range) { range.max = String(Math.max(0.1, meta.duration)); if (Number(range.value) > meta.duration) range.value = String(cv.at); }
+      var atEl = $('cvAt');
+      if (atEl) atEl.max = String(Math.max(0.1, meta.duration));
+    }
+    if (meta.contentBox) {
+      cv.box = {
+        x: Number(meta.contentBox.x) || 0, y: Number(meta.contentBox.y) || 0,
+        w: Math.max(2, Number(meta.contentBox.w) || 0), h: Math.max(2, Number(meta.contentBox.h) || 0),
+      };
+    }
+    var stage = $('cvCanvas');
+    if (stage) stage.classList.remove('cv-canvas--drag');
+    if (r.bgOnly) $('cvBg').src = r.bgOnly;
+    if (r.composed) $('cvComp').src = r.composed;
+    if (r.raw) $('cvFg').src = r.raw;
+    if (r.previewW && r.previewH) {
+      cvCss(stage, { aspectRatio: String(cvCanvasW()) + ' / ' + String(cvCanvasH()) });
+    }
+    cv.bgTotal = Number(meta.bgTotal) || 0;
+    cv.bgIndex = Number(meta.bgIndex) || 0;
+    cv.bgName = meta.bgPath ? String(meta.bgPath).split(/[\\/]/).pop() : '';
+    cvUpdateBgInfo();
+    cvPaintBox();
+    cvWriteBackInputs(['scale', 'dx', 'dy', 'w', 'h']);
+    cvShowWarnings(meta.warnings || []);
+    cvSetBadge((r.fromCache ? '已校正（缓存）' : '已校正 · ' + (r.ms || 0) + 'ms'), 'ok');
+    if ($('cvShowRaw') && $('cvShowRaw').checked) stage.classList.add('cv-canvas--raw');
+    else stage.classList.remove('cv-canvas--raw');
+  }
+
+  function cvUpdateBgInfo() {
+    var el = $('cvBgInfo');
+    if (!el) return;
+    if (cv.params.bgMode === 'color') { el.textContent = '背景 纯色 ' + cv.params.bgColor; return; }
+    if (cv.params.bgMode === 'dir') {
+      el.textContent = cv.bgTotal
+        ? ('背景 ' + (cv.bgIndex + 1) + '/' + cv.bgTotal + (cv.bgName ? ' · ' + cv.bgName : ''))
+        : '背景 未扫描';
+      return;
+    }
+    el.textContent = '背景 ' + (cv.bgName || '未选择');
+  }
+
+  // ── 拖动 / 缩放 / 拉伸（pointer 事件 + 本地几何变换）──
+  function cvPointerPos(e) {
+    var el = $('cvCanvas');
+    var r = el.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  }
+
+  /** 吸附：内容盒中心/边靠近画布中心、三分线与边缘时给出参考线并吸合 */
+  function cvSnap(b, alt) {
+    var W = cvCanvasW(), H = cvCanvasH();
+    var showV = 0, showH = 0;
+    if (alt) { cvDrawGuides(0, 0, false); return b; }
+    var vs = cvViewScale();
+    var tol = cv.snap / Math.max(0.05, vs);
+    var vLines = [0, W / 3, W / 2, 2 * W / 3, W];
+    var hLines = [0, H / 3, H / 2, 2 * H / 3, H];
+    var targets = [
+      { v: b.x, w: 0 }, { v: b.x + b.w / 2, w: b.w / 2 }, { v: b.x + b.w, w: b.w },
+    ];
+    for (var i = 0; i < targets.length; i++) {
+      for (var j = 0; j < vLines.length; j++) {
+        if (Math.abs(targets[i].v - vLines[j]) <= tol) {
+          b.x += vLines[j] - targets[i].v; showV = vLines[j]; break;
+        }
+      }
+      if (showV) break;
+    }
+    var t2 = [
+      { v: b.y, w: 0 }, { v: b.y + b.h / 2, w: b.h / 2 }, { v: b.y + b.h, w: b.h },
+    ];
+    for (var k = 0; k < t2.length; k++) {
+      for (var m = 0; m < hLines.length; m++) {
+        if (Math.abs(t2[k].v - hLines[m]) <= tol) {
+          b.y += hLines[m] - t2[k].v; showH = hLines[m]; break;
+        }
+      }
+      if (showH) break;
+    }
+    cvDrawGuides(showV, showH, true);
+    return b;
+  }
+
+  function cvDrawGuides(vx, hy, on) {
+    var gv = $('cvGuideV'), gh = $('cvGuideH');
+    if (!gv || !gh) return;
+    if (!on) { gv.style.display = 'none'; gh.style.display = 'none'; return; }
+    if (vx) { gv.style.display = 'block'; gv.style.left = (vx / cvCanvasW() * 100) + '%'; } else gv.style.display = 'none';
+    if (hy) { gh.style.display = 'block'; gh.style.top = (hy / cvCanvasH() * 100) + '%'; } else gh.style.display = 'none';
+  }
+
+  function cvDragStart(e, mode, handle) {
+    var contentPath = cvContentPath();
+    if (!contentPath) { cvShowWarnings(['请先在顶部选择用于预览的视频']); return; }
+    if (!cv.box.w || !cv.box.h) { cvShowWarnings(['预览尚未就绪，请稍候再拖动']); return; }
+    if (mode === 'handle' && handle && handle.length === 1 && !cv.params.stretch) {
+      toast('边手柄用于拉伸（非等比）。如需拉伸请先打开「拉伸」开关，或使用四角手柄等比缩放', 'info');
+      return;
+    }
+    e.preventDefault();
+    var p = cvPointerPos(e);
+    cv.drag = {
+      mode: mode, hd: handle || '',
+      startX: p.x, startY: p.y,
+      startBox: { x: cv.box.x, y: cv.box.y, w: cv.box.w, h: cv.box.h },
+      startParams: { scale: cv.params.scale, w: cv.params.w, h: cv.params.h, dx: cv.params.dx, dy: cv.params.dy },
+    };
+    try { e.target.setPointerCapture(e.pointerId); } catch (e2) {}
+    $('cvCanvas').classList.add('cv-canvas--drag');
+    cvSetBadge('拖动中（近似）', 'drag');
+  }
+
+  function cvDragMove(e) {
+    if (!cv.drag) return;
+    var p = cvPointerPos(e);
+    var vs = cvViewScale();
+    var dx = (p.x - cv.drag.startX) / Math.max(0.01, vs);
+    var dy = (p.y - cv.drag.startY) / Math.max(0.01, vs);
+    var s = cv.drag.startBox;
+    var box = { x: s.x, y: s.y, w: s.w, h: s.h };
+    var ratio = s.w / Math.max(1, s.h);
+
+    if (cv.drag.mode === 'move') {
+      box.x = s.x + dx; box.y = s.y + dy;
+    } else {
+      var hd = cv.drag.hd;
+      var corner = (hd === 'tl' || hd === 'tr' || hd === 'bl' || hd === 'br');
+      if (corner) {
+        // 等比缩放：以对角为固定点
+        var newW = s.w;
+        if (hd === 'br' || hd === 'tr') newW = s.w + dx; else newW = s.w - dx;
+        newW = Math.max(16, newW);
+        var newH = Math.round(newW / Math.max(0.01, ratio));
+        var newScale = newW / Math.max(1, s.w) * cv.drag.startParams.scale;
+        box.w = newW; box.h = newH;
+        cv.params.scale = Math.round(newScale * 1000) / 1000;
+        if (hd === 'tl') { box.x = s.x + (s.w - newW); box.y = s.y + (s.h - newH); }
+        else if (hd === 'tr') { box.x = s.x; box.y = s.y + (s.h - newH); }
+        else if (hd === 'bl') { box.x = s.x + (s.w - newW); box.y = s.y; }
+        else { box.x = s.x; box.y = s.y; }
+      } else {
+        // 边手柄：拉伸（非等比）
+        if (hd === 'l') { box.x = s.x + dx; box.w = Math.max(16, s.w - dx); }
+        else if (hd === 'r') { box.w = Math.max(16, s.w + dx); }
+        else if (hd === 't') { box.y = s.y + dy; box.h = Math.max(16, s.h - dy); }
+        else if (hd === 'b') { box.h = Math.max(16, s.h + dy); }
+        cv.params.stretch = true;
+        cv.params.w = Math.round(box.w); cv.params.h = Math.round(box.h);
+      }
+    }
+    if (cv.params.posMode !== 'custom') cvSnap(box, e.altKey);
+    cv.box = box;
+    cvPaintBox();
+    cvBoxToParams(box);
+    cvWriteBackInputs(['scale', 'dx', 'dy', 'w', 'h']);
+    if (cv.params.stretch) { $('cvStretch').checked = true; $('cvStretchRow').hidden = false; }
+  }
+
+  function cvDragEnd() {
+    if (!cv.drag) return;
+    cv.drag = null;
+    cvDrawGuides(0, 0, false);
+    cvRequestPreview({ immediate: true });     // 松手后按当前参数渲染精确帧校正
+  }
+
+  /** 滚轮缩放（围绕内容中心，保持中心不动） */
+  function cvWheel(e) {
+    if (!cv.box.w) return;
+    e.preventDefault();
+    var factor = e.deltaY < 0 ? 1.02 : 1 / 1.02;
+    var nextScale = Math.min(3, Math.max(0.05, cv.params.scale * factor));
+    cv.params.scale = Math.round(nextScale * 1000) / 1000;
+    var size = cvContentSize();
+    var cx = cv.box.x + cv.box.w / 2, cy = cv.box.y + cv.box.h / 2;
+    cv.box = { x: cx - size.w / 2, y: cy - size.h / 2, w: size.w, h: size.h };
+    cvPaintBox();
+    cvBoxToParams(cv.box);
+    cvWriteBackInputs(['scale', 'dx', 'dy']);
+    if (cv.timer) clearTimeout(cv.timer);
+    cv.timer = setTimeout(function () { cv.timer = 0; cvDoPreview(); }, 220);
+  }
+
+  function cvBindDrag() {
+    var stage = $('cvCanvas'), box = $('cvBox');
+    box.addEventListener('pointerdown', function (e) {
+      if (e.target && e.target.className && String(e.target.className).indexOf('cv-hd') >= 0) return;
+      cvDragStart(e, 'move', '');
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('#cvBox .cv-hd'), function (h) {
+      h.addEventListener('pointerdown', function (e) { cvDragStart(e, 'handle', h.getAttribute('data-hd') || ''); });
+    });
+    document.addEventListener('pointermove', function (e) { if (cv.drag) cvDragMove(e); });
+    document.addEventListener('pointerup', function () { if (cv.drag) cvDragEnd(); });
+    document.addEventListener('pointercancel', function () { if (cv.drag) cvDragEnd(); });
+    stage.addEventListener('wheel', cvWheel, { passive: false });
+  }
+
+  // ── 控件绑定（统一「输入 → 参数 → 防抖预览」，程序性写入不回环）──
+  function cvBindControls() {
+    function onInput(id, apply, opts) {
+      var el = $(id);
+      if (!el) return;
+      var ev = (el.type === 'range' || el.type === 'number' || el.type === 'color') ? 'input' : 'change';
+      el.addEventListener(ev, function () {
+        if (cv.syncing) return;
+        if (apply(el) === false) return;
+        cvRequestPreview(opts);
+      });
+    }
+    onInput('cvTW', function (el) { cv.params.targetW = Math.max(16, cvNum(el, 1920)); return true; }, { immediate: true });
+    onInput('cvTH', function (el) { cv.params.targetH = Math.max(16, cvNum(el, 1080)); return true; }, { immediate: true });
+    onInput('cvBgMode', function (el) { cv.params.bgMode = String(el.value); cvSyncBgRows(); return true; }, { immediate: true });
+    onInput('cvBgColor', function (el) { cv.params.bgColor = String(el.value); return true; });
+    onInput('cvBgDir', function (el) { cv.params.bgDir = String(el.value).trim(); cv.bgIndex = 0; return true; });
+    onInput('cvBgPath', function (el) { cv.params.bgPath = String(el.value).trim(); return true; });
+    onInput('cvBgBlur', function (el) { cv.params.bgBlur = Math.max(0, cvNum(el, 0)); cvWriteBackInputs(['bgBlur']); return true; });
+    onInput('cvScale', function (el) { cv.params.scale = Math.min(3, Math.max(0.05, cvNum(el, 0.74))); cvWriteBackInputs(['scale']); return true; });
+    onInput('cvScaleNum', function (el) { cv.params.scale = Math.min(3, Math.max(0.05, cvNum(el, 0.74))); cvWriteBackInputs(['scale']); return true; });
+    onInput('cvStretch', function (el) {
+      cv.params.stretch = !!el.checked;
+      $('cvStretchRow').hidden = !cv.params.stretch;
+      if (cv.params.stretch && (!cv.params.w || !cv.params.h)) {
+        var size = cvContentSize();
+        cv.params.w = Math.round(size.w || 1280); cv.params.h = Math.round(size.h || 720);
+        cvWriteBackInputs(['w', 'h']);
+      }
+      return true;
+    }, { immediate: true });
+    onInput('cvW', function (el) { cv.params.w = Math.max(2, cvNum(el, 1280)); return true; });
+    onInput('cvH', function (el) { cv.params.h = Math.max(2, cvNum(el, 720)); return true; });
+    onInput('cvPos', function (el) { cv.params.posMode = String(el.value); return true; }, { immediate: true });
+    onInput('cvDx', function (el) { cv.params.dx = Math.round(cvNum(el, 0)); return true; });
+    onInput('cvDy', function (el) { cv.params.dy = Math.round(cvNum(el, 160)); return true; });
+    onInput('cvRadius', function (el) { cv.params.radius = Math.max(0, cvNum(el, 0)); cvWriteBackInputs(['radius']); return true; });
+    onInput('cvBorderW', function (el) { cv.params.borderW = Math.max(0, cvNum(el, 0)); cvWriteBackInputs(['borderW']); return true; });
+    onInput('cvBorderColor', function (el) { cv.params.borderColor = String(el.value); return true; });
+    onInput('cvWm', function (el) { cv.params.watermark = String(el.value).trim(); return true; });
+
+    // 操作条
+    $('cvAtRange').addEventListener('input', function () {
+      if (cv.syncing) return;
+      cv.at = Math.max(0, Number($('cvAtRange').value) || 0);
+      $('cvAt').value = cv.at.toFixed(1);
+    });
+    $('cvAtRange').addEventListener('change', function () { cvRequestPreview({ immediate: true }); });
+    $('cvAt').addEventListener('change', function () {
+      cv.at = Math.max(0, cvNum($('cvAt'), 0));
+      $('cvAtRange').value = String(cv.at);
+      cvRequestPreview({ immediate: true });
+    });
+    $('cvAtRandom').addEventListener('click', function () {
+      var max = cv.duration > 0.2 ? cv.duration - 0.1 : 0;
+      cv.at = Math.round(Math.random() * Math.max(0, max) * 10) / 10;
+      $('cvAt').value = cv.at.toFixed(1);
+      $('cvAtRange').value = String(cv.at);
+      cvRequestPreview({ immediate: true });
+    });
+    $('cvShowRaw').addEventListener('change', function () {
+      var stage = $('cvCanvas');
+      if (this.checked) stage.classList.add('cv-canvas--raw'); else stage.classList.remove('cv-canvas--raw');
+    });
+    $('cvBgPrev').addEventListener('click', function () { cvBgStep(-1); });
+    $('cvBgNext').addEventListener('click', function () { cvBgStep(1); });
+    $('cvScanBg').addEventListener('click', function () { cvScanBackgrounds(); });
+    $('cvBgDir').addEventListener('change', function () { if (cv.params.bgMode === 'dir') cvScanBackgrounds(true); });
+    $('cvBgPath').addEventListener('change', function () { cvRequestPreview({ immediate: true }); });
+
+    // 选择类按钮复用主进程的既有对话框通道
+    $('cvPickBgDir').addEventListener('click', function () {
+      api.pick_directory('选择背景目录', cv.params.bgDir).then(function (d) {
+        if (!d) return;
+        cv.params.bgDir = String(d);
+        $('cvBgDir').value = String(d);
+        cvScanBackgrounds(true);
+      }).catch(function (e) { toast('选择目录失败：' + ((e && e.message) || e), 'error'); });
+    });
+    $('cvPickBgPath').addEventListener('click', function () {
+      api.pick_image(cv.params.bgPath).then(function (f) {
+        if (!f) return;
+        cv.params.bgPath = String(f);
+        $('cvBgPath').value = String(f);
+        cvRequestPreview({ immediate: true });
+      }).catch(function (e) { toast('选择文件失败：' + ((e && e.message) || e), 'error'); });
+    });
+    $('cvPickWm').addEventListener('click', function () {
+      api.pick_image(cv.params.watermark).then(function (f) {
+        if (!f) return;
+        cv.params.watermark = String(f);
+        $('cvWm').value = String(f);
+        cvRequestPreview({ immediate: true });
+      }).catch(function (e) { toast('选择水印失败：' + ((e && e.message) || e), 'error'); });
+    });
+
+    // 预设
+    $('cvPresetApply').addEventListener('click', cvApplyPreset);
+    $('cvPresetSave').addEventListener('click', cvSavePreset);
+    $('cvPresetDelete').addEventListener('click', cvDeletePreset);
+    cvBindDrag();
+  }
+
+  function cvScanBackgrounds(auto) {
+    if (!api || !api.canvas_list_backgrounds) return;
+    var dir = cv.params.bgDir;
+    if (!dir) { if (!auto) toast('请先选择背景目录', 'info'); return; }
+    setStatus('正在扫描背景候选…');
+    api.canvas_list_backgrounds(dir).then(function (r) {
+      if (!r || !r.ok) { setStatus('背景扫描失败：' + ((r && r.error) || '未知原因')); return; }
+      cv.bgTotal = r.matched || 0;
+      cv.bgIndex = 0;
+      cv.bgName = r.matched ? String(r.list[0].name || '') : '';
+      setStatus('背景候选 ' + r.matched + ' / 扫描 ' + r.scanned + ' 个文件' + (r.matched ? '' : '（要求 1920×1080）'));
+      cvUpdateBgInfo();
+      cvRequestPreview({ immediate: true });
+    }).catch(function (e) { setStatus('背景扫描失败：' + ((e && e.message) || e)); });
+  }
+
+  function cvBgStep(step) {
+    if (cv.params.bgMode !== 'dir') { toast('只有「目录随机」模式支持切换背景', 'info'); return; }
+    if (!cv.bgTotal) { cvScanBackgrounds(true); return; }
+    cv.bgIndex = ((cv.bgIndex + step) % cv.bgTotal + cv.bgTotal) % cv.bgTotal;
+    cvRequestPreview({ immediate: true });
+  }
+
+  // ── 参数预设（存设置库 app scope，双版本共用同一份）──
+  function cvLoadPresets(selectName) {
+    if (!api || !api.canvas_preset_list) return;
+    api.canvas_preset_list().then(function (r) {
+      var sel = $('cvPreset');
+      if (!sel) return;
+      var list = (r && r.ok && r.list) || [];
+      sel.innerHTML = '<option value="">（未选择）</option>' + list.map(function (x) {
+        return '<option value="' + esc(x.name) + '">' + esc(x.name) + '</option>';
+      }).join('');
+      if (selectName) sel.value = selectName;
+    }).catch(function () {});
+  }
+
+  function cvSavePreset() {
+    var name = window.prompt('预设名称（例如「带货竖版·0.74」）', '');
+    if (name == null) return;
+    name = String(name).trim();
+    if (!name) { toast('预设名称不能为空', 'error'); return; }
+    if (!api || !api.canvas_preset_save) return;
+    api.canvas_preset_save(name, cv.params).then(function (r) {
+      if (!r || !r.ok) { toast('保存预设失败：' + ((r && r.error) || '未知原因'), 'error'); return; }
+      toast('已保存预设：' + name, 'ok');
+      cvLoadPresets(name);
+    }).catch(function (e) { toast('保存预设失败：' + ((e && e.message) || e), 'error'); });
+  }
+
+  function cvApplyPreset() {
+    var sel = $('cvPreset');
+    var name = sel ? String(sel.value || '') : '';
+    if (!name) { toast('请先选择一个预设', 'info'); return; }
+    api.canvas_preset_list().then(function (r) {
+      var item = ((r && r.list) || []).filter(function (x) { return x.name === name; })[0];
+      if (!item) { toast('预设不存在', 'error'); return; }
+      cv.params = Object.assign({}, cv.params, item.params || {});
+      cvApplyParamsToInputs();
+      cvRequestPreview({ immediate: true });
+      toast('已加载预设：' + name, 'ok');
+    }).catch(function (e) { toast('加载预设失败：' + ((e && e.message) || e), 'error'); });
+  }
+
+  function cvDeletePreset() {
+    var sel = $('cvPreset');
+    var name = sel ? String(sel.value || '') : '';
+    if (!name) { toast('请先选择要删除的预设', 'info'); return; }
+    api.canvas_preset_delete(name).then(function (r) {
+      if (!r || !r.ok) { toast('删除预设失败：' + ((r && r.error) || '未知原因'), 'error'); return; }
+      toast('已删除预设：' + name, 'ok');
+      cvLoadPresets();
+    }).catch(function (e) { toast('删除预设失败：' + ((e && e.message) || e), 'error'); });
+  }
+
+  /** 把参数写回全部控件（用于预设加载与初始化） */
+  function cvApplyParamsToInputs() {
+    cv.syncing = true;
+    try {
+      var p = cv.params;
+      var set = function (id, v) { var el = $(id); if (el) el.value = String(v); };
+      set('cvTW', p.targetW); set('cvTH', p.targetH);
+      set('cvBgMode', p.bgMode); set('cvBgColor', p.bgColor);
+      set('cvBgDir', p.bgDir); set('cvBgPath', p.bgPath);
+      set('cvBgBlur', p.bgBlur); set('cvBgBlurVal', p.bgBlur);
+      set('cvScale', p.scale); set('cvScaleNum', p.scale);
+      var st = $('cvStretch'); if (st) st.checked = !!p.stretch;
+      $('cvStretchRow').hidden = !p.stretch;
+      set('cvW', p.w); set('cvH', p.h);
+      set('cvPos', p.posMode); set('cvDx', p.dx); set('cvDy', p.dy);
+      set('cvRadius', p.radius); set('cvRadiusVal', p.radius);
+      set('cvBorderW', p.borderW); set('cvBorderWVal', p.borderW);
+      set('cvBorderColor', p.borderColor);
+      set('cvWm', p.watermark);
+    } finally { cv.syncing = false; }
+    cvSyncBgRows();
+  }
+
+  function cvOnShow() {
+    if (!cv.ready) return;
+    if (!cv.meta) cvRequestPreview({ immediate: true });
+  }
+
+  function cvInit() {
+    if (cv.ready) return;
+    cv.ready = true;
+    cvBindControls();
+    cvApplyParamsToInputs();
+    cvLoadPresets();
+    cvUpdateBgInfo();
+    // 选择视频后自动带出预览样本（在既有按钮回调之后执行）
+    ['btnPickFiles', 'btnPickDir', 'btnClearInput'].forEach(function (id) {
+      var el = $(id);
+      if (el) el.addEventListener('click', function () { setTimeout(function () { cvRequestPreview({ immediate: true }); }, 0); });
+    });
+    window.addEventListener('resize', function () { if (cv.box.w) cvPaintBox(); });
+  }
+
   // ── Tab 切换（后处理 / 画布合成）──
   function bindTabs() {
     var tabs = document.querySelectorAll('.tl-tab');
@@ -616,6 +1239,7 @@
         Array.prototype.forEach.call(tabs, function (b) { b.classList.toggle('tl-tab--active', b === btn); });
         $('panePost').hidden = name !== 'post';
         $('paneCanvas').hidden = name !== 'canvas';
+        if (name === 'canvas') cvOnShow();
       });
     });
   }
@@ -641,6 +1265,7 @@
     renderInputHint();
     syncOutputRows();
     bindTabs();
+    cvInit();
     bindFormEvents();
     bindOutputEvents();
     if (!api || !api.list_tools) { setRunEnabled(false, '后端接口不可用'); toast('后端接口不可用', 'error'); return; }

@@ -87,6 +87,12 @@ const PURE_BACKEND_ROUTES = {
   rerun_tool_task: { m: 'rerunToolTask', a: (args) => [args[0]] },
   list_dir: { m: 'listDir', a: (args) => [args[0]] },
   ensure_ffmpeg: { m: 'ensureFfmpeg', a: () => [{ force: true }] },
+  // 画布合成（竖转横）：单帧预览 / 背景候选 / 参数预设
+  canvas_preview_frame: { m: 'canvasPreviewFrame', a: (args) => [args[0]] },
+  canvas_list_backgrounds: { m: 'canvasListBackgrounds', a: (args) => [args[0]] },
+  canvas_preset_list: { m: 'canvasPresetList', a: () => [] },
+  canvas_preset_save: { m: 'canvasPresetSave', a: (args) => [args[0], args[1]] },
+  canvas_preset_delete: { m: 'canvasPresetDelete', a: (args) => [args[0]] },
   list_mask_projects: { m: 'listMaskProjects', a: () => [] },
   list_mask_videos: { m: 'listMaskVideos', a: (args) => [args[0]] },
   list_mask_masks: { m: 'listMaskMasks', a: (args) => [args[0]] },

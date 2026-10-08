@@ -5329,8 +5329,306 @@ class Api {
   // 参数经 TOOL_SPEC（JSON）传入；步骤清单与参数 schema 由引擎侧注册表提供，
   // 前端据此**自动渲染表单**（加能力 = 加一个步骤文件，前端不用改）
   // ══════════════════════════════════════════════════════════════════════
+  // ── 画布合成（竖转横）：单帧预览 / 背景候选 / 参数预设 ────────────────────────
+  // 预览与正式处理共用 engines/tools/canvas.js 的 buildCanvasPlan()：参数同源、表达式同源，
+  // 「预览所见即所得」由结构保证。预览帧输出 PNG（软件编码），不占用编码硬件的会话，
+  // 因此不会与正在运行的批量任务互斥；产物落 <数据目录>\preview\（扫描阶段已排除该目录）。
   _toolSteps() {
     try { return require(path.join(this.enginesDir, 'tools', 'index.js')); } catch (e) { return null; }
+  }
+
+  /** 画布合成共享模块（参数模型 + 滤镜链构造） */
+  _canvasModule() {
+    try { return require(path.join(this.enginesDir, 'tools', 'canvas.js')); } catch (e) { return null; }
+  }
+
+  /** 素材尺寸探测（路径 + 大小/mtime 作指纹，结果驻留内存避免反复起进程） */
+  _canvasProbeSize(file) {
+    return new Promise((resolve) => {
+      const p = String(file || '');
+      if (!p) return resolve(null);
+      let stamp = '';
+      try { const st = fs.statSync(p); stamp = st.size + ':' + Math.round(st.mtimeMs); } catch (e) { return resolve(null); }
+      if (!this._canvasSizeCache) this._canvasSizeCache = new Map();
+      const hit = this._canvasSizeCache.get(p);
+      if (hit && hit.stamp === stamp) return resolve(hit);
+      const ffprobe = this._resolveFfmpegBin().ffprobePath;
+      if (!ffprobe) return resolve(null);
+      try {
+        const { execFile } = require('child_process');
+        execFile(ffprobe, ['-v', 'error', '-select_streams', 'v:0',
+          '-show_entries', 'stream=width,height', '-show_entries', 'format=duration', '-of', 'json', p],
+        { encoding: 'utf8', timeout: 20000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+          if (err) return resolve(null);
+          let w = 0, h = 0, dur = 0;
+          try {
+            const j = JSON.parse(String(stdout || '{}'));
+            const s = (j.streams || [])[0] || {};
+            w = Number(s.width) || 0; h = Number(s.height) || 0;
+            dur = Number((j.format || {}).duration) || 0;
+          } catch (e2) {}
+          const info = { path: p, width: w, height: h, duration: dur, stamp: stamp };
+          this._canvasSizeCache.set(p, info);
+          resolve(info);
+        });
+      } catch (e) { resolve(null); }
+    });
+  }
+
+  /**
+   * 背景候选枚举：扫描目录（两层内）并按「1920×1080」过滤 —— 沿用原脚本的候选规则。
+   * 返回稳定排序（按路径）的清单，保证「同索引 = 同背景」，前端上一个/下一个切换才有确定性。
+   */
+  async canvasListBackgrounds(dir) {
+    const envG = this._envGuard('canvas_bg_list');
+    if (envG) return envG;
+    const root = String(dir || '').trim();
+    if (!root) return { ok: false, error: '请先选择背景目录' };
+    let isDir = false;
+    try { isDir = fs.statSync(root).isDirectory(); } catch (e) {}
+    if (!isDir) return { ok: false, error: '背景目录不存在：' + root };
+    const exts = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.mp4', '.mov', '.mkv', '.avi']);
+    const files = [];
+    const walk = (d, depth) => {
+      if (files.length >= 500 || depth > 2) return;
+      let ents = [];
+      try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return; }
+      for (const e of ents) {
+        const p2 = path.join(d, e.name);
+        if (e.isDirectory()) { walk(p2, depth + 1); continue; }
+        if (exts.has(path.extname(e.name).toLowerCase())) files.push(p2);
+      }
+    };
+    walk(root, 0);
+    const infos = await this._runWithLimit(files, (f) => this._canvasProbeSize(f), Math.min(4, this.probeConcurrency || 4), null);
+    const list = (infos || []).filter((x) => x && x.width === 1920 && x.height === 1080)
+      .map((x) => ({
+        path: x.path, name: path.basename(x.path),
+        kind: /\.(mp4|mov|mkv|avi)$/i.test(x.path) ? 'video' : 'image',
+        duration: x.duration || 0,
+      }))
+      .sort((a, b) => a.path.localeCompare(b.path));
+    return { ok: true, dir: root, scanned: files.length, matched: list.length, list: list };
+  }
+
+  /** 素材指纹（大小 + mtime）：素材被替换但路径不变时，必须让预览缓存失效 */
+  _canvasStamp(file) {
+    try { const st = fs.statSync(String(file || '')); return st.size + ':' + Math.round(st.mtimeMs); } catch (e) { return '-'; }
+  }
+
+  /** 预览图缓存键：参数 + 表达式 + 时间点 + 素材指纹，任一项变化即重新渲染 */
+  _canvasPreviewKey(plan, at, src, scale) {
+    const crypto = require('crypto');
+    const h = crypto.createHash('sha1');
+    h.update(JSON.stringify(plan.meta || {}));
+    h.update('|' + plan.filterComplex);
+    h.update('|' + String(Math.round((Number(at) || 0) * 1000)));
+    h.update('|' + String(scale));
+    h.update('|' + [src.contentPath, src.bgPath, src.watermarkPath].join('\u0001'));
+    h.update('|' + [this._canvasStamp(src.contentPath), this._canvasStamp(src.bgPath), this._canvasStamp(src.watermarkPath)].join('\u0001'));
+    return h.digest('hex');
+  }
+
+  /** 预览磁盘产物的最旧淘汰（超出上限时按 mtime 删除，避免长期堆积） */
+  _canvasPreviewTrimAsync(outDir, keep) {
+    fs.promises.readdir(outDir).then((names) => {
+      const list = names.filter((n) => /^canvas-.*\.png$/.test(n));
+      if (list.length <= keep) return null;
+      const withTime = list.map((n) => {
+        const f = path.join(outDir, n);
+        try { return { f: f, t: fs.statSync(f).mtimeMs }; } catch (e) { return { f: f, t: 0 }; }
+      }).sort((a, b) => a.t - b.t);
+      const drop = withTime.slice(0, withTime.length - keep);
+      return Promise.all(drop.map((x) => fs.promises.unlink(x.f).catch(() => null)));
+    }).catch(() => null);
+  }
+
+  /**
+   * 单帧预览：一次 ffmpeg 调用同时产出三张 PNG（合成图 / 纯背景层 / 内容原帧），
+   * 供前端「底图 + 前景」分层拖动；返回值同时带内存/磁盘缓存与几何元数据。
+   */
+  async canvasPreviewFrame(payload) {
+    const p = payload || {};
+    const mod = this._canvasModule();
+    if (!mod) return { ok: false, error: '程序文件不完整（缺少画布合成组件），请重新安装或校验程序文件' };
+    const envG = this._envGuard('canvas_preview');
+    if (envG) return envG;
+    const contentPath = String(p.contentPath || '').trim();
+    let contentOk = false;
+    try { contentOk = fs.statSync(contentPath).isFile(); } catch (e) {}
+    if (!contentOk) return { ok: false, error: '请先选择要预览的视频文件' };
+    const ffmpeg = this._resolveFfmpegBin().ffmpegPath;
+    if (!ffmpeg) return { ok: false, error: 'FFmpeg 不可用，请重新下载组件' };
+
+    const params = Object.assign({}, p.params || {});
+    // 背景解析（目录模式按索引取候选，索引归一化到候选范围内）
+    let bgPath = String(p.bgPath || params.bgPath || '').trim();
+    let bgTotal = 0, bgIndexUsed = 0, bgKind = '';
+    if (params.bgMode === 'dir') {
+      const lst = await this.canvasListBackgrounds(params.bgDir);
+      if (!lst.ok) return lst;
+      if (!lst.list.length) return { ok: false, error: '背景目录里没有 1920×1080 的图片或视频（已扫描 ' + lst.scanned + ' 个文件）' };
+      bgTotal = lst.list.length;
+      bgIndexUsed = ((Math.trunc(Number(p.bgIndex) || 0) % bgTotal) + bgTotal) % bgTotal;
+      bgPath = lst.list[bgIndexUsed].path;
+      bgKind = lst.list[bgIndexUsed].kind;
+    } else if (params.bgMode === 'image' || params.bgMode === 'video') {
+      let ok = false;
+      try { ok = fs.statSync(bgPath).isFile(); } catch (e) {}
+      if (!ok) return { ok: false, error: '背景文件不存在' };
+      bgKind = /\.(mp4|mov|mkv|avi)$/i.test(bgPath) ? 'video' : 'image';
+    }
+
+    // 素材尺寸（内容必测；背景与水印可选）
+    const cInfo = await this._canvasProbeSize(contentPath);
+    if (!cInfo || !cInfo.width || !cInfo.height) return { ok: false, error: '无法读取视频尺寸（ffprobe 未返回有效信息）' };
+    let wmPath = String(p.watermarkPath || params.watermark || '').trim();
+    let wmOk = false;
+    try { wmOk = fs.statSync(wmPath).isFile(); } catch (e) { wmOk = false; }
+    const src = {
+      contentW: cInfo.width, contentH: cInfo.height, contentPath: contentPath,
+      bgPath: bgPath, bgKind: bgKind, watermarkPath: wmOk ? wmPath : '',
+      bgColorValue: params.bgColor,
+    };
+    if (wmPath && !wmOk) src._wmMissing = true;
+
+    const at = Math.max(0, Number(p.at) || 0);
+    if (cInfo.duration > 0 && at >= cInfo.duration) {
+      return { ok: false, error: '时间点超出视频时长（' + cInfo.duration.toFixed(1) + 's）', duration: cInfo.duration };
+    }
+
+    const plan = mod.buildCanvasPlan(params, src);
+    if (src._wmMissing) plan.meta.warnings.push('水印文件不存在，本次预览未叠加水印');
+
+    const scale = (() => {
+      const v = Number(p.previewScale);
+      if (!isFinite(v) || v <= 0) return 0.5;
+      return Math.min(1, Math.max(0.25, v));
+    })();
+    const key = this._canvasPreviewKey(plan, at, src, scale);
+
+    if (!this._canvasPreviewCache) this._canvasPreviewCache = new Map();
+    const cached = this._canvasPreviewCache.get(key);
+    if (cached) return Object.assign({ ok: true, fromCache: true, ms: 0 }, cached);
+
+    // 并发上限定为 2：拖动过程中旧请求尚未结束时，前端会收到 BUSY 并稍后用最新参数重试
+    if ((this._canvasPreviewRunning || 0) >= 2) return { ok: false, error: 'BUSY' };
+    this._canvasPreviewRunning = (this._canvasPreviewRunning || 0) + 1;
+    const startedAt = Date.now();
+    try {
+      const outDir = path.join(this.storageDir || '', 'preview');
+      await fs.promises.mkdir(outDir, { recursive: true });
+      const stamp = key.slice(0, 12);
+      const outC = path.join(outDir, 'canvas-' + stamp + '-composed.png');
+      const outB = path.join(outDir, 'canvas-' + stamp + '-bg.png');
+      const outR = path.join(outDir, 'canvas-' + stamp + '-raw.png');
+      const pvW = Math.max(2, Math.round(plan.meta.canvasW * scale / 2) * 2);
+      const pvH = Math.max(2, Math.round(plan.meta.canvasH * scale / 2) * 2);
+      const rawW = Math.max(2, Math.round(plan.meta.contentBox.w * scale / 2) * 2);
+      const args = ['-hide_banner', '-loglevel', 'error', '-y'];
+      for (let i = 0; i < plan.ffmpegInputs.length; i++) {
+        const inp = plan.ffmpegInputs[i];
+        // -ss 只作用于紧随其后的输入：内容与背景视频取同一时间点（图片背景不受影响）
+        if (i === 0 || /\.(mp4|mov|mkv|avi)$/i.test(String(inp.path || ''))) args.push('-ss', String(at));
+        for (const a of (inp.args || [])) args.push(a);
+        args.push('-i', inp.lavfi || inp.path);
+      }
+      args.push('-filter_complex', plan.filterComplex);
+      // 预览缩放用输出尺寸选项（-s）：输出流已由 filter_complex 提供，不能再挂 -vf（简单/复杂滤镜不可同时作用于同一流）
+      const rawH = Math.max(2, Math.round(rawW * (plan.meta.contentBox.h / Math.max(1, plan.meta.contentBox.w)) / 2) * 2);
+      args.push('-map', plan.maps.composed, '-frames:v', '1', '-s', pvW + 'x' + pvH, '-c:v', 'png', outC);
+      args.push('-map', plan.maps.bg, '-frames:v', '1', '-s', pvW + 'x' + pvH, '-c:v', 'png', outB);
+      args.push('-map', plan.maps.raw, '-frames:v', '1', '-s', rawW + 'x' + rawH, '-c:v', 'png', outR);
+
+      const { execFile } = require('child_process');
+      await new Promise((resolve, reject) => {
+        execFile(ffmpeg, args, { windowsHide: true, timeout: 30000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+          if (err) {
+            const tail = String(stderr || err.message || '').split('\n').filter(Boolean).slice(-3).join(' / ').slice(0, 300);
+            return reject(new Error(tail || 'ffmpeg 执行失败'));
+          }
+          resolve();
+        });
+      });
+
+      const toData = (f) => {
+        try { return 'data:image/png;base64,' + fs.readFileSync(f).toString('base64'); } catch (e) { return ''; }
+      };
+      const result = {
+        composed: toData(outC),
+        bgOnly: toData(outB),
+        raw: toData(outR),
+        previewScale: scale,
+        previewW: pvW, previewH: pvH,
+        files: { composed: outC, bgOnly: outB, raw: outR },
+        meta: Object.assign({}, plan.meta, {
+          at: at, duration: cInfo.duration || 0,
+          bgTotal: bgTotal, bgIndex: bgIndexUsed,
+          bgPath: plan.meta.bgModeUsed === 'color' ? '' : bgPath,
+          ms: Date.now() - startedAt, fromCache: false,
+        }),
+      };
+      // 内存缓存（上限 60 组，Map 保持插入序 → 淘汰最旧）
+      this._canvasPreviewCache.set(key, result);
+      if (this._canvasPreviewCache.size > 60) {
+        const first = this._canvasPreviewCache.keys().next();
+        if (!first.done) this._canvasPreviewCache.delete(first.value);
+      }
+      // 磁盘产物上限（超出按 mtime 淘汰，避免长期堆积）
+      this._canvasPreviewTrimAsync(outDir, 150);
+      this._lg('UI', 'canvas.preview', '画布合成预览 · ' + pvW + '×' + pvH + ' · ' + (Date.now() - startedAt) + 'ms'
+        + ' · 内容盒 ' + result.meta.contentBox.w + '×' + result.meta.contentBox.h
+        + ' @' + result.meta.contentBox.x + ',' + result.meta.contentBox.y
+        + (result.meta.warnings.length ? ' · ' + result.meta.warnings.join('；') : ''),
+      { at: at, bgIndex: bgIndexUsed, bgTotal: bgTotal, warnings: result.meta.warnings.length });
+      return Object.assign({ ok: true, fromCache: false, ms: result.meta.ms }, result);
+    } catch (e) {
+      const msg = String((e && e.message) || e);
+      this._lg('ERR', 'canvas.preview', '画布合成预览失败 · ' + msg, { at: at });
+      return { ok: false, error: '预览渲染失败：' + msg };
+    } finally {
+      this._canvasPreviewRunning = Math.max(0, (this._canvasPreviewRunning || 1) - 1);
+    }
+  }
+
+  /** 画布参数预设：存设置库 app scope（键 canvas_presets，JSON） */
+  canvasPresetList() {
+    try {
+      const raw = String(this.getAppSetting('canvas_presets', '') || '');
+      const obj = raw ? JSON.parse(raw) : {};
+      const list = Object.keys(obj).map((k) => ({ name: k, params: obj[k] }));
+      return { ok: true, list: list };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  }
+
+  canvasPresetSave(name, params) {
+    const n = String(name || '').trim().slice(0, 40);
+    if (!n) return { ok: false, error: '预设名称不能为空' };
+    if (!this._useSettings() || !this._settingsStore) return { ok: false, error: '设置库不可用，无法保存预设' };
+    try {
+      const cur = this.canvasPresetList();
+      const obj = {};
+      (cur.list || []).forEach((x) => { obj[x.name] = x.params; });
+      if (!obj[n] && Object.keys(obj).length >= 50) return { ok: false, error: '预设数量已达上限（50）' };
+      obj[n] = params || {};
+      this._settingsStore.set('app', 'canvas_presets', JSON.stringify(obj));
+      this._lg('CFG', 'canvas.preset', '画布合成参数预设 · 保存 ' + n, { name: n });
+      return { ok: true, name: n, total: Object.keys(obj).length };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  }
+
+  canvasPresetDelete(name) {
+    const n = String(name || '').trim();
+    if (!n) return { ok: false, error: '预设名称不能为空' };
+    if (!this._useSettings() || !this._settingsStore) return { ok: false, error: '设置库不可用，无法删除预设' };
+    try {
+      const cur = this.canvasPresetList();
+      const obj = {};
+      (cur.list || []).forEach((x) => { if (x.name !== n) obj[x.name] = x.params; });
+      this._settingsStore.set('app', 'canvas_presets', JSON.stringify(obj));
+      this._lg('CFG', 'canvas.preset', '画布合成参数预设 · 删除 ' + n, { name: n });
+      return { ok: true, name: n, total: Object.keys(obj).length };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   }
 
   /** 步骤清单 + 参数 schema + 输出策略可选项（供前端渲染表单） */

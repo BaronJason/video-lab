@@ -225,6 +225,12 @@
     rerun_tool_task: function (id) { return invokeArgs('rerun_tool_task', id); },
     list_dir: function (dir) { return invokeArgs('list_dir', dir); },
     pick_image: function (prev) { return invokeArgs('pick_image', prev); },
+    // 画布合成（竖转横）：单帧预览 / 背景候选 / 参数预设
+    canvas_preview_frame: function (payload) { return invokeArgs('canvas_preview_frame', payload); },
+    canvas_list_backgrounds: function (dir) { return invokeArgs('canvas_list_backgrounds', dir); },
+    canvas_preset_list: function () { return invoke('canvas_preset_list', []); },
+    canvas_preset_save: function (name, params) { return invokeArgs('canvas_preset_save', name, params); },
+    canvas_preset_delete: function (name) { return invokeArgs('canvas_preset_delete', name); },
     get_runlog: function (opts) { return invokeArgs('get_runlog', opts); },
     get_app_info: function () { return invoke('get_app_info', []); },
     get_api_index: function () { return invoke('get_api_index', []); },

@@ -112,6 +112,12 @@ contextBridge.exposeInMainWorld('txapi', {
   rerun_tool_task: (id) => invoke('rerun_tool_task', id),
   list_dir: (dir) => invoke('list_dir', dir),
   pick_image: (prev) => invoke('pick_image', prev),
+  // 画布合成（竖转横）：单帧预览 / 背景候选 / 参数预设
+  canvas_preview_frame: (payload) => invoke('canvas_preview_frame', payload),
+  canvas_list_backgrounds: (dir) => invoke('canvas_list_backgrounds', dir),
+  canvas_preset_list: () => invoke('canvas_preset_list'),
+  canvas_preset_save: (name, params) => invoke('canvas_preset_save', name, params),
+  canvas_preset_delete: (name) => invoke('canvas_preset_delete', name),
   // agent 友好接口：运行日志 / 环境上下文 / 接口清单
   get_runlog: (opts) => invoke('get_runlog', opts),
   get_app_info: () => invoke('get_app_info'),

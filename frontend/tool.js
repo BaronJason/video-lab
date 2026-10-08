@@ -1090,6 +1090,30 @@
     return b;
   }
 
+  /**
+   * 尺寸吸附（手柄缩放专用）：把尺寸吸到**画布的整数分割**上 —— 满屏 / 1/2 / 2/3 / 3/4 / 1/3 / 1/4，
+   * 便于"正好占满屏幕""正好一半"这类整数构图（位置吸附管不了尺寸，故单列一层）。
+   * 等比缩放只有一个自由度：所有候选（按画布宽整分，以及把画布高整分按当前箱比例折算到宽）
+   * 统一在**箱宽**上比较取最近命中；阈值与位置吸附一致（cv.snap，按视图像素折算到画布像素）。
+   * 传入当前目标箱宽 w 与箱比例 ratio（w/h），命中则返回 { w, tag }，否则 null。
+   */
+  function cvSnapSizeW(w, ratio) {
+    var W = cvCanvasW(), H = cvCanvasH();
+    var vs = cvViewScale();
+    var tol = cv.snap / Math.max(0.05, vs);
+    var cands = [];
+    [[1, '满屏'], [1 / 2, '1/2'], [2 / 3, '2/3'], [3 / 4, '3/4'], [1 / 3, '1/3'], [1 / 4, '1/4']].forEach(function (it) {
+      cands.push({ w: W * it[0], tag: '宽 ' + it[1] });
+      cands.push({ w: H * it[0] * ratio, tag: '高 ' + it[1] });
+    });
+    var best = null;
+    cands.forEach(function (c) {
+      var d = c.w - w;
+      if (Math.abs(d) <= tol && (!best || Math.abs(d) < Math.abs(best.d))) best = { d: d, tag: c.tag };
+    });
+    return best ? { w: w + best.d, tag: best.tag } : null;
+  }
+
   function cvDrawGuides(vx, hy, on) {
     var gv = $('cvGuideV'), gh = $('cvGuideH');
     if (!gv || !gh) return;
@@ -1135,6 +1159,12 @@
         var newW = s.w;
         if (hd === 'br' || hd === 'tr') newW = s.w + dx; else newW = s.w - dx;
         newW = Math.max(16, newW);
+        // 尺寸吸附（Alt 临时关闭，与位置吸附一致）：吸到画布整分 —— 满屏 / 1/2 / 2/3 / 3/4 / 1/3 / 1/4
+        var snapTag = '';
+        if (!e.altKey) {
+          var sz = cvSnapSizeW(newW, ratio);
+          if (sz) { newW = sz.w; snapTag = sz.tag; }
+        }
         var newH = Math.round(newW / Math.max(0.01, ratio));
         var newScale = newW / Math.max(1, s.w) * cv.drag.startParams.scale;
         box.w = newW; box.h = newH;
@@ -1143,6 +1173,8 @@
         else if (hd === 'tr') { box.x = s.x; box.y = s.y + (s.h - newH); }
         else if (hd === 'bl') { box.x = s.x + (s.w - newW); box.y = s.y; }
         else { box.x = s.x; box.y = s.y; }
+        // 吸附命中时给出可读反馈（位置吸附的参考线管不到"尺寸"）
+        cvSetBadge(snapTag ? ('已吸附：' + snapTag) : '拖动中（近似）', snapTag ? 'ok' : 'drag');
       }
     }
     if (cv.params.posMode !== 'custom') cvSnap(box, e.altKey);

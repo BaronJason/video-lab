@@ -10,6 +10,8 @@
   <link rel="stylesheet" href="settings.css">
   <link rel="manifest" href="/manifest.json">
   <script>
+    // 皮肤首屏注入：与设置页同理 —— 渲染前同步应用已缓存的皮肤，避免"先白后换"的闪烁
+    try { var _sk0 = localStorage.getItem('vl_skin'); if (_sk0) document.documentElement.setAttribute('data-skin', _sk0); } catch (e) {}
     if (location.protocol.startsWith('http')) {
       document.addEventListener('DOMContentLoaded', function () {
         var fav = document.createElement('link');

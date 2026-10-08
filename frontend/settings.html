@@ -10,6 +10,9 @@
   <link rel="stylesheet" href="settings.css">
   <link rel="manifest" href="/manifest.json">
   <script>
+    // 皮肤首屏注入：主窗口/本页切换皮肤时都会把当前皮肤写进 localStorage（同源共享），
+    // 这里在样式生效前同步应用，避免内嵌设置页"先按默认皮肤渲染、再被异步结果改回来"的闪烁。
+    try { var _sk0 = localStorage.getItem('vl_skin'); if (_sk0) document.documentElement.setAttribute('data-skin', _sk0); } catch (e) {}
     if (location.protocol.startsWith('http')) {
       document.addEventListener('DOMContentLoaded', function () {
         var fav = document.createElement('link');
@@ -221,7 +224,7 @@
         </div>
         <div class="dir-row">
           <span class="form-label-inline">令牌</span>
-          <input class="form-input" id="httpToken" type="text" maxlength="32" placeholder="访问令牌 Token" title="浏览器访问令牌（自定义或随机生成）">
+          <input class="form-input" id="httpToken" type="text" maxlength="64" placeholder="访问令牌 Token（8–64 位）" title="浏览器访问令牌：8–64 位（短于 8 位会被忽略，页面会提示）">
           <button class="btn" id="btnGenToken" title="随机生成新的访问令牌">随机生成</button>
         </div>
         <div class="producer-preview">

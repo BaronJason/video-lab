@@ -103,9 +103,18 @@
   // 做法：沿用 recomputeDirty 这个名字 —— 它原本就挂在所有输入/复选/单选/标签变更上（13 处），
   //      内部改为「排一次防抖保存」，于是全部改动点自动升级为即时保存。
   var _saveTimer = null;
+  var _saving = false, _saveAgain = false;   // 保存串行化：进行中再次改动 → 合并为"完成后再存一次"
   function scheduleSave() {
     if (_saveTimer) clearTimeout(_saveTimer);
     _saveTimer = setTimeout(function () { _saveTimer = null; collectAndSave(true); }, 400);
+  }
+
+  /** 立即落库（取消防抖窗口）：离开/隐藏页面时调用，避免 400ms 内的改动丢失 */
+  function flushSave() {
+    if (!_saveTimer) return;
+    clearTimeout(_saveTimer);
+    _saveTimer = null;
+    collectAndSave(true);
   }
 
   function recomputeDirty() {
@@ -113,7 +122,9 @@
   }
 
   function setSkin(id) {
-    document.documentElement.setAttribute('data-skin', THEMES.some(function (t) { return t.id === id; }) ? id : THEMES[0].id);
+    var real = THEMES.some(function (t) { return t.id === id; }) ? id : THEMES[0].id;
+    document.documentElement.setAttribute('data-skin', real);
+    try { localStorage.setItem('vl_skin', real); } catch (e) {}   // 与主窗口共享，供内嵌页首屏注入
     var items = document.querySelectorAll('#themeRow .theme-item');
     items.forEach(function (it) { it.classList.toggle('is-active', it.dataset.theme === id); });
   }
@@ -564,6 +575,8 @@
   // 收集全部设置项并落库。silent=true 表示由即时保存触发：
   // 此时必填项可能正被用户改写，校验失败只静默跳过，不弹「参数未设置」打扰输入。
   function collectAndSave(silent) {
+    // 串行化：保存进行中又有改动 → 只记标记，等这次回来再用**最新值**存一次（避免并发互相覆盖）
+    if (_saving) { _saveAgain = true; return; }
     {
       state.batch.root = $('cfgRoot').value.trim();
       state.batch.max_duration = $('batchMaxDuration').value.trim();
@@ -595,7 +608,9 @@
       if (state.replica.dedup_ratio_max_on && !(rdMax > 0)) missing.push('视频复刻·重复度上限');
       if (state.replica.dedup_ratio_max_on && rdMax > 0 && rdMin > 0 && rdMax < rdMin) missing.push('视频复刻·重复度上限（不能小于下限）');
       // 即时保存（silent）时必填项可能正被用户改写 → 只跳过，不弹「参数未设置」打扰输入
-      if (missing.length) { if (!silent) setStatus('参数未设置：' + missing.join('、'), false); return; }
+      // ⚠ 即时保存的「失败可见」原则：silent 只用于"用户正在输入、必填暂空"的草稿态，
+      //   但**拦下保存**这件事本身必须让用户看见 —— 静默拦下会让人以为已生效（2026-10-08 实报）。
+      if (missing.length) { setStatus('暂未保存（请先补全）：' + missing.join('、'), false); return; }
 
       // 访问令牌：主进程只接受 8–64 位，越界会被**静默忽略**（表现为"改了没反应"）→ 这里先给可读提示
       var tkEl = $('httpToken');
@@ -609,6 +624,7 @@
       var srcEl = document.querySelector('input[name="updateSource"]:checked');
       var umEl = document.querySelector('input[name="updateMode"]:checked');
       var cbEl = document.querySelector('input[name="closeBehavior"]:checked');
+      _saving = true;   // 从这里起才算"保存进行中"：校验提前返回不会把后续保存永久堵住
       api.save_settings({
         skin: skin,
         auto_check_update: !!$('autoCheckUpdate').checked,
@@ -633,9 +649,16 @@
           // 即时保存给一个轻量反馈（不再有「保存」按钮，用户需要知道改动已落库）
           setStatus(silent ? '已自动保存' : '已保存', true); setTimeout(statusTimer, 1500);
           if (res.config_moved) setStatus('配置和数据位置已切换并生效，配置与缓存库已自动迁移', true);
+        } else {
+          // 失败一律可见（含自动保存）：静默失败＝用户以为生效了
+          setStatus('保存失败：' + ((res && res.error) || '未知原因') + '（改动未落库）', false);
         }
-        else if (!silent) setStatus('保存失败', false);
-      }).catch(function () { if (!silent) setStatus('保存失败', false); });
+      }).catch(function (e) {
+        setStatus('保存失败：' + ((e && e.message) || e) + '（改动未落库）', false);
+      }).then(function () {
+        _saving = false;
+        if (_saveAgain) { _saveAgain = false; collectAndSave(true); }   // 保存期间的改动：完成后再存一次
+      });
     }
 
     // 手动检查更新：发现新版本时在设置页内弹二次确认（是否下载）；下载进度/完成在主窗口体现
@@ -938,6 +961,9 @@
       } else { copyVia(url); setStatus('已复制浏览器访问地址', true); }
     });
     loadSettings();
+    // 即时保存的兜底：页面被隐藏/卸载时，把仍在防抖窗口内（400ms）的改动立刻落库，避免丢改动
+    window.addEventListener('pagehide', flushSave);
+    document.addEventListener('visibilitychange', function () { if (document.hidden) flushSave(); });
     // 文档内 http 链接统一用系统默认浏览器打开（README/更新日志里的外部链接）
     document.addEventListener('click', function (e) {
       var a = e.target && e.target.closest ? e.target.closest('a[href^="http"]') : null;

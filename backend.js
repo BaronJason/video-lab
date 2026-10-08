@@ -4870,6 +4870,13 @@ class Api {
           }
           task.status = status;
           task.paused = false;
+          // 终态进度补满（仅成功）：进度条在「clip / clipTarget」分支显示的是**最后一个成片的编码进度**，
+          // 而编码收尾帧的 time 几乎必然略小于时长（实测停在 89% / 95%）——任务已全部完成，
+          // 这个半截进度只会让人误会"没做完"。error / stopped / paused 保留真实进度（供续跑判断）。
+          if (status === 'done' && task.progress && task.progress.clipTarget > 0 && task.progress.clip < task.progress.clipTarget) {
+            task.progress.clip = task.progress.clipTarget;
+            task.progress.liveLine = null;
+          }
           // 任务结束 → 成片存在性结论失效：本次可能刚产出成片（旧结论是"无"），
           // 精确失效后由下次启动/空闲校验重新判定，避免界面显示"成片已删除"却其实还在
           try { this._invalidateHasOutput(task.id); } catch (e) {}

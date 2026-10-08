@@ -737,6 +737,8 @@
     var unitEst = t.type === 'tool' ? '预计文件' : '预计成片';
     if (clipTarget > 0) {
       var pct = Math.max(0, Math.min(clip / clipTarget, 1));
+      // 任务已全部完成：单片编码进度补满（编码收尾帧的 time 略小于时长是常态，曾实测停在 89%/95%）
+      if (t.status === 'done') pct = 1;
       var curClip = prog.current || 0;
       rec.progressLabel.textContent = (curClip > 0 ? unit + ' ' + curClip + '/' + total : unitEst + ' ' + total) + groupText;
       rec.progressPct.textContent = Math.round(pct * 100) + '%';

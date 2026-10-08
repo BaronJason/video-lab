@@ -115,6 +115,7 @@ contextBridge.exposeInMainWorld('txapi', {
   // 画布合成（竖转横）：单帧预览 / 背景候选 / 参数预设
   canvas_preview_frame: (payload) => invoke('canvas_preview_frame', payload),
   canvas_list_backgrounds: (dir) => invoke('canvas_list_backgrounds', dir),
+  canvas_list_sources: (root, recursive) => invoke('canvas_list_sources', root, recursive),
   canvas_preset_list: () => invoke('canvas_preset_list'),
   canvas_preset_save: (name, params) => invoke('canvas_preset_save', name, params),
   canvas_preset_delete: (name) => invoke('canvas_preset_delete', name),

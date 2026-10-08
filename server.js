@@ -90,6 +90,7 @@ const PURE_BACKEND_ROUTES = {
   // 画布合成（竖转横）：单帧预览 / 背景候选 / 参数预设
   canvas_preview_frame: { m: 'canvasPreviewFrame', a: (args) => [args[0]] },
   canvas_list_backgrounds: { m: 'canvasListBackgrounds', a: (args) => [args[0]] },
+  canvas_list_sources: { m: 'canvasListSources', a: (args) => [args[0], args[1]] },
   canvas_preset_list: { m: 'canvasPresetList', a: () => [] },
   canvas_preset_save: { m: 'canvasPresetSave', a: (args) => [args[0], args[1]] },
   canvas_preset_delete: { m: 'canvasPresetDelete', a: (args) => [args[0]] },

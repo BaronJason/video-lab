@@ -406,6 +406,8 @@
       hint.className = 'tl-hint';
       hint.textContent = '请选择文件夹，或直接选择若干视频文件';
     }
+    // 输入变化 → 刷新预览样本清单并自动预览一帧（folder 扫描是异步的，扫描完成后才渲，天然避免竞态）
+    cvLoadSamples(true);
   }
 
   function syncOutputRows() {
@@ -624,6 +626,7 @@
     },
     at: 0,
     duration: 0,
+    samples: [], sampleIndex: 0,   // 预览样本清单（文件夹输入 = 待处理视频；文件输入 = 所选文件）
     bgIndex: 0, bgTotal: 0, bgName: '',
     box: { x: 0, y: 0, w: 0, h: 0 },   // 内容盒（画布像素；精确渲染后以服务端元数据为准）
     meta: null,
@@ -666,10 +669,56 @@
     el.style.whiteSpace = 'pre-line';
   }
 
-  /** 预览源：优先用「选择视频」显式挑中的文件（目录需先挑样本，避免为预览而全量扫描） */
+  /** 预览源 = 当前样本（由 cvLoadSamples 维护；可用「样本 上一个/下一个」切换） */
   function cvContentPath() {
-    if (state.files && state.files.length) return state.files[0];
-    return '';
+    if (!cv.samples || !cv.samples.length) return '';
+    var i = Math.max(0, Math.min(cv.sampleIndex || 0, cv.samples.length - 1));
+    return cv.samples[i] || '';
+  }
+
+  /** 样本信息条：显示「第 n/共 N 个 · 文件名」；有样本才显示该行 */
+  function cvSetSampleInfo() {
+    var el = $('cvSampleInfo');
+    var bar = $('cvSampleRow');
+    var n = (cv.samples || []).length;
+    if (bar) bar.style.display = n ? '' : 'none';
+    if (!el) return;
+    if (!n) { el.textContent = '—'; el.title = ''; return; }
+    var p = cvContentPath();
+    el.textContent = (cv.sampleIndex + 1) + '/' + n + ' · ' + String(p || '').split(/[\\/]/).pop();
+    el.title = '预览只用这一个样本；正式处理会对上方清单里的全部视频逐个合成（参数共用，背景每个视频独立随机）';
+  }
+
+  /** 刷新样本清单：文件清单优先，否则按文件夹向后端要一份（与正式处理同一套扫描规则） */
+  function cvLoadSamples(andPreview) {
+    if (state.files && state.files.length) {
+      cv.samples = state.files.slice();
+      cv.sampleIndex = 0;
+      cvSetSampleInfo();
+      if (andPreview) { cv.duration = 0; cvRequestPreview({ immediate: true }); }
+      return;
+    }
+    var root = String(state.root || '').trim();
+    if (!root || !api || !api.canvas_list_sources) {
+      cv.samples = []; cv.sampleIndex = 0; cvSetSampleInfo(); return;
+    }
+    api.canvas_list_sources(root, state.recursive !== false).then(function (r) {
+      cv.samples = (r && r.ok && r.list) ? r.list.map(function (x) { return x.path; }) : [];
+      cv.sampleIndex = 0;
+      cvSetSampleInfo();
+      if (andPreview && cv.samples.length) { cv.duration = 0; cvRequestPreview({ immediate: true }); }
+    }).catch(function () { cv.samples = []; cv.sampleIndex = 0; cvSetSampleInfo(); });
+  }
+
+  /** 切换样本（序号环绕）：样本换了时长就未知，时间点与内容盒都要跟着重算 */
+  function cvSampleStep(step) {
+    var n = (cv.samples || []).length;
+    if (!n) { toast('请先在上方选择文件夹或视频文件', 'info'); return; }
+    cv.sampleIndex = ((cv.sampleIndex + step) % n + n) % n;
+    cv.duration = 0;
+    cv.at = 0;
+    cvSetSampleInfo();
+    cvRequestPreview({ immediate: true });
   }
 
   /** 内容盒按参数推算（与滤镜表达式同一套公式，抽取自共享模块的语义） */
@@ -764,12 +813,20 @@
     cv.timer = setTimeout(function () { cv.timer = 0; cvDoPreview(); }, delay);
   }
 
+  /** 预览失败提示：状态栏小字容易被忽略，补一次吐司；相同原因 4 秒内不重复弹（拖动时可能连发） */
+  function cvToastError(msg) {
+    var now = Date.now();
+    if (cv._errMsg === msg && (now - (cv._errAt || 0)) < 4000) return;
+    cv._errMsg = msg; cv._errAt = now;
+    try { toast('画布预览失败：' + msg, 'error'); } catch (e) {}
+  }
+
   function cvDoPreview() {
     if (!api || !api.canvas_preview_frame) { cvSetBadge('接口不可用', 'err'); return; }
     var contentPath = cvContentPath();
     if (!contentPath) {
       cvSetBadge('未选择视频', 'err');
-      cvShowWarnings(['请先在顶部用「选择视频」挑一个用于预览的样本文件（预览只取它的若干帧，不影响原始文件）']);
+      cvShowWarnings(['请先在上方选择要处理的文件夹、或直接选择若干视频文件 —— 预览取清单里的一个样本（用下方「样本 上一个/下一个」切换），正式处理会对全部视频逐个合成']);
       return;
     }
     var mySeq = ++cv.seq;
@@ -791,8 +848,17 @@
           return;
         }
         cv.busyRetry = 0;
+        // 时间点越界（滑块范围未及时收紧、视频短于当前值）→ 夹回时长内自动重渲，而不是停在失败态
+        if (r && Number(r.duration) > 0 && cv.at > Number(r.duration) - 0.05) {
+          cv.duration = Number(r.duration);
+          cv.at = Math.max(0, cv.duration - 0.05);
+          cvSyncAtControls();
+          cvRequestPreview({ immediate: true });
+          return;
+        }
         cvSetBadge('预览失败', 'err');
         cvShowWarnings([(r && r.error) || '预览失败']);
+        cvToastError((r && r.error) || '预览失败');
         return;
       }
       cv.busyRetry = 0;
@@ -801,19 +867,31 @@
       if (mySeq !== cv.seq) return;
       cvSetBadge('预览失败', 'err');
       cvShowWarnings([String((e && e.message) || e)]);
+      cvToastError(String((e && e.message) || e));
     });
+  }
+
+  /** 把当前时间点写回两个控件，并按已知时长约束范围 —— 越界值一律夹回，避免「拖到超出时长 → 渲染取不到帧」 */
+  function cvSyncAtControls() {
+    var dur = cv.duration > 0 ? cv.duration : 0;
+    if (dur > 0.1) cv.at = Math.max(0, Math.min(cv.at, dur - 0.05));
+    var range = $('cvAtRange');
+    if (range) {
+      range.max = String(dur > 0.1 ? (dur - 0.05) : Math.max(0.1, cv.at));
+      range.value = String(cv.at);
+    }
+    var atEl = $('cvAt');
+    if (atEl) {
+      atEl.max = String(dur > 0.1 ? (dur - 0.05) : Math.max(0.1, cv.at));
+      atEl.value = cv.at.toFixed(1);
+    }
   }
 
   function cvApplyResult(r) {
     var meta = r.meta || {};
     cv.meta = meta;
-    if (meta.duration > 0) {
-      cv.duration = meta.duration;
-      var range = $('cvAtRange');
-      if (range) { range.max = String(Math.max(0.1, meta.duration)); if (Number(range.value) > meta.duration) range.value = String(cv.at); }
-      var atEl = $('cvAt');
-      if (atEl) atEl.max = String(Math.max(0.1, meta.duration));
-    }
+    if (meta.duration > 0) cv.duration = meta.duration;
+    cvSyncAtControls();
     if (meta.contentBox) {
       cv.box = {
         x: Number(meta.contentBox.x) || 0, y: Number(meta.contentBox.y) || 0,
@@ -821,7 +899,10 @@
       };
     }
     var stage = $('cvCanvas');
-    if (stage) stage.classList.remove('cv-canvas--drag');
+    if (stage) {
+      stage.classList.remove('cv-canvas--drag');
+      stage.classList.add('cv-canvas--ready');   // 就绪后内容框可拖动（此前只在拖动中才显示 → 根本点不到）
+    }
     if (r.bgOnly) $('cvBg').src = r.bgOnly;
     if (r.composed) $('cvComp').src = r.composed;
     if (r.raw) $('cvFg').src = r.raw;
@@ -907,6 +988,12 @@
     var contentPath = cvContentPath();
     if (!contentPath) { cvShowWarnings(['请先在顶部选择用于预览的视频']); return; }
     if (!cv.box.w || !cv.box.h) { cvShowWarnings(['预览尚未就绪，请稍候再拖动']); return; }
+    // 原帧对照下不可拖动（要拖就得看合成结果）→ 自动退出对照模式
+    var rawToggle = $('cvShowRaw');
+    if (rawToggle && rawToggle.checked) {
+      rawToggle.checked = false;
+      $('cvCanvas').classList.remove('cv-canvas--raw');
+    }
     if (mode === 'handle' && handle && handle.length === 1 && !cv.params.stretch) {
       toast('边手柄用于拉伸（非等比）。如需拉伸请先打开「拉伸」开关，或使用四角手柄等比缩放', 'info');
       return;
@@ -977,25 +1064,11 @@
     cvRequestPreview({ immediate: true });     // 松手后按当前参数渲染精确帧校正
   }
 
-  /** 滚轮缩放（围绕内容中心，保持中心不动） */
-  function cvWheel(e) {
-    if (!cv.box.w) return;
-    e.preventDefault();
-    var factor = e.deltaY < 0 ? 1.02 : 1 / 1.02;
-    var nextScale = Math.min(3, Math.max(0.05, cv.params.scale * factor));
-    cv.params.scale = Math.round(nextScale * 1000) / 1000;
-    var size = cvContentSize();
-    var cx = cv.box.x + cv.box.w / 2, cy = cv.box.y + cv.box.h / 2;
-    cv.box = { x: cx - size.w / 2, y: cy - size.h / 2, w: size.w, h: size.h };
-    cvPaintBox();
-    cvBoxToParams(cv.box);
-    cvWriteBackInputs(['scale', 'dx', 'dy']);
-    if (cv.timer) clearTimeout(cv.timer);
-    cv.timer = setTimeout(function () { cv.timer = 0; cvDoPreview(); }, 220);
-  }
+  // 缩放不再挂滚轮：参数页常常贴着预览，滚动查看参数时会误改缩放。
+  // 缩放入口保留在参数区的「等比缩放」滑块 / 数值框（改动同样即时预览）。
 
   function cvBindDrag() {
-    var stage = $('cvCanvas'), box = $('cvBox');
+    var box = $('cvBox');
     box.addEventListener('pointerdown', function (e) {
       if (e.target && e.target.className && String(e.target.className).indexOf('cv-hd') >= 0) return;
       cvDragStart(e, 'move', '');
@@ -1006,7 +1079,6 @@
     document.addEventListener('pointermove', function (e) { if (cv.drag) cvDragMove(e); });
     document.addEventListener('pointerup', function () { if (cv.drag) cvDragEnd(); });
     document.addEventListener('pointercancel', function () { if (cv.drag) cvDragEnd(); });
-    stage.addEventListener('wheel', cvWheel, { passive: false });
   }
 
   // ── 控件绑定（统一「输入 → 参数 → 防抖预览」，程序性写入不回环）──
@@ -1050,29 +1122,37 @@
     onInput('cvBorderColor', function (el) { cv.params.borderColor = String(el.value); return true; });
     onInput('cvWm', function (el) { cv.params.watermark = String(el.value).trim(); return true; });
 
-    // 操作条
+    // 操作条 · 时间点：拖动即按新点重渲（防抖），松手立即渲染
+    // ⚠ 一律夹到视频时长内 —— 滑块 max 在拿到时长前只是占位值，越界会让 ffmpeg 取不到帧（画面没有内容）
     $('cvAtRange').addEventListener('input', function () {
       if (cv.syncing) return;
-      cv.at = Math.max(0, Number($('cvAtRange').value) || 0);
+      var v = Math.max(0, Number($('cvAtRange').value) || 0);
+      if (cv.duration > 0.1) v = Math.min(v, cv.duration - 0.05);
+      cv.at = v;
       $('cvAt').value = cv.at.toFixed(1);
+      cvRequestPreview({ immediate: false });
     });
-    $('cvAtRange').addEventListener('change', function () { cvRequestPreview({ immediate: true }); });
+    $('cvAtRange').addEventListener('change', function () {
+      cvSyncAtControls();
+      cvRequestPreview({ immediate: true });
+    });
     $('cvAt').addEventListener('change', function () {
       cv.at = Math.max(0, cvNum($('cvAt'), 0));
-      $('cvAtRange').value = String(cv.at);
+      cvSyncAtControls();
       cvRequestPreview({ immediate: true });
     });
     $('cvAtRandom').addEventListener('click', function () {
       var max = cv.duration > 0.2 ? cv.duration - 0.1 : 0;
       cv.at = Math.round(Math.random() * Math.max(0, max) * 10) / 10;
-      $('cvAt').value = cv.at.toFixed(1);
-      $('cvAtRange').value = String(cv.at);
+      cvSyncAtControls();
       cvRequestPreview({ immediate: true });
     });
     $('cvShowRaw').addEventListener('change', function () {
       var stage = $('cvCanvas');
       if (this.checked) stage.classList.add('cv-canvas--raw'); else stage.classList.remove('cv-canvas--raw');
     });
+    $('cvSamplePrev').addEventListener('click', function () { cvSampleStep(-1); });
+    $('cvSampleNext').addEventListener('click', function () { cvSampleStep(1); });
     $('cvBgPrev').addEventListener('click', function () { cvBgStep(-1); });
     $('cvBgNext').addEventListener('click', function () { cvBgStep(1); });
     $('cvScanBg').addEventListener('click', function () { cvScanBackgrounds(); });
@@ -1212,7 +1292,9 @@
 
   function cvOnShow() {
     if (!cv.ready) return;
-    if (!cv.meta) cvRequestPreview({ immediate: true });
+    // 切页时补齐样本清单（用户可能先选了文件夹再切到本页）
+    if (!cv.meta) cvLoadSamples(true);      // 还没预览过 → 补齐清单并渲一帧（扫描完成后才渲）
+    else cvLoadSamples(false);              // 已有预览 → 只刷新清单，不打扰
   }
 
   function cvInit() {
@@ -1222,11 +1304,8 @@
     cvApplyParamsToInputs();
     cvLoadPresets();
     cvUpdateBgInfo();
-    // 选择视频后自动带出预览样本（在既有按钮回调之后执行）
-    ['btnPickFiles', 'btnPickDir', 'btnClearInput'].forEach(function (id) {
-      var el = $(id);
-      if (el) el.addEventListener('click', function () { setTimeout(function () { cvRequestPreview({ immediate: true }); }, 0); });
-    });
+    // 输入变化后的自动预览统一由 renderInputHint → cvLoadSamples(true) 负责（不再单独挂按钮监听，
+    // 否则会在样本清单异步扫描完成前触发渲染，白报一次「未选择视频」）
     window.addEventListener('resize', function () { if (cv.box.w) cvPaintBox(); });
   }
 

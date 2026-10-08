@@ -5411,6 +5411,34 @@ class Api {
     return { ok: true, dir: root, scanned: files.length, matched: list.length, list: list };
   }
 
+  /**
+   * 预览样本清单：文件夹输入时枚举待处理视频，供预览挑一个样本。
+   * 复用引擎的 scanVideos —— 与正式处理**同一套扫描规则**（递归开关、跳过应用自管目录），
+   * 否则会出现「预览看到的清单 ≠ 真正会被处理的文件」（如把输出/备份目录里的成片也当样本）。
+   * 只返回路径与文件名；尺寸/时长由 canvasPreviewFrame 探测并缓存，此处不做探测（避免为预览全量起进程）。
+   */
+  canvasListSources(root, recursive) {
+    const envG = this._envGuard('canvas_src_list');
+    if (envG) return envG;
+    const r = String(root || '').trim();
+    if (!r) return { ok: false, error: '请先选择要处理的文件夹' };
+    let isDir = false;
+    try { isDir = fs.statSync(r).isDirectory(); } catch (e) {}
+    if (!isDir) return { ok: false, error: '文件夹不存在：' + r };
+    let pl = null;
+    try { pl = require(path.join(this.enginesDir, 'tools', 'pipeline.js')); } catch (e) {}
+    if (!pl || typeof pl.scanVideos !== 'function') return { ok: false, error: '程序文件不完整（缺少运行组件），请重新安装或校验' };
+    let files = [];
+    try {
+      files = pl.scanVideos(r, { recursive: recursive !== false, storageDir: this.storageDir }) || [];
+    } catch (e) { return { ok: false, error: '扫描失败：' + ((e && e.message) || e) }; }
+    files = files.slice().sort((a, b) => String(a).localeCompare(String(b)));
+    const total = files.length;
+    const cap = 800;   // 样本切换只需清单，不必把上万条路径全传到界面
+    const list = files.slice(0, cap).map((f) => ({ path: f, name: path.basename(f) }));
+    return { ok: true, root: r, total: total, truncated: total > cap, limit: cap, list: list };
+  }
+
   /** 素材指纹（大小 + mtime）：素材被替换但路径不变时，必须让预览缓存失效 */
   _canvasStamp(file) {
     try { const st = fs.statSync(String(file || '')); return st.size + ':' + Math.round(st.mtimeMs); } catch (e) { return '-'; }

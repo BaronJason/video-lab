@@ -136,9 +136,8 @@
     .tl-out__row--hide { display: none; }
     .tl-sep { height: 1px; background: var(--border-neutral-l1); }
 
-    /* ── 底部 ── */
-    .tl-footer { flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: 8px 14px;
-                 border-top: 1px solid var(--border-neutral-l1); background: var(--bg-base-default); }
+    /* 状态 + 开始按钮：作为输出设置框的最后一行（原先单独一条底部栏，只为塞这个按钮） */
+    .tl-out__row--run { flex-wrap: nowrap; }
     .tl-status { flex: 1; min-width: 0; font-size: var(--body-sm-font-size); color: var(--text-secondary);
                  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .tl-status--err { color: var(--status-error-default); }
@@ -468,6 +467,12 @@
           <button class="tl-btn" id="btnOpenBackupDir" title="打开当前设定的备份文件夹（留空则打开默认备份文件夹）"><i data-icon="folder-open" data-size="14"></i>打开备份文件夹</button>
         </div>
         <div class="tl-hint" id="outHint"></div>
+        <div class="tl-sep"></div>
+        <!-- 状态 + 开始按钮：收进输出设置框内 —— 原先单独占一条底部栏，只为塞这个按钮，白费一栏纵向空间 -->
+        <div class="tl-out__row tl-out__row--run">
+          <span class="tl-status" id="status">正在读取处理能力…</span>
+          <button class="tl-run" id="btnRun" disabled><i data-icon="play" data-size="16"></i>开始处理</button>
+        </div>
       </div>
     </div>
 
@@ -480,11 +485,6 @@
       <div class="tl-log__body" id="logBody"></div>
       <div class="tl-prog"><div class="tl-prog__bar" id="progBar"></div></div>
     </div>
-  </div>
-
-  <div class="tl-footer">
-    <span class="tl-status" id="status">正在读取处理能力…</span>
-    <button class="tl-run" id="btnRun" disabled><i data-icon="play" data-size="16"></i>开始处理</button>
   </div>
 
   <script src="icons.js"></script>

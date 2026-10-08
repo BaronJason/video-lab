@@ -1,15 +1,19 @@
-// 画布合成（竖转横）· 独立批量执行器
+// 画布合成（竖转横）· 引擎侧批量执行器   ← 「执行」这一半；「方案构造」那一半见 canvas-plan.js
+//
+// 分工与引用关系：
+//   · 本文件（canvas-run.js）：**只在引擎子进程运行**，负责探测 / 编码 / 落盘 / 备份 / 进度；
+//     引用 canvas-plan.js 取合成方案；被 module.js 以 `run(spec, ctx, { lockDirFor, lockPathFor })` 调用。
+//   · canvas-plan.js：纯逻辑（参数模型 + buildCanvasPlan），被主进程（backend.js 预览渲染）与
+//     本文件两端共用 —— 这正是两者必须分开、不能合并的原因（主进程不该被拉进探测/编码/落盘依赖）。
+//   · 锁：路径计算由调用方注入（它依赖本次扫描出的文件清单，而清单在本文件里才得到）；
+//     真正的加锁实现是 base/lock.js 的 acquireLock，与其它模块同一套语义。
 //
 // 与「后处理」（engines/tools 的步骤链）**互相独立**：不共用步骤清单、不共用输出设置、各自有各自的
 // 「开始处理」入口 —— 两者的能力本就有重叠（转分辨率 ↔ 画布尺寸、裁剪/变速 ↔ 合成时长），
 // 混在一条滤镜链里会互相干扰（例如两处都想决定输出分辨率）。
 //
-// 共享的是**设施**而非流程：任务队列（type:'tool'，串行不抢 GPU）、互斥锁（locks.js）、
-// 输出策略（base/outplan）、编码参数（base/ffmpeg 的 NVENC）与日志语义；以及**同一个滤镜链构造**
-// （tools/canvas.js 的 buildCanvasPlan —— 与单帧预览同源，"预览所见即所得"由结构保证）。
-//
 // 逐文件流程：探测（尺寸/时长/音轨）→ 挑背景（目录随机 = **每个视频独立随机**，原脚本 Get-Random 语义）
-//   → 构造 forEncode 滤镜链 → 一次编码（NVENC）→ 按输出策略落盘（临时文件成功后替换 + 备份）
+//   → 构造 forEncode 滤镜链（canvas-plan 的 buildCanvasPlan）→ 一次编码（NVENC）→ 按输出策略落盘（临时文件成功后替换 + 备份）
 'use strict';
 
 const fs = require('node:fs');
@@ -18,8 +22,7 @@ const path = require('node:path');
 const { runFfmpeg, nvencArgs } = require('../base/ffmpeg');
 const { probeDetail } = require('../base/probe');
 const outplan = require('../base/outplan');
-const canvas = require('./canvas');
-const locks = require('./locks');
+const canvas = require('./canvas-plan');
 
 const IMG_RE = /\.(png|jpg|jpeg|webp|bmp)$/i;
 const VID_RE = /\.(mp4|mov|mkv|avi|m4v|webm)$/i;
@@ -79,8 +82,12 @@ const pad2 = (n) => String(n).padStart(2, '0');
 const stampOf = (d) => '' + (d.getMonth() + 1) + pad2(d.getDate()) + '-' + pad2(d.getHours()) + pad2(d.getMinutes());
 const isoStampOf = (d) => d.toISOString().replace(/[:.]/g, '-').slice(0, 19);
 
-async function run(spec, ctx) {
+async function run(spec, ctx, lockUtils) {
   const logger = ctx.logger;
+  // 锁路径计算由调用方（module.js）注入 —— 锁目录依赖本次扫描出的文件清单，而清单在这里才得到；
+  // 未注入时退化为不加锁（正常调用路径不会发生，仅保证单独调用本模块时不崩）
+  const lockDirFor = (lockUtils && typeof lockUtils.lockDirFor === 'function') ? lockUtils.lockDirFor : () => '';
+  const lockPathFor = (lockUtils && typeof lockUtils.lockPathFor === 'function') ? lockUtils.lockPathFor : () => '';
   const storageDir = String(process.env.VL_STORAGE_DIR || '').trim();
   const params = (spec.params && spec.params.canvas) || {};
   const out = spec.output || {};
@@ -103,12 +110,12 @@ async function run(spec, ctx) {
   }
 
   // ── 互斥锁：与后处理同一套语义（等待 / 已获取 / 已释放）──
-  const lockRoot = locks.lockDirFor(spec, files);
+  const lockRoot = lockDirFor(spec, files);
   logger.lockWaiting('准备合成视频...');
   let lock = null;
   try {
     if (lockRoot) {
-      try { lock = await ctx.lock.acquireLock(locks.lockPathFor(lockRoot)); } catch (e) {
+      try { lock = await ctx.lock.acquireLock(lockPathFor(lockRoot)); } catch (e) {
         logger.diag('fail', { step: '互斥锁', msg: (e && e.message) || String(e), lockRoot: String(lockRoot || '') });
         logger.error('互斥锁', (e && e.message) || String(e));
         return 1;
@@ -130,7 +137,7 @@ async function run(spec, ctx) {
 
     logger.section();
     logger.info('画布合成：' + params.targetW + '×' + params.targetH
-      + '·内容 ' + (params.stretch ? ('拉伸 ' + params.w + '×' + params.h) : ('等比 ' + params.scale))
+      + '·内容 等比 ' + params.scale
       + '·位置 ' + params.posMode
       + (params.radius > 0 ? '·圆角 ' + params.radius : '')
       + (params.borderW > 0 ? '·边框 ' + params.borderW : '')
@@ -154,10 +161,20 @@ async function run(spec, ctx) {
       const bg = pickBackground(params);
       if (bg.error) { failed++; logger.info('   ❌ ' + name + ' —— ' + bg.error); continue; }
 
+      // 背景尺寸：用于「小于画布会被放大（可能模糊）」的提醒；探测失败则跳过提醒，不影响处理
+      let bgW = 0, bgH = 0;
+      if (bg.path) {
+        try {
+          const bi = await probeDetail(bg.path);
+          if (bi && bi.probeOk) { bgW = Number(bi.width) || 0; bgH = Number(bi.height) || 0; }
+        } catch (e) {}
+      }
+
       const plan = canvas.buildCanvasPlan(params, {
         contentW: Number(info.width) || 0, contentH: Number(info.height) || 0,
         duration: Number(info.duration) || 0,
         bgPath: bg.path, bgKind: bg.kind,
+        bgW: bgW, bgH: bgH,                 // 尺寸不足时由 plan 累积提醒
         watermarkPath: exists(String(params.watermark || '').trim()) ? String(params.watermark).trim() : '',
         bgColorValue: params.bgColor,
       }, { forEncode: true, outLabel: '[vout]' });

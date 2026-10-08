@@ -5330,16 +5330,20 @@ class Api {
   // 前端据此**自动渲染表单**（加能力 = 加一个步骤文件，前端不用改）
   // ══════════════════════════════════════════════════════════════════════
   // ── 画布合成（竖转横）：单帧预览 / 背景候选 / 参数预设 ────────────────────────
-  // 预览与正式处理共用 engines/tools/canvas.js 的 buildCanvasPlan()：参数同源、表达式同源，
+  // 预览与批量执行共用 engines/tools/canvas-plan.js 的 buildCanvasPlan()：参数同源、表达式同源，
   // 「预览所见即所得」由结构保证。预览帧输出 PNG（软件编码），不占用编码硬件的会话，
   // 因此不会与正在运行的批量任务互斥；产物落 <数据目录>\preview\（扫描阶段已排除该目录）。
   _toolSteps() {
     try { return require(path.join(this.enginesDir, 'tools', 'index.js')); } catch (e) { return null; }
   }
 
-  /** 画布合成共享模块（参数模型 + 滤镜链构造） */
+  /**
+   * 画布合成的**方案构造模块**（纯逻辑：参数模型 + buildCanvasPlan）——
+   * 与引擎侧执行器 engines/tools/canvas-run.js 分开：主进程只该拿到这份纯逻辑（无 IO / 无子进程），
+   * 预览与批量执行共用同一份表达式构造，"预览所见即所得"由结构保证。
+   */
   _canvasModule() {
-    try { return require(path.join(this.enginesDir, 'tools', 'canvas.js')); } catch (e) { return null; }
+    try { return require(path.join(this.enginesDir, 'tools', 'canvas-plan.js')); } catch (e) { return null; }
   }
 
   /** 素材尺寸探测（路径 + 大小/mtime 作指纹，结果驻留内存避免反复起进程） */
@@ -5376,7 +5380,8 @@ class Api {
   }
 
   /**
-   * 背景候选枚举：扫描目录（两层内）并按「1920×1080」过滤 —— 沿用原脚本的候选规则。
+   * 背景候选枚举：扫描目录（两层内）。**不再限制背景尺寸** —— 适配方式（填充 / 适应 / 拉伸）能处理任意尺寸，
+   * 尺寸只用于界面展示与「小于画布会被放大」的提醒（用户定案 2026-10-08：既然尺寸可调，背景就不该锁尺寸）。
    * 返回稳定排序（按路径）的清单，保证「同索引 = 同背景」，前端上一个/下一个切换才有确定性。
    */
   async canvasListBackgrounds(dir) {
@@ -5401,10 +5406,11 @@ class Api {
     };
     walk(root, 0);
     const infos = await this._runWithLimit(files, (f) => this._canvasProbeSize(f), Math.min(4, this.probeConcurrency || 4), null);
-    const list = (infos || []).filter((x) => x && x.width === 1920 && x.height === 1080)
+    const list = (infos || []).filter((x) => x && x.width > 0 && x.height > 0)   // 探测失败的剔除（无法参与合成）
       .map((x) => ({
         path: x.path, name: path.basename(x.path),
         kind: /\.(mp4|mov|mkv|avi)$/i.test(x.path) ? 'video' : 'image',
+        width: x.width || 0, height: x.height || 0,   // 供界面显示与「小于画布会被放大」提醒
         duration: x.duration || 0,
       }))
       .sort((a, b) => a.path.localeCompare(b.path));
@@ -5492,19 +5498,24 @@ class Api {
     // 背景解析（目录模式按索引取候选，索引归一化到候选范围内）
     let bgPath = String(p.bgPath || params.bgPath || '').trim();
     let bgTotal = 0, bgIndexUsed = 0, bgKind = '';
+    let bgW = 0, bgH = 0;                 // 背景尺寸（供「小于画布会被放大」提醒；探测失败则为 0）
     if (params.bgMode === 'dir') {
       const lst = await this.canvasListBackgrounds(params.bgDir);
       if (!lst.ok) return lst;
-      if (!lst.list.length) return { ok: false, error: '背景目录里没有 1920×1080 的图片或视频（已扫描 ' + lst.scanned + ' 个文件）' };
+      if (!lst.list.length) return { ok: false, error: '背景目录里没有可用的图片或视频（已扫描 ' + lst.scanned + ' 个文件）' };
       bgTotal = lst.list.length;
       bgIndexUsed = ((Math.trunc(Number(p.bgIndex) || 0) % bgTotal) + bgTotal) % bgTotal;
       bgPath = lst.list[bgIndexUsed].path;
       bgKind = lst.list[bgIndexUsed].kind;
+      bgW = Number(lst.list[bgIndexUsed].width) || 0;
+      bgH = Number(lst.list[bgIndexUsed].height) || 0;
     } else if (params.bgMode === 'image' || params.bgMode === 'video') {
       let ok = false;
       try { ok = fs.statSync(bgPath).isFile(); } catch (e) {}
       if (!ok) return { ok: false, error: '背景文件不存在' };
       bgKind = /\.(mp4|mov|mkv|avi)$/i.test(bgPath) ? 'video' : 'image';
+      const bInfo = await this._canvasProbeSize(bgPath);   // 指定文件模式现测一次尺寸（用于放大提醒）
+      if (bInfo) { bgW = Number(bInfo.width) || 0; bgH = Number(bInfo.height) || 0; }
     }
 
     // 素材尺寸（内容必测；背景与水印可选）
@@ -5517,7 +5528,8 @@ class Api {
       contentW: cInfo.width, contentH: cInfo.height, contentPath: contentPath,
       bgPath: bgPath, bgKind: bgKind, watermarkPath: wmOk ? wmPath : '',
       bgColorValue: params.bgColor,
-      duration: cInfo.duration || 0,   // 背景输入按内容时长设上限（否则背景是无界流）
+      duration: cInfo.duration || 0,
+      bgW: bgW, bgH: bgH,              // 背景尺寸 → 小于画布时给出「会被放大（可能模糊）」提醒
     };
     if (wmPath && !wmOk) src._wmMissing = true;
 

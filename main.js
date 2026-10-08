@@ -1781,7 +1781,7 @@ function registerIpc() {
   ipcMain.handle('get_tool_prefs', () => api.getToolPrefs());
   ipcMain.handle('save_tool_prefs', (e, prefs) => api.saveToolPrefs(prefs));
   ipcMain.handle('rerun_tool_task', (e, id) => api.rerunToolTask(id));
-  // 画布合成（竖转横）：单帧预览与参数预设（预览与正式处理共用同一滤镜链构造，见 engines/tools/canvas.js）
+  // 画布合成（竖转横）：单帧预览与参数预设（预览与批量执行共用同一滤镜链构造，见 engines/tools/canvas-plan.js）
   ipcMain.handle('canvas_preview_frame', (e, payload) => api.canvasPreviewFrame(payload));
   ipcMain.handle('canvas_list_backgrounds', (e, dir) => api.canvasListBackgrounds(dir));
   ipcMain.handle('canvas_list_sources', (e, root, recursive) => api.canvasListSources(root, recursive));

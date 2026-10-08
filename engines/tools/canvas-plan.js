@@ -1,7 +1,15 @@
-// 画布合成（竖转横）· 参数模型与滤镜链构造
+// 画布合成（竖转横）· 参数模型与滤镜链构造   ← 「方案构造」这一半；「引擎侧执行」那一半见 canvas-run.js
+//
+// 分工与引用关系：
+//   · 本文件（canvas-plan.js）：**纯逻辑**，两端共用 ——
+//       - Electron 主进程：backend.js 的 _canvasModule() → buildCanvasPlan()（单帧预览渲染）
+//       - 引擎子进程：canvas-run.js（批量执行）
+//   · canvas-run.js：只在引擎里跑（探测 / 编码 / 落盘 / 备份），由 module.js 调用。
+//   · 之所以分两个文件：主进程为做预览**不该**被拉进探测/编码/落盘这些执行侧依赖；
+//     而「预览与批量执行共用同一份表达式」是所见即所得的结构保证 —— 两者职责不同，不可合并。
 //
 // 设计约束：
-//   · 纯逻辑：无 IO、无子进程、不依赖 Electron —— 主进程（预览渲染）与引擎子进程（正式处理）共用
+//   · 纯逻辑：无 IO、无子进程、不依赖 Electron —— 主进程（预览渲染）与引擎子进程（批量执行）共用
 //   · 单一真相：预览与正式处理都走 buildCanvasPlan()，参数一致则表达式一致（预览所见即所得由结构保证）
 //   · 滤镜一律 CPU：本模块不提供任何硬件滤镜入口（遮罩模块曾因全 GPU 管线导致成片闪烁）
 //   · 内容缩放默认**等比**；拉伸为显式开关，开启时写 warnings，由前端提示画面会变形
@@ -21,11 +29,10 @@ const DEFAULTS = {
   bgPath: '',             // 背景文件（bgMode=image|video 时直接指定）
   bgColor: '#000000',     // 纯色背景（bgMode=color）
   watermark: '',          // 广审 PNG，可留空
-  targetW: 1920,          // 画布宽
-  targetH: 1080,          // 画布高
-  scale: 0.74,            // 内容等比缩放系数
-  stretch: false,         // 拉伸开关（默认关；开启后按 w/h 非等比缩放）
-  w: 0, h: 0,             // 拉伸目标宽高（stretch=true 时生效；为 0 表示未设置）
+  targetW: 1920,          // 成片画布宽（输出分辨率）
+  targetH: 1080,          // 成片画布高（输出分辨率）
+  scale: 0.74,            // 内容等比缩放系数（决定视频在画布中的大小）
+  bgFit: 'cover',         // 背景适合方式（与 Windows 桌面背景同名）：cover=填充 | contain=适应 | stretch=拉伸
   posMode: 'center',      // center | tl | tr | bl | br | custom
   dx: 0,                  // 相对基准的水平偏移（像素；custom 时为绝对 X）
   dy: 160,                // 相对基准的垂直偏移（像素；custom 时为绝对 Y）
@@ -37,7 +44,7 @@ const DEFAULTS = {
 
 const NUM_RANGES = {
   targetW: [16, 7680], targetH: [16, 7680],
-  scale: [0.05, 3], w: [0, 7680], h: [0, 7680],
+  scale: [0.05, 3],
   dx: [-7680, 7680], dy: [-7680, 7680],
   radius: [0, 2000], borderW: [0, 400], bgBlur: [0, 200],
 };
@@ -80,12 +87,13 @@ function normalizeParams(params) {
   p.targetW = tw; p.targetH = th;
   p.borderColor = toFfmpegColor(p.borderColor, DEFAULTS.borderColor, warnings, '边框');
   p.bgColor = toFfmpegColor(p.bgColor, DEFAULTS.bgColor, warnings, '背景');
-  // 拉伸开启但宽高未设置 → 视为未启用（避免出现 0 尺寸表达式）
-  if (p.stretch && (!p.w || !p.h)) {
-    warnings.push('拉伸已开启但宽高未设置，本次按等比缩放处理');
-    p.stretch = false;
+  // 背景「适合方式」：措辞与 Windows 桌面背景的「选择适合方式」对齐（填充 / 适应 / 拉伸），
+  // 用户不必学新词；非法值回落「填充」。
+  const bgFits = ['cover', 'contain', 'stretch'];
+  if (bgFits.indexOf(String(p.bgFit == null ? '' : p.bgFit)) < 0) {
+    if (p.bgFit) warnings.push('背景适合方式无法识别，已按「填充」处理');
+    p.bgFit = 'cover';
   }
-  if (p.stretch) warnings.push('拉伸模式会改变画面比例（变形）');
   return { params: p, warnings };
 }
 
@@ -123,16 +131,11 @@ function roundRectAlpha(radius, w, h) {
  */
 function contentSegments(p, contentW, contentH, warnings) {
   const segs = [];
-  let w, h;
-  if (p.stretch) {
-    w = evenRound(p.w); h = evenRound(p.h);
-    segs.push('scale=' + w + ':' + h);
-  } else {
-    w = evenRound(contentW * p.scale);
-    h = evenRound(contentH * p.scale);
-    if (w < 2 || h < 2) { w = 2; h = 2; warnings.push('缩放后尺寸过小，已按最小 2×2 处理'); }
-    segs.push('scale=' + w + ':' + h);
-  }
+  // 内容层**一律等比缩放**（回归原脚本：原方案没有非等比拉伸能力）；尺寸取偶（编码器硬要求）
+  let w = evenRound(contentW * p.scale);
+  let h = evenRound(contentH * p.scale);
+  if (w < 2 || h < 2) { w = 2; h = 2; warnings.push('缩放后尺寸过小，已按最小 2×2 处理'); }
+  segs.push('scale=' + w + ':' + h);
   if (p.borderW > 0) {
     const b = Math.round(p.borderW);
     segs.push('pad=' + (w + 2 * b) + ':' + (h + 2 * b) + ':' + b + ':' + b + ':color=' + p.borderColor);
@@ -147,15 +150,38 @@ function contentSegments(p, contentW, contentH, warnings) {
   return { segs: segs, outW: w, outH: h };
 }
 
-/** 背景层滤镜片段：cover 裁切到画布尺寸（避免非 1920×1080 素材出现黑边），可选高斯模糊 */
-function bgSegments(p, warnings) {
-  const segs = [
-    'scale=' + p.targetW + ':' + p.targetH + ':force_original_aspect_ratio=increase:flags=bicubic',
-    'crop=' + p.targetW + ':' + p.targetH,
-  ];
+/**
+ * 背景层滤镜片段：按「适合方式」适配到画布尺寸（**不限制背景素材尺寸**，任意尺寸都能用），可选高斯模糊。
+ * 措辞与 Windows 桌面背景的「选择适合方式」一致，用户不必学新词：
+ *   · cover（填充，默认）：等比放大到铺满画布，超出部分裁掉
+ *   · contain（适应）：等比缩到放得下，四周留黑边
+ *   · stretch（拉伸）：直接拉伸铺满画布（画面比例可能变化）
+ * 另：背景小于画布时给出「会被放大、可能模糊」的提醒（只提示，不拦截）。
+ */
+function bgSegments(p, warnings, src) {
+  const W = p.targetW, H = p.targetH;
+  const segs = [];
+  if (p.bgFit === 'contain') {
+    segs.push('scale=' + W + ':' + H + ':force_original_aspect_ratio=decrease:flags=bicubic');
+    segs.push('pad=' + W + ':' + H + ':(ow-iw)/2:(oh-ih)/2:color=black');
+  } else if (p.bgFit === 'stretch') {
+    segs.push('scale=' + W + ':' + H + ':flags=bicubic');
+  } else {
+    segs.push('scale=' + W + ':' + H + ':force_original_aspect_ratio=increase:flags=bicubic');
+    segs.push('crop=' + W + ':' + H);
+  }
   if (p.bgBlur > 0) segs.push('gblur=sigma=' + p.bgBlur);
   segs.push('format=yuv420p');
   if (p.bgMode === 'video') warnings.push('背景为视频：正式处理需 -stream_loop -1 与 -shortest 成对使用，否则编码不结束');
+  const bw = Number(src && src.bgW) || 0, bh = Number(src && src.bgH) || 0;
+  if (bw > 0 && bh > 0) {
+    const need = p.bgFit === 'contain'
+      ? Math.min(W / bw, H / bh)          // 适应：按较小的比例缩，放大倍数以「能放下」为准
+      : Math.max(W / bw, H / bh);         // 填充 / 拉伸：铺满所需的放大倍数
+    if (need > 1.05) {
+      warnings.push('背景尺寸 ' + bw + '×' + bh + ' 小于画布 ' + W + '×' + H + '，会被放大（可能模糊）');
+    }
+  }
   return segs;
 }
 
@@ -227,7 +253,7 @@ function buildCanvasPlan(params, src, opts) {
   // 注：同一 filter 输出标签只能被消费一次 —— 背景层与内容层都要「既参与合成、又单独输出」，
   // 故各自经 split 分流（否则 -map 复用标签会报 "was already used elsewhere"）。
   const parts = [];
-  const bgSegs = bgSegments(p, warnings).join(',');
+  const bgSegs = bgSegments(p, warnings, s).join(',');
   // ⚠ 两条流都要把时间戳归零（`setpts=PTS-STARTPTS`）：预览用 `-ss` 前置定位取帧时，内容流
   //   首帧 PTS 不为 0（seek 到关键帧后仍带着原时间轴），而背景（lavfi / 图片）从 0 起 ——
   //   overlay 以**先到的时间轴**为准，`-frames:v 1` 拿到的第一帧就只有背景：
@@ -249,7 +275,7 @@ function buildCanvasPlan(params, src, opts) {
   // ⚠ 这里**不要**用 overlay 的 shortest=1：它让 overlay 跟随最短输入提前收尾 ——
   //   预览用 -ss 定位取帧时（内容与背景各自 seek），两条流的首帧到达时机不同，
   //   会出现「合成图只剩背景、内容原帧却正常」的**概率性**现象（2026-10-08 实报）。
-  //   无限背景的收尾交给**输出级 `-t`（= 内容时长）**（见 canvasbatch.js），确定且无竞态；
+  //   无限背景的收尾交给**输出级 `-t`（= 内容时长）**（见 canvas-run.js），确定且无竞态；
   //   图片背景是单帧输入 + overlay 默认 repeatlast=1，本身就是有限流。
   parts.push('[bg][c]overlay=' + Math.round(offset.x) + ':' + Math.round(offset.y) + ':format=auto' + composedLabel);
   if (hasWm) {
@@ -274,8 +300,8 @@ function buildCanvasPlan(params, src, opts) {
     },
     contentSrcW: contentW,
     contentSrcH: contentH,
-    scaleUsed: p.stretch ? 0 : p.scale,
-    stretchUsed: !!p.stretch,
+    scaleUsed: p.scale,
+    bgFitUsed: p.bgFit,
     radiusUsed: p.radius > 0,
     borderWUsed: p.borderW > 0 ? Math.round(p.borderW) : 0,
     bgBlurUsed: p.bgBlur > 0 ? p.bgBlur : 0,

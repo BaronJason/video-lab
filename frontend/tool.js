@@ -433,8 +433,64 @@
     cvLoadSamples(true);
   }
 
+  /**
+   * 输出设置数据层：**一套 UI、两套数据**（用户定案 2026-10-08）。
+   * 后处理与画布合成的输出项完全相同，界面没必要各写一份；但两者的**取值必须互不影响** ——
+   * 于是共用 DOM，按当前标签页绑定到各自的数据：切换前先把 DOM 存回旧模块，再载入新模块。
+   */
+  var outStore = {
+    post: { mode: 'overwrite', dir: '', nameMode: 'keep', suffix: '_处理', onConflict: 'index', backup: false, backupDir: '' },
+    canvas: { mode: 'directory', dir: '', nameMode: 'keep', suffix: '_横版', onConflict: 'index', backup: true, backupDir: '' },
+  };
+  var outBound = 'post';   // 当前绑定的模块：'post'（后处理）| 'canvas'（画布合成）
+
+  /** DOM → 当前绑定模块的数据（任何输出控件的改动都调用它） */
+  function outCollect() {
+    var d = outStore[outBound];
+    if (!d) return outStore.post;
+    d.mode = $('outMode').value;
+    d.dir = String($('outDir').value || '').trim();
+    d.nameMode = $('outNameMode').value;
+    d.suffix = String($('outSuffix').value || '');
+    d.onConflict = $('outConflict').value;
+    d.backup = !!$('outBackup').checked;
+    d.backupDir = String($('outBackupDir').value || '').trim();
+    return d;
+  }
+
+  /** 当前绑定模块的数据 → DOM */
+  function outApply() {
+    var d = outStore[outBound] || outStore.post;
+    $('outMode').value = d.mode;
+    $('outDir').value = d.dir;
+    $('outNameMode').value = d.nameMode;
+    $('outSuffix').value = d.suffix;
+    $('outConflict').value = d.onConflict;
+    $('outBackup').checked = !!d.backup;
+    $('outBackupDir').value = d.backupDir;
+    syncOutputRows();
+  }
+
+  /** 切换绑定（切标签页时调用）：先存旧模块，再载入新模块 */
+  function outBind(moduleName) {
+    var m = moduleName === 'canvas' ? 'canvas' : 'post';
+    if (m === outBound) { outApply(); return; }
+    outCollect();
+    outBound = m;
+    outApply();
+  }
+
+  /** 底部「开始」按钮：同一个按钮承担两个模块的提交，文案随当前标签页切换 */
+  function syncRunButton() {
+    var b = $('btnRun');
+    if (!b) return;
+    b.innerHTML = icon('play', 16) + (outBound === 'canvas' ? '开始合成' : '开始处理');
+  }
+
   function syncOutputRows() {
     var dirMode = $('outMode').value === 'directory';
+    var head = $('outHead');
+    if (head) head.textContent = outBound === 'canvas' ? '输出设置（画布合成）' : '输出设置（后处理）';
     $('outDirRow').classList.toggle('tl-out__row--hide', !dirMode);
     $('outNameRow').classList.toggle('tl-out__row--hide', !dirMode);
     // 文件名选「原名」时不需要后缀框（后缀只对「原名 + 后缀」有意义）
@@ -449,9 +505,15 @@
   }
 
   function bindOutputEvents() {
-    $('outMode').addEventListener('change', syncOutputRows);
-    $('outBackup').addEventListener('change', syncOutputRows);
-    $('outNameMode').addEventListener('change', syncOutputRows);   // 原名 ⇄ 原名+后缀：后缀框随之显隐
+    // 任一输出控件改动：先刷新行的显隐，再把值落回「当前标签页」那一份（两模块互不影响）
+    var onOut = function () { syncOutputRows(); outCollect(); };
+    $('outMode').addEventListener('change', onOut);
+    $('outBackup').addEventListener('change', onOut);
+    $('outNameMode').addEventListener('change', onOut);   // 原名 ⇄ 原名+后缀：后缀框随之显隐
+    ['outDir', 'outSuffix', 'outConflict', 'outBackupDir'].forEach(function (id) {
+      var el = $(id);
+      if (el) el.addEventListener(id === 'outConflict' ? 'change' : 'input', outCollect);
+    });
     $('btnPickDir').addEventListener('click', function () {
       if (!api || !api.pick_directory) { toast('后端不支持文件夹选择', 'error'); return; }
       api.pick_directory('选择要处理的文件夹', state.root || undefined).then(function (p) {
@@ -509,14 +571,17 @@
       }).catch(function (e) { toast('打开备份文件夹失败：' + e.message, 'error'); });
     });
     $('logHead').addEventListener('click', function () { $('logBox').classList.toggle('tl-log--open'); });
-    $('btnRun').addEventListener('click', onSubmit);
+    // 底部「开始」按钮两页共用：按当前标签页分派到各自的提交（后处理 / 画布合成）
+    $('btnRun').addEventListener('click', function () {
+      if (outBound === 'canvas') cvRun(); else onSubmit();
+    });
   }
 
   function collectSpec() {
     var stepIds = Object.keys(state.sel).filter(function (k) { return state.sel[k]; });
     if (!stepIds.length) return { error: '请至少勾选一个处理步骤' };
     if (!state.root && !state.files.length) return { error: '请选择要处理的文件夹或视频文件' };
-    if ($('outMode').value === 'directory' && !$('outDir').value.trim()) return { error: '请选择输出文件夹' };
+    if (outStore.post.mode === 'directory' && !outStore.post.dir) return { error: '请选择输出文件夹' };
     // 数字型参数在表单里是字符串，提交前统一还原成数字（引擎侧按数字判断阈值）
     var coerce = function (v) {
       if (v == null || v === '' || typeof v === 'number' || typeof v === 'boolean') return v;
@@ -543,13 +608,13 @@
         stepIds: stepIds,
         params: params,
         output: {
-          mode: $('outMode').value,
-          dir: $('outDir').value.trim(),
-          nameMode: $('outNameMode').value,
-          suffix: $('outSuffix').value,
-          onConflict: $('outConflict').value,
-          backup: !!$('outBackup').checked,
-          backupDir: $('outBackupDir').value.trim(),
+          mode: outStore.post.mode,
+          dir: outStore.post.dir,
+          nameMode: outStore.post.nameMode,
+          suffix: outStore.post.suffix,
+          onConflict: outStore.post.onConflict,
+          backup: !!outStore.post.backup,
+          backupDir: outStore.post.backupDir,
         },
       },
     };
@@ -647,14 +712,15 @@
     params: {
       bgMode: 'dir', bgDir: '', bgPath: '', bgColor: '#000000', watermark: '',
       targetW: 1920, targetH: 1080,
-      scale: 0.74, stretch: false, w: 1280, h: 720,
+      scale: 0.74,
+      bgFit: 'cover',       // 背景适合方式（与 Windows 桌面背景同名：填充 / 适应 / 拉伸）
       posMode: 'center', dx: 0, dy: 160,
       radius: 0, borderW: 0, borderColor: '#ffffff', bgBlur: 0,
     },
     at: 0,
     duration: 0,
     samples: [], sampleIndex: 0,   // 预览样本清单（文件夹输入 = 待处理视频；文件输入 = 所选文件）
-    bgIndex: 0, bgTotal: 0, bgName: '',
+    bgIndex: 0, bgTotal: 0, bgName: '', bgSizes: [],   // 背景候选：序号 / 总数 / 名称 / 各自尺寸（展示用）
     box: { x: 0, y: 0, w: 0, h: 0 },   // 内容盒（画布像素；精确渲染后以服务端元数据为准）
     meta: null,
     drag: null,
@@ -748,11 +814,8 @@
     cvRequestPreview({ immediate: true });
   }
 
-  /** 内容盒按参数推算（与滤镜表达式同一套公式，抽取自共享模块的语义） */
+  /** 内容盒按参数推算（与滤镜表达式同一套公式：一律等比缩放；服务端 meta.contentBox 为权威值） */
   function cvContentSize() {
-    if (cv.params.stretch && cv.params.w && cv.params.h) {
-      return { w: Math.round(cv.params.w), h: Math.round(cv.params.h) };
-    }
     var srcW = (cv.meta && cv.meta.contentSrcW) || 0;
     var srcH = (cv.meta && cv.meta.contentSrcH) || 0;
     if (!srcW || !srcH) return { w: 0, h: 0 };
@@ -813,7 +876,7 @@
     cv.syncing = true;
     try {
       var map = {
-        scale: 'cvScaleNum', dx: 'cvDx', dy: 'cvDy', w: 'cvW', h: 'cvH',
+        scale: 'cvScaleNum', dx: 'cvDx', dy: 'cvDy',
         targetW: 'cvTW', targetH: 'cvTH', radius: 'cvRadius', borderW: 'cvBorderW', bgBlur: 'cvBgBlur',
       };
       (keys || Object.keys(map)).forEach(function (k) {
@@ -944,7 +1007,8 @@
     cvWriteBackInputs(['scale', 'dx', 'dy', 'w', 'h']);
     cvShowWarnings(meta.warnings || []);
     cvSetBadge((r.fromCache ? '已校正（缓存）' : '已校正 · ' + (r.ms || 0) + 'ms'), 'ok');
-    if ($('cvShowRaw') && $('cvShowRaw').checked) stage.classList.add('cv-canvas--raw');
+    // 「实际预览」（默认勾选）显示合成结果；取消勾选才切到内容原帧（用于对照）
+    if ($('cvShowRaw') && !$('cvShowRaw').checked) stage.classList.add('cv-canvas--raw');
     else stage.classList.remove('cv-canvas--raw');
   }
 
@@ -953,9 +1017,10 @@
     if (!el) return;
     if (cv.params.bgMode === 'color') { el.textContent = '背景 纯色 ' + cv.params.bgColor; return; }
     if (cv.params.bgMode === 'dir') {
+      var sz = (cv.bgSizes && cv.bgSizes[cv.bgIndex]) || '';
       el.textContent = cv.bgTotal
-        ? ('背景 ' + (cv.bgIndex + 1) + '/' + cv.bgTotal + (cv.bgName ? ' · ' + cv.bgName : ''))
-        : '背景 未扫描';
+        ? ((cv.bgIndex + 1) + '/' + cv.bgTotal + (sz ? ' · ' + sz : '') + (cv.bgName ? ' · ' + cv.bgName : ''))
+        : '未扫描';
       return;
     }
     el.textContent = '背景 ' + (cv.bgName || '未选择');
@@ -1009,15 +1074,11 @@
     var contentPath = cvContentPath();
     if (!contentPath) { cvShowWarnings(['请先在顶部选择用于预览的视频']); return; }
     if (!cv.box.w || !cv.box.h) { cvShowWarnings(['预览尚未就绪，请稍候再拖动']); return; }
-    // 原帧对照下不可拖动（要拖就得看合成结果）→ 自动退出对照模式
+    // 拖动要在「实际预览」（合成结果）下进行：若当前正看内容原帧，先切回实际预览
     var rawToggle = $('cvShowRaw');
-    if (rawToggle && rawToggle.checked) {
-      rawToggle.checked = false;
+    if (rawToggle && !rawToggle.checked) {
+      rawToggle.checked = true;
       $('cvCanvas').classList.remove('cv-canvas--raw');
-    }
-    if (mode === 'handle' && handle && handle.length === 1 && !cv.params.stretch) {
-      toast('边手柄用于拉伸（非等比）。如需拉伸请先打开「拉伸」开关，或使用四角手柄等比缩放', 'info');
-      return;
     }
     e.preventDefault();
     var p = cvPointerPos(e);
@@ -1025,7 +1086,7 @@
       mode: mode, hd: handle || '',
       startX: p.x, startY: p.y,
       startBox: { x: cv.box.x, y: cv.box.y, w: cv.box.w, h: cv.box.h },
-      startParams: { scale: cv.params.scale, w: cv.params.w, h: cv.params.h, dx: cv.params.dx, dy: cv.params.dy },
+      startParams: { scale: cv.params.scale, dx: cv.params.dx, dy: cv.params.dy },
     };
     try { e.target.setPointerCapture(e.pointerId); } catch (e2) {}
     $('cvCanvas').classList.add('cv-canvas--drag');
@@ -1060,23 +1121,13 @@
         else if (hd === 'tr') { box.x = s.x; box.y = s.y + (s.h - newH); }
         else if (hd === 'bl') { box.x = s.x + (s.w - newW); box.y = s.y; }
         else { box.x = s.x; box.y = s.y; }
-      } else {
-        // 边手柄：拉伸（非等比）
-        if (hd === 'l') { box.x = s.x + dx; box.w = Math.max(16, s.w - dx); }
-        else if (hd === 'r') { box.w = Math.max(16, s.w + dx); }
-        else if (hd === 't') { box.y = s.y + dy; box.h = Math.max(16, s.h - dy); }
-        else if (hd === 'b') { box.h = Math.max(16, s.h + dy); }
-        cv.params.stretch = true;
-        cv.params.w = Math.round(box.w); cv.params.h = Math.round(box.h);
       }
     }
     if (cv.params.posMode !== 'custom') cvSnap(box, e.altKey);
     cv.box = box;
     cvPaintBox();
     cvBoxToParams(box);
-    cvWriteBackInputs(['scale', 'dx', 'dy', 'w', 'h']);
-    if (cv.params.stretch) { $('cvStretch').checked = true; }
-    cvSyncStretchUI();
+    cvWriteBackInputs(['scale', 'dx', 'dy']);
   }
 
   function cvDragEnd() {
@@ -1115,56 +1166,56 @@
         cvRequestPreview(opts);
       });
     }
-    onInput('cvTW', function (el) { cv.params.targetW = Math.max(16, cvNum(el, 1920)); return true; }, { immediate: true });
-    onInput('cvTH', function (el) { cv.params.targetH = Math.max(16, cvNum(el, 1080)); return true; }, { immediate: true });
-    onInput('cvBgMode', function (el) { cv.params.bgMode = String(el.value); cvSyncBgRows(); return true; }, { immediate: true });
-    onInput('cvBgColor', function (el) { cv.params.bgColor = String(el.value); return true; });
-    onInput('cvBgDir', function (el) { cv.params.bgDir = String(el.value).trim(); cv.bgIndex = 0; return true; });
-    onInput('cvBgPath', function (el) { cv.params.bgPath = String(el.value).trim(); return true; });
-    onInput('cvBgBlur', function (el) { cv.params.bgBlur = Math.max(0, cvNum(el, 0)); cvWriteBackInputs(['bgBlur']); return true; });
-    onInput('cvScale', function (el) { cv.params.scale = Math.min(3, Math.max(0.05, cvNum(el, 0.74))); cvWriteBackInputs(['scale']); return true; });
-    onInput('cvScaleNum', function (el) { cv.params.scale = Math.min(3, Math.max(0.05, cvNum(el, 0.74))); cvWriteBackInputs(['scale']); return true; });
-    onInput('cvStretch', function (el) {
-      cv.params.stretch = !!el.checked;
-      cvSyncStretchUI();
-      if (cv.params.stretch && (!cv.params.w || !cv.params.h)) {
-        var size = cvContentSize();
-        cv.params.w = Math.round(size.w || 1280); cv.params.h = Math.round(size.h || 720);
-        cvWriteBackInputs(['w', 'h']);
-      }
-      return true;
-    }, { immediate: true });
-    // 拉伸宽高：与「转分辨率」同一套交互（常用比例 + 宽高联动 + 锁链解绑）
+    // 成片画布尺寸（输出分辨率）：与「转分辨率」同一套交互（常用比例 + 宽高联动 + 锁链解绑）。
+    // 这套交互原是为「内容非等比拉伸」做的 —— 内容拉伸已按原方案移除（回归等比缩放），
+    // 交互整体迁移到输出尺寸上（用户定案 2026-10-08）：比例与宽高同行、不单独占行。
     (function () {
-      var ratioEl = $('cvStretchRatio'), wEl = $('cvW'), hEl = $('cvH'), linkEl = $('cvStretchLink');
+      var ratioEl = $('cvRatio'), wEl = $('cvTW'), hEl = $('cvTH'), linkEl = $('cvLink');
       if (!ratioEl || !wEl || !hEl) return;
       var pairOf = function (r) { return RESIZE_RATIOS[r] || null; };
       var linked = function () { return ratioEl.value !== '自定义'; };   // 唯一判据：自定义 = 已解绑
       var paintLink = function () { if (linkEl) linkEl.classList.toggle('tl-link--on', linked()); };
-      var sync = function () { cv.params.w = Math.max(2, cvNum(wEl, 1280)); cv.params.h = Math.max(2, cvNum(hEl, 720)); };
+      var sync = function () {
+        cv.params.targetW = even(Math.max(16, cvNum(wEl, 1920)));
+        cv.params.targetH = even(Math.max(16, cvNum(hEl, 1080)));
+      };
+      var guessRatio = function () {          // 按当前宽高反推常用比例（交叉相乘，避开浮点）
+        var rr = '自定义';
+        Object.keys(RESIZE_RATIOS).forEach(function (k) {
+          var a = RESIZE_RATIOS[k];
+          if (a[0] * cv.params.targetH === a[1] * cv.params.targetW) rr = k;
+        });
+        return rr;
+      };
       ratioEl.addEventListener('change', function () {
         paintLink();
         var a = pairOf(ratioEl.value);
-        if (a) hEl.value = String(even(Math.round(Math.max(2, cvNum(wEl, 1280)) * a[1] / a[0])));
+        if (a) hEl.value = String(even(Math.round(Math.max(16, cvNum(wEl, 1920)) * a[1] / a[0])));
         sync();
         cvRequestPreview({ immediate: false });
       });
       if (linkEl) linkEl.addEventListener('click', function () {
-        if (linked()) { ratioEl.value = '自定义'; toast('已解绑：宽高可自由设定', 'info'); }
-        else { ratioEl.value = '16:9'; var a = pairOf(ratioEl.value); hEl.value = String(even(Math.round(Math.max(2, cvNum(wEl, 1280)) * a[1] / a[0]))); toast('已锁定比例：改宽/高会按比例联动', 'info'); }
+        if (linked()) { ratioEl.value = '自定义'; toast('已解绑：画布宽高可自由填写', 'info'); }
+        else {
+          var g = guessRatio();
+          ratioEl.value = (g === '自定义') ? '16:9' : g;
+          var a = pairOf(ratioEl.value);
+          hEl.value = String(even(Math.round(Math.max(16, cvNum(wEl, 1920)) * a[1] / a[0])));
+          toast('已锁定比例：改宽/高会按比例联动', 'info');
+        }
         paintLink();
         sync();
         cvRequestPreview({ immediate: false });
       });
       wEl.addEventListener('input', function () {
-        var w = Math.max(2, cvNum(wEl, 1280));
+        var w = Math.max(16, cvNum(wEl, 1920));
         var a = linked() ? pairOf(ratioEl.value) : null;
         if (a) hEl.value = String(even(Math.round(w * a[1] / a[0])));
         sync();
         cvRequestPreview({ immediate: false });
       });
       hEl.addEventListener('input', function () {
-        var h = Math.max(2, cvNum(hEl, 720));
+        var h = Math.max(16, cvNum(hEl, 1080));
         var a = linked() ? pairOf(ratioEl.value) : null;
         if (a) wEl.value = String(even(Math.round(h * a[0] / a[1])));
         sync();
@@ -1172,6 +1223,14 @@
       });
       paintLink();
     })();
+    onInput('cvBgMode', function (el) { cv.params.bgMode = String(el.value); cvSyncBgRows(); return true; }, { immediate: true });
+    onInput('cvBgColor', function (el) { cv.params.bgColor = String(el.value); return true; });
+    onInput('cvBgFit', function (el) { cv.params.bgFit = String(el.value); return true; }, { immediate: true });
+    onInput('cvBgDir', function (el) { cv.params.bgDir = String(el.value).trim(); cv.bgIndex = 0; return true; });
+    onInput('cvBgPath', function (el) { cv.params.bgPath = String(el.value).trim(); return true; });
+    onInput('cvBgBlur', function (el) { cv.params.bgBlur = Math.max(0, cvNum(el, 0)); cvWriteBackInputs(['bgBlur']); return true; });
+    onInput('cvScale', function (el) { cv.params.scale = Math.min(3, Math.max(0.05, cvNum(el, 0.74))); cvWriteBackInputs(['scale']); return true; });
+    onInput('cvScaleNum', function (el) { cv.params.scale = Math.min(3, Math.max(0.05, cvNum(el, 0.74))); cvWriteBackInputs(['scale']); return true; });
     onInput('cvPos', function (el) {
       var prev = cv.params.posMode;
       cv.params.posMode = String(el.value);
@@ -1215,9 +1274,11 @@
       cvSyncAtControls();
       cvRequestPreview({ immediate: true });
     });
+    // 「实际预览」默认勾选（显示合成结果）；取消勾选 → 显示内容原帧（对照用）
     $('cvShowRaw').addEventListener('change', function () {
       var stage = $('cvCanvas');
-      if (this.checked) stage.classList.add('cv-canvas--raw'); else stage.classList.remove('cv-canvas--raw');
+      if (this.checked) stage.classList.remove('cv-canvas--raw');
+      else stage.classList.add('cv-canvas--raw');
     });
     $('cvSamplePrev').addEventListener('click', function () { cvSampleStep(-1); });
     $('cvSampleNext').addEventListener('click', function () { cvSampleStep(1); });
@@ -1254,17 +1315,7 @@
     });
 
     // 预设
-    // 画布合成页：**独立的输出设置与入口**（与后处理互不干扰 —— 参数、输出、日志都只对自己负责）
-    $('cvOutMode').addEventListener('change', cvSyncOutRows);
-    $('cvOutNameMode').addEventListener('change', cvSyncOutRows);
-    $('cvBtnPickOutDir').addEventListener('click', function () {
-      if (!api || !api.pick_directory) { toast('后端不支持文件夹选择', 'error'); return; }
-      api.pick_directory('选择画布合成的输出文件夹', String($('cvOutDir').value || '').trim() || undefined).then(function (p) {
-        if (p) { $('cvOutDir').value = p; cvSyncOutRows(); }
-      });
-    });
-    $('cvRunBtn').addEventListener('click', cvRun);
-    cvSyncOutRows();
+    // 画布合成页不写自己的输出设置与按钮：与后处理共用下方那一份（见 outStore / outBind / syncRunButton）
     $('cvPresetApply').addEventListener('click', cvApplyPreset);
     $('cvPresetSave').addEventListener('click', cvSavePreset);
     $('cvPresetDelete').addEventListener('click', cvDeletePreset);
@@ -1283,7 +1334,9 @@
       cv.bgName = r.matched ? String(r.list[0].name || '') : '';
       // 候选清单留存：提交处理时随参数带给引擎，保证「预览看到哪一批，处理就用哪一批」
       cv.bgList = (r.list || []).map(function (x) { return x.path; });
-      setStatus('背景候选 ' + r.matched + ' / 扫描 ' + r.scanned + ' 个文件' + (r.matched ? '' : '（要求 1920×1080）'));
+      cv.bgSizes = (r.list || []).map(function (x) { return (x.width || 0) + '×' + (x.height || 0); });
+      // 背景**不再限制尺寸**（适合方式：填充 / 适应 / 拉伸 能处理任意尺寸）；尺寸只用于展示与"放大"提醒
+      setStatus('背景候选 ' + r.matched + ' / 扫描 ' + r.scanned + ' 个文件');
       cvUpdateBgInfo();
       cvRequestPreview({ immediate: true });
     }).catch(function (e) { setStatus('背景扫描失败：' + ((e && e.message) || e)); });
@@ -1297,24 +1350,14 @@
   }
 
   /** 画布合成：输出设置行的显隐（规则与后处理一致，但用的是**自己那套控件**） */
-  function cvSyncOutRows() {
-    var dirMode = $('cvOutMode').value === 'directory';
-    $('cvOutDirRow').hidden = !dirMode;
-    $('cvOutNameRow').hidden = !dirMode;
-    $('cvOutConflictRow').hidden = !dirMode;
-    var sfx = $('cvOutSuffix');
-    if (sfx) sfx.hidden = $('cvOutNameMode').value !== 'suffix';
-    $('cvOutHint').textContent = dirMode
-      ? '空文件夹 → 直接输出；已有文件 → 自动新建子文件夹'
-      : ('合成结果直接替换原视频' + ($('cvOutBackup').checked ? '（有备份可还原）' : '，且未开备份 —— 覆盖后不可恢复'));
-  }
+  // 画布合成**不再单独写一套输出设置**：与后处理共用下方同一份控件（DOM 一份、数据两份），
+  // 切标签页时由 outBind() 载入本页那一份 —— 行显隐复用 syncOutputRows()，无需在此重复实现。
 
-  /** 画布合成的提交参数：**自带的输入与输出**，与后处理完全分开（互不读取对方配置） */
+  /** 画布合成的提交参数：输入与**本页那份输出配置**（outStore.canvas），与后处理互不读取对方配置 */
   function cvCollectSpec() {
     if (!state.root && !state.files.length) return { error: '请先在页面上方选择要合成的文件夹或视频文件' };
-    var outMode = $('cvOutMode').value === 'overwrite' ? 'overwrite' : 'directory';
-    var outDir = String($('cvOutDir').value || '').trim();
-    if (outMode === 'directory' && !outDir) return { error: '请选择输出文件夹（或把输出方式改为「覆盖原视频」）' };
+    var o = outStore.canvas;
+    if (o.mode === 'directory' && !o.dir) return { error: '请选择输出文件夹（或把输出方式改为「覆盖原视频」）' };
     var p = Object.assign({}, cv.params);
     // 候选背景清单随参数带上 → 与预览用**同一批候选**（否则两边各自枚举，范围可能不一致）
     if (p.bgMode === 'dir' && (cv.bgList || []).length) p.bgList = cv.bgList.slice();
@@ -1326,12 +1369,12 @@
         recursive: state.recursive !== false,
         params: { canvas: p },
         output: {
-          mode: outMode,
-          dir: outDir,
-          nameMode: $('cvOutNameMode').value === 'suffix' ? 'suffix' : 'keep',
-          suffix: String($('cvOutSuffix').value || ''),
-          onConflict: $('cvOutConflict').value,
-          backup: !!$('cvOutBackup').checked,
+          mode: o.mode,
+          dir: o.dir,
+          nameMode: o.nameMode === 'suffix' ? 'suffix' : 'keep',
+          suffix: o.suffix,
+          onConflict: o.onConflict,
+          backup: !!o.backup,
         },
       },
     };
@@ -1345,12 +1388,14 @@
     var scope = spec.files.length ? (spec.files.length + ' 个文件') : spec.root;
     var submit = function () {
       setStatus('正在创建画布合成任务…');
+      setRunEnabled(false, '正在创建任务…');   // 与后处理同一口径：提交期间禁用按钮防连点
       api.run_tool(spec).then(function (r) {
+        setRunEnabled(true, '');
         if (!r || !r.ok) { toast((r && r.error) || '创建任务失败', 'error'); return; }
         showLogBox('画布合成任务已加入队列 · ' + r.taskId);
         setStatus('已加入执行队列（在任务列表中查看进度与结果）', 'ok');
         watchTask(r.taskId);
-      }).catch(function (e) { toast('创建任务失败：' + ((e && e.message) || e), 'error'); });
+      }).catch(function (e) { setRunEnabled(true, ''); toast('创建任务失败：' + ((e && e.message) || e), 'error'); });
     };
     if (spec.output.mode === 'overwrite') {
       showDialog({
@@ -1426,18 +1471,14 @@
     }).catch(function (e) { toast('删除预设失败：' + ((e && e.message) || e), 'error'); });
   }
 
-  /** 拉伸相关 UI 同步：两行显隐 + 比例下拉与锁链状态（按当前宽高反推，预设加载后也一致） */
-  function cvSyncStretchUI() {
-    var on = !!cv.params.stretch;
-    var r1 = $('cvStretchRatioRow'), r2 = $('cvStretchWH');
-    if (r1) r1.hidden = !on;
-    if (r2) r2.hidden = !on;
-    var ratioEl = $('cvStretchRatio'), linkEl = $('cvStretchLink');
+  /** 成片画布尺寸：比例下拉与锁链状态按当前宽高反推（预设加载后也保持一致） */
+  function cvSyncSizeUI() {
+    var ratioEl = $('cvRatio'), linkEl = $('cvLink');
     if (!ratioEl) return;
     var rr = '自定义';
     Object.keys(RESIZE_RATIOS).forEach(function (k) {
       var a = RESIZE_RATIOS[k];
-      if (a[0] * Number(cv.params.h) === a[1] * Number(cv.params.w)) rr = k;   // 交叉相乘，避开浮点
+      if (a[0] * Number(cv.params.targetH) === a[1] * Number(cv.params.targetW)) rr = k;   // 交叉相乘，避开浮点
     });
     ratioEl.value = rr;
     if (linkEl) linkEl.classList.toggle('tl-link--on', rr !== '自定义');
@@ -1450,13 +1491,12 @@
       var p = cv.params;
       var set = function (id, v) { var el = $(id); if (el) el.value = String(v); };
       set('cvTW', p.targetW); set('cvTH', p.targetH);
+      cvSyncSizeUI();                       // 画布尺寸：比例下拉与锁链状态按宽高反推
       set('cvBgMode', p.bgMode); set('cvBgColor', p.bgColor);
+      set('cvBgFit', p.bgFit);              // 背景适合方式（填充 / 适应 / 拉伸）
       set('cvBgDir', p.bgDir); set('cvBgPath', p.bgPath);
       set('cvBgBlur', p.bgBlur); set('cvBgBlurVal', p.bgBlur);
       set('cvScale', p.scale); set('cvScaleNum', p.scale);
-      var st = $('cvStretch'); if (st) st.checked = !!p.stretch;
-      set('cvW', p.w); set('cvH', p.h);
-      cvSyncStretchUI();
       set('cvPos', p.posMode); set('cvDx', p.dx); set('cvDy', p.dy);
       set('cvRadius', p.radius); set('cvRadiusVal', p.radius);
       set('cvBorderW', p.borderW); set('cvBorderWVal', p.borderW);
@@ -1492,9 +1532,13 @@
       btn.addEventListener('click', function () {
         var name = btn.getAttribute('data-tab');
         Array.prototype.forEach.call(tabs, function (b) { b.classList.toggle('tl-tab--active', b === btn); });
-        $('panePost').hidden = name !== 'post';
-        $('paneCanvas').hidden = name !== 'canvas';
-        if (name === 'canvas') cvOnShow();
+        var isCanvas = name === 'canvas';
+        $('panePost').hidden = isCanvas;
+        $('paneCanvas').hidden = !isCanvas;
+        // 输出设置与「开始」按钮**两页共用**：切换时先把 DOM 上那份存回旧模块，再载入新模块那一份
+        outBind(isCanvas ? 'canvas' : 'post');
+        syncRunButton();
+        if (isCanvas) cvOnShow();
       });
     });
   }
@@ -1518,7 +1562,8 @@
     if (window.VL_hydrateIcons) window.VL_hydrateIcons(document);
     $('inRecursive').checked = state.recursive;
     renderInputHint();
-    syncOutputRows();
+    outApply();          // 输出设置：初始载入后处理那一份（画布合成那份在切页时载入）
+    syncRunButton();
     bindTabs();
     cvInit();
     bindFormEvents();

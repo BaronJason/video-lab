@@ -7525,7 +7525,7 @@ let themes = [];
   // 通知不可用时静默 —— 提示失败绝不能影响任务流本身
   _notify(title, body) {
     try {
-      // 开关：config.json 的 notify_task_end —— 用户侧默认关闭（不打扰）；本机/开发机可置 true
+      // 开关：设置的 notify_task_end —— **默认开启**（设置页「通用设置」里可关）
       if (!(this.config && this.config.notify_task_end === true)) return;
       const { Notification } = require('electron');
       if (!Notification || (Notification.isSupported && !Notification.isSupported())) return;

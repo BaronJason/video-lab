@@ -586,14 +586,23 @@
       for (var i = 0; i < bn.length; i++) if (!(parseFloat(state.batch[bn[i]]) > 0)) missing.push('批量拼接·' + ({ max_duration: '最大时长', max_retry: '重试次数', speed_limit: '倍速阈值' })[bn[i]]);
       if (!state.batch.producer.trim()) missing.push('批量拼接·创作者名');
       
-      var rn = ['max_duration', 'speed_limit', 'dedup_ratio'];
-      for (var j = 0; j < rn.length; j++) if (!(parseFloat(state.replica[rn[j]]) > 0)) missing.push('视频复刻·' + ({ max_duration: '最大时长', speed_limit: '倍速阈值', dedup_ratio: '重复度下限' })[rn[j]]);
+      // ⚠ 复刻**不再单独保存**时长上限与倍速阈值（两者与批量共用，见上方 state 收集处的注释），
+      //    这两个字段在 state 里恒为空字符串 —— 若仍拿它们做必填校验，missing 会永远非空，
+      //    于是 collectAndSave 每次都在校验处提前 return：**全部即时保存（含皮肤）静默失效**（2026-10-08 实报并修复）。
+      if (!(parseFloat(state.replica.dedup_ratio) > 0)) missing.push('视频复刻·重复度下限');
       // 上下限关系校验（仅两者都启用时）；上限用于规避「去重过高被判定为全新视频」
       var rdMin = parseFloat(state.replica.dedup_ratio), rdMax = parseFloat(state.replica.dedup_ratio_max);
       if (state.replica.dedup_ratio_max_on && !(rdMax > 0)) missing.push('视频复刻·重复度上限');
       if (state.replica.dedup_ratio_max_on && rdMax > 0 && rdMin > 0 && rdMax < rdMin) missing.push('视频复刻·重复度上限（不能小于下限）');
       // 即时保存（silent）时必填项可能正被用户改写 → 只跳过，不弹「参数未设置」打扰输入
       if (missing.length) { if (!silent) setStatus('参数未设置：' + missing.join('、'), false); return; }
+
+      // 访问令牌：主进程只接受 8–64 位，越界会被**静默忽略**（表现为"改了没反应"）→ 这里先给可读提示
+      var tkEl = $('httpToken');
+      var tkVal = tkEl ? String(tkEl.value || '').trim() : '';
+      if (tkVal && (tkVal.length < 8 || tkVal.length > 64)) {
+        if (!silent) setStatus('访问令牌需 8–64 位（当前 ' + tkVal.length + ' 位）—— 已暂不保存该项，其余设置照常保存', false);
+      }
 
       var skin = document.documentElement.getAttribute('data-skin') || THEMES[0].id;
       var storageEl = document.querySelector('input[name="configStorage"]:checked');
@@ -615,7 +624,7 @@
         update_mode: umEl ? umEl.value : 'notify',
         config_storage: storageEl ? storageEl.value : 'program',
         http_port: parseInt($('httpPort').value, 10) || 9527,
-        http_token: (($('httpToken') || {}).value || '').trim(),
+        http_token: tkVal,
         batch: state.batch,
         replica: state.replica,
         mask: state.mask
@@ -877,7 +886,7 @@
         out.value = r.text || '（无匹配行）';
       }).catch(function () { setStatus('读取日志失败', true); });
     });
-    // 日志级别（会话级；重启回 info —— 安全默认）
+    // 日志级别（**持久化**：写入设置库，启动后在空闲期恢复；页面上「会话级」的旧说明已同步更正）
     if (api && api.get_log_level && api.set_log_level) {
       api.get_log_level().then(function (r) {
         if (r && r.ok) { var sel = document.getElementById('logLevelSel'); if (sel) sel.value = r.level || 'info'; }
@@ -908,8 +917,9 @@
     }
     bindDiagButton('btnExportDiag', false);
     bindDiagButton('btnExportDiagMasked', true);
-    // 复制浏览器访问地址（带安全令牌，供用户手动填入其他设备/分享）
-    var btnCopyUrl = document.getElementById('btnOpenBrowserUrl');
+    // 复制浏览器访问地址：该按钮在当前设置页 DOM 中并不存在（历史残留绑定）——
+    // 地址本身由 #httpUrl 链接承担（点击即用系统浏览器打开），这里显式置空以免留下"看起来会生效"的死代码。
+    var btnCopyUrl = null;
     if (btnCopyUrl) btnCopyUrl.addEventListener('click', function () {
       var hu = document.getElementById('httpUrl');
       var url = hu ? hu.value : '';

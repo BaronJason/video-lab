@@ -720,6 +720,7 @@
     at: 0,
     duration: 0,
     live: false,                   // 是否开启「实时预览」（默认关：占位示意即时反馈，微调不等渲染）
+    inflight: false, pending: false,   // 渲染中标记 / 渲染期间又改过参数的"待渲"标记（合并请求，避免排队）
     samples: [], sampleIndex: 0,   // 预览样本清单（文件夹输入 = 待处理视频；文件输入 = 所选文件）
     bgIndex: 0, bgTotal: 0, bgName: '', bgSizes: [],   // 背景候选：序号 / 总数 / 名称 / 各自尺寸（展示用）
     box: { x: 0, y: 0, w: 0, h: 0 },   // 内容盒（画布像素；精确渲染后以服务端元数据为准）
@@ -927,7 +928,19 @@
     // 传 force，仍需一张真实帧来更新画面与元数据（时长、素材尺寸、背景候选等）。
     if (!cv.live && !(opts && opts.force)) { cvPaintHold(); return; }
     var delay = (opts && opts.immediate) ? 0 : 200;
-    cv.timer = setTimeout(function () { cv.timer = 0; cvDoPreview(); }, delay);
+    cv.timer = setTimeout(function () {
+      cv.timer = 0;
+      // 渲染进行中：只记「待渲」标记，等这次回来立刻用**最新参数**补渲一次 —— 不重复排队。
+      // （实测：每次调整都发请求会互相等待，单帧耗时从 0.35s 累积到 2.8s，越调越卡）
+      if (cv.inflight) { cv.pending = true; return; }
+      cvDoPreview();
+    }, delay);
+  }
+
+  /** 渲染收尾：清"渲染中"标记；期间若有新参数（pending），立刻补渲一次（用最新参数，不排队） */
+  function cvFinishPreview() {
+    cv.inflight = false;
+    if (cv.pending) { cv.pending = false; cvRequestPreview({ immediate: true, force: true }); }
   }
 
   /** 预览失败提示：状态栏小字容易被忽略，补一次吐司；相同原因 4 秒内不重复弹（拖动时可能连发） */
@@ -947,6 +960,7 @@
       return;
     }
     var mySeq = ++cv.seq;
+    cv.inflight = true;
     cvSetBadge(cv.timer ? '渲染中…' : '渲染中…', '');
     var payload = {
       contentPath: contentPath,
@@ -985,7 +999,7 @@
       cvSetBadge('预览失败', 'err');
       cvShowWarnings([String((e && e.message) || e)]);
       cvToastError(String((e && e.message) || e));
-    });
+    }).then(function () { cvFinishPreview(); });   // 成功 / 失败 / 被丢弃（过期响应）都要清标记并处理"待渲"
   }
 
   /** 把当前时间点写回两个控件，并按已知时长约束范围 —— 越界值一律夹回，避免「拖到超出时长 → 渲染取不到帧」 */
@@ -1187,7 +1201,10 @@
     if (!cv.drag) return;
     cv.drag = null;
     cvDrawGuides(0, 0, false);
-    cvRequestPreview({ immediate: true, force: true });     // 松手后按当前参数渲染精确帧校正
+    // 松手后：开启「实时预览」才渲染，且走**防抖** —— 连续拖动只在停下后渲一帧，
+    // 否则每次松手都发一次请求会互相排队（实测耗时从 0.35s 累积到 2.8s，越调越卡）。
+    // 未开启实时预览则纯本地结束：拖动全程零渲染。
+    cvRequestPreview({ immediate: false });
   }
 
   // 缩放不再挂滚轮：参数页常常贴着预览，滚动查看参数时会误改缩放。
@@ -1294,7 +1311,7 @@
         cvWriteBackInputs(['dx', 'dy']);
       }
       return true;
-    }, { immediate: true, force: true });
+    }, { immediate: true });
     onInput('cvDx', function (el) { cv.params.dx = Math.round(cvNum(el, 0)); return true; });
     onInput('cvDy', function (el) { cv.params.dy = Math.round(cvNum(el, 160)); return true; });
     onInput('cvRadius', function (el) { cv.params.radius = Math.max(0, cvNum(el, 0)); cvWriteBackInputs(['radius']); return true; });
@@ -1314,18 +1331,18 @@
     });
     $('cvAtRange').addEventListener('change', function () {
       cvSyncAtControls();
-      cvRequestPreview({ immediate: true, force: true });
+      cvRequestPreview({ immediate: false });   // 换帧属"调整"：未开实时预览不渲染；开启时防抖合并
     });
     $('cvAt').addEventListener('change', function () {
       cv.at = Math.max(0, cvNum($('cvAt'), 0));
       cvSyncAtControls();
-      cvRequestPreview({ immediate: true, force: true });
+      cvRequestPreview({ immediate: false });
     });
     $('cvAtRandom').addEventListener('click', function () {
       var max = cv.duration > 0.2 ? cv.duration - 0.1 : 0;
       cv.at = Math.round(Math.random() * Math.max(0, max) * 10) / 10;
       cvSyncAtControls();
-      cvRequestPreview({ immediate: true, force: true });
+      cvRequestPreview({ immediate: false });
     });
     // 「实时预览」开关：勾选 = 每次改动都渲染真实帧（准确但有延迟）；默认不勾选 = 占位示意快速微调
     $('cvLive').addEventListener('change', function () {
@@ -1339,7 +1356,7 @@
     $('cvBgNext').addEventListener('click', function () { cvBgStep(1); });
     $('cvScanBg').addEventListener('click', function () { cvScanBackgrounds(); });
     $('cvBgDir').addEventListener('change', function () { if (cv.params.bgMode === 'dir') cvScanBackgrounds(true); });
-    $('cvBgPath').addEventListener('change', function () { cvRequestPreview({ immediate: true, force: true }); });
+    $('cvBgPath').addEventListener('change', function () { cvRequestPreview({ immediate: false }); });
 
     // 选择类按钮复用主进程的既有对话框通道
     $('cvPickBgDir').addEventListener('click', function () {

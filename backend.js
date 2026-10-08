@@ -5392,6 +5392,18 @@ class Api {
     let isDir = false;
     try { isDir = fs.statSync(root).isDirectory(); } catch (e) {}
     if (!isDir) return { ok: false, error: '背景目录不存在：' + root };
+    // 结果缓存：预览路径每次都会列背景候选（拖动/调参高频调用），而目录遍历 + 500 次 stat 属纯浪费。
+    // 指纹 = 目录 mtime + 根目录条目数（新增/删除文件会变，命中即复用），并留 30s 兜底上限。
+    if (!this._bgListCache) this._bgListCache = new Map();
+    let bgStamp = '';
+    try {
+      const st = fs.statSync(root);
+      let n = 0;
+      try { n = fs.readdirSync(root).length; } catch (e) {}
+      bgStamp = Math.round(st.mtimeMs) + ':' + n;
+    } catch (e) {}
+    const bgHit = this._bgListCache.get(root);
+    if (bgStamp && bgHit && bgHit.stamp === bgStamp && (Date.now() - bgHit.at) < 30000) return bgHit.result;
     const exts = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.mp4', '.mov', '.mkv', '.avi']);
     const files = [];
     const walk = (d, depth) => {
@@ -5414,7 +5426,9 @@ class Api {
         duration: x.duration || 0,
       }))
       .sort((a, b) => a.path.localeCompare(b.path));
-    return { ok: true, dir: root, scanned: files.length, matched: list.length, list: list };
+    const result = { ok: true, dir: root, scanned: files.length, matched: list.length, list: list };
+    if (bgStamp) this._bgListCache.set(root, { at: Date.now(), stamp: bgStamp, result: result });
+    return result;
   }
 
   /**

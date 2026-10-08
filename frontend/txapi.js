@@ -184,6 +184,7 @@
     get_changelog_popup: function () { return invoke('get_changelog_popup', []); },
     ack_changelog_popup: function () { return invoke('ack_changelog_popup', []); },
     get_readme: function () { return invoke('get_readme', []); },
+  get_about_info: function () { return invoke('get_about_info', []); },
     clear_task: function (id) { return invokeArgs('clear_task', id); },
     regroup_task: function (id, groupCount) { return invokeArgs('regroup_task', id, groupCount); },
     resume_all_tasks: function () { return invoke('resume_all_tasks', []); },

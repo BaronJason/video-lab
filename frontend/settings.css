@@ -537,3 +537,11 @@ body {
 .changelog-box blockquote { margin: 8px 0; padding: 6px 12px; border-left: 3px solid var(--brand-500); background: var(--bg-overlay-l1); border-radius: 0 6px 6px 0; }
 .changelog-box blockquote p { margin: 2px 0; }
 .changelog-box hr { border: none; border-top: 1px solid var(--border-neutral-l1); margin: 14px 0; }
+
+/* 关于页 · 运行环境与组件（版本号 / 来源 / 目录）：键值行，值过长自动换行 */
+.about-info { font-size: var(--body-sm-font-size); }
+.about-info__row { display: flex; gap: 10px; padding: 4px 0;
+                   border-bottom: 1px dashed var(--border-neutral-l1); }
+.about-info__row:last-child { border-bottom: none; }
+.about-info__k { flex: 0 0 92px; color: var(--text-tertiary); }
+.about-info__v { flex: 1; min-width: 0; color: var(--text-secondary); word-break: break-all; }

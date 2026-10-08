@@ -91,6 +91,7 @@ contextBridge.exposeInMainWorld('txapi', {
   get_changelog_popup: () => invoke('get_changelog_popup'),
   ack_changelog_popup: () => invoke('ack_changelog_popup'),
   get_readme: () => invoke('get_readme'),
+  get_about_info: () => invoke('get_about_info'),
   clear_task: (id) => invoke('clear_task', id),
   regroup_task: (id, groupCount) => invoke('regroup_task', id, groupCount),
   resume_all_tasks: () => invoke('resume_all_tasks'),

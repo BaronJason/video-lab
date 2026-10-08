@@ -166,55 +166,6 @@
 
       
 
-            <div class="settings-group"><span class="settings-group__title">软件更新</span></div>
-      <div class="form-group">
-        <label class="form-group__label">更新</label>
-        <div class="opt-row">
-          <label class="opt-check">
-            <input type="checkbox" id="autoCheckUpdate">
-            <span class="opt-check__box"></span>
-            <span>启动时自动检查更新</span>
-          </label>
-        </div>
-        <div class="opt-row">
-          <label class="opt-check">
-            <input type="checkbox" id="checkUpdateDaily">
-            <span class="opt-check__box"></span>
-            <span>每日定期检查更新</span>
-          </label>
-          <select class="form-input opt-time-select" id="checkUpdateHour" title="每日定时检查更新时间（24小时制整点，默认 9:00）"></select>
-        </div>
-        <div class="opt-row opt-row--spaced" title="更新方式：发现新版本后自动检查并下载 / 仅提醒（对启动时检查、手动检查、定时检查均生效）">
-          <label class="opt-radio">
-            <input type="radio" name="updateMode" value="auto">
-            <span class="opt-radio__dot"></span>
-            <span class="opt-radio__label">自动检查并下载</span>
-          </label>
-          <label class="opt-radio">
-            <input type="radio" name="updateMode" value="notify">
-            <span class="opt-radio__dot"></span>
-            <span class="opt-radio__label">有新版本提醒我</span>
-          </label>
-        </div>
-      </div>
-      <div class="form-group">
-        <label class="form-group__label">仓库选择</label>
-        <div class="opt-row opt-row--spaced" title="更新源：发现新版本时从所选仓库检查并下载更新">
-          <label class="opt-radio">
-            <input type="radio" name="updateSource" value="gitee">
-            <span class="opt-radio__dot"></span>
-            <span class="opt-radio__label">码云（Gitee）<span class="opt-path">gitee.com/hirannu/video-lab</span></span>
-          </label>
-          <label class="opt-radio">
-            <input type="radio" name="updateSource" value="github">
-            <span class="opt-radio__dot"></span>
-            <span class="opt-radio__label">GitHub<span class="opt-path">github.com/BaronJason/video-lab</span></span>
-          </label>
-        </div>
-        <div class="opt-actions">
-          <button class="btn" id="btnCheckUpdate" title="立即检查所选更新源（码云/GitHub）是否有新版本">检查更新</button>
-        </div>
-      </div>
       <div class="settings-group"><span class="settings-group__title">浏览器访问</span></div>
 <div class="form-group form-group--http">
         <div class="form-group__desc">本地 HTTP 端口与访问令牌；可自行修改令牌或随机生成，保存后生效</div>
@@ -449,6 +400,62 @@
 
     <!-- ═══ 关于 ═══ -->
     <section class="settings-view" id="view-about">
+      <!-- 运行环境与组件：组件是**自动下载**的，把版本号 / 来源 / 目录 / 校验结果显式摆出来，
+           便于核对"实际跑的是哪一份"（旧版 6.1.1 的进度行缺 elapsed 就是靠这里一眼看出） -->
+      <div class="settings-group"><span class="settings-group__title">运行环境与组件</span></div>
+      <div class="form-group">
+        <div class="about-info" id="aboutInfo"><div class="changelog-hint">正在读取…</div></div>
+      </div>
+      <!-- 软件更新：与版本号同页 —— 看到版本就能顺手检查/切换更新源 -->
+      <div class="settings-group"><span class="settings-group__title">软件更新</span></div>
+      <div class="form-group">
+        <label class="form-group__label">更新</label>
+        <div class="opt-row">
+          <label class="opt-check">
+            <input type="checkbox" id="autoCheckUpdate">
+            <span class="opt-check__box"></span>
+            <span>启动时自动检查更新</span>
+          </label>
+        </div>
+        <div class="opt-row">
+          <label class="opt-check">
+            <input type="checkbox" id="checkUpdateDaily">
+            <span class="opt-check__box"></span>
+            <span>每日定期检查更新</span>
+          </label>
+          <select class="form-input opt-time-select" id="checkUpdateHour" title="每日定时检查更新时间（24小时制整点，默认 9:00）"></select>
+        </div>
+        <div class="opt-row opt-row--spaced" title="更新方式：发现新版本后自动检查并下载 / 仅提醒（对启动时检查、手动检查、定时检查均生效）">
+          <label class="opt-radio">
+            <input type="radio" name="updateMode" value="auto">
+            <span class="opt-radio__dot"></span>
+            <span class="opt-radio__label">自动检查并下载</span>
+          </label>
+          <label class="opt-radio">
+            <input type="radio" name="updateMode" value="notify">
+            <span class="opt-radio__dot"></span>
+            <span class="opt-radio__label">有新版本提醒我</span>
+          </label>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-group__label">仓库选择</label>
+        <div class="opt-row opt-row--spaced" title="更新源：发现新版本时从所选仓库检查并下载更新">
+          <label class="opt-radio">
+            <input type="radio" name="updateSource" value="gitee">
+            <span class="opt-radio__dot"></span>
+            <span class="opt-radio__label">码云（Gitee）<span class="opt-path">gitee.com/hirannu/video-lab</span></span>
+          </label>
+          <label class="opt-radio">
+            <input type="radio" name="updateSource" value="github">
+            <span class="opt-radio__dot"></span>
+            <span class="opt-radio__label">GitHub<span class="opt-path">github.com/BaronJason/video-lab</span></span>
+          </label>
+        </div>
+        <div class="opt-actions">
+          <button class="btn" id="btnCheckUpdate" title="立即检查所选更新源（码云/GitHub）是否有新版本">检查更新</button>
+        </div>
+      </div>
       <div class="changelog-box" id="aboutBox"><div class="changelog-hint" id="aboutHint"></div></div>
     </section>
 

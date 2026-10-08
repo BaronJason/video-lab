@@ -1732,6 +1732,7 @@ function registerIpc() {
   ipcMain.handle('clear_done_tasks', (e, opts) => api.clearDoneTasks(opts || {}));
   ipcMain.handle('get_changelog', () => api.getChangelog());
   ipcMain.handle('get_readme', () => api.getReadme());
+  ipcMain.handle('get_about_info', () => api.getAboutInfo());   // 关于页 · 运行环境与组件信息
   // 启动弹更新日志：仅当配置里记录的上次展示版本与当前版本不同（含初次启动 / 版本更新后）才返回内容。
   // 标记（last_changelog_version）改由前端在弹窗关闭时经 ack_changelog_popup 回写，
   // 避免「静默到托盘启动时主窗口 JS 已执行、用户却没看到弹窗」白白消耗掉展示机会

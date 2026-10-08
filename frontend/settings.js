@@ -524,7 +524,35 @@
     }
     var aboutLoaded = false;
     var aboutLoading = false;
+    /** 关于页 · 运行环境与组件信息：组件是自动下载的，把版本号 / 来源 / 目录显式摆出来便于核对 */
+    function loadAboutInfo() {
+      var box = $('aboutInfo');
+      if (!box) return;
+      if (!api || !api.get_about_info) { box.textContent = '（当前通道不支持）'; return; }
+      api.get_about_info().then(function (r) {
+        if (!r || !r.ok) { box.textContent = '读取失败：' + ((r && r.error) || '未知错误'); return; }
+        var c = r.component || {}, ap = r.app || {}, rt = r.runtime || {}, ev = r.env || {};
+        var rows = [
+          ['应用版本', ap.version || '—'],
+          ['数据目录', ap.storageDir || '—'],
+          ['运行环境', [rt.platform, rt.electron ? ('Electron ' + rt.electron) : '', rt.chrome ? ('Chrome ' + rt.chrome) : '', rt.node ? ('Node ' + rt.node) : ''].filter(Boolean).join(' · ')],
+          ['FFmpeg', (c.ffmpegVersion || c.version || '—') + (c.source ? ('（源：' + c.source + '）') : '')],
+          ['FFprobe', c.ffprobeVersion || '—'],
+          ['组件目录', c.dir || '—'],
+          ['组件下载时间', c.downloadedAt ? String(c.downloadedAt).replace('T', ' ').slice(0, 19) : '—'],
+          ['组件校验', (ev.missing && ev.missing.length) || (ev.missingEncoders && ev.missingEncoders.length)
+            ? ('缺滤镜 ' + (ev.missing || []).length + ' 项 / 缺编码器 ' + (ev.missingEncoders || []).length + ' 项')
+            : (ev.probeFailed ? '探测未完成' : '正常')],
+        ];
+        box.innerHTML = rows.map(function (it) {
+          return '<div class="about-info__row"><span class="about-info__k">' + esc(it[0]) + '</span>'
+            + '<span class="about-info__v">' + esc(it[1]) + '</span></div>';
+        }).join('');
+      }).catch(function (e) { box.textContent = '读取失败：' + String((e && e.message) || e); });
+    }
+
     function loadAbout() {
+      loadAboutInfo();   // 运行环境与组件（与 README 内容同页展示）
       if (aboutLoaded || aboutLoading) return;
       aboutLoading = true;
       var hint = $('aboutHint');

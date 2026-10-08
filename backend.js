@@ -4593,6 +4593,63 @@ class Api {
     }
   }
 
+  /**
+   * 关于页 · 运行环境与组件信息（版本号 / 来源 / 目录 / 校验结果）。
+   * 为什么要这一块：组件是**自动下载**的，用户无从得知实际跑的是哪一份、什么版本、从哪来；
+   * 出问题时（如旧版 6.1.1 的进度行缺 elapsed）也只能靠翻日志。这里把它显式摆出来，
+   * 同时给出「复制信息」所需的原始字段。
+   */
+  async getAboutInfo() {
+    const readVer = (bin) => new Promise((resolve) => {
+      try {
+        const { execFile } = require('child_process');
+        execFile(bin, ['-version'], { windowsHide: true, timeout: 8000 }, (e, so) => {
+          const m = String(so || '').match(/version\s+([\w.\-]+)/i);
+          resolve(m ? m[1] : '');
+        });
+      } catch (e) { resolve(''); }
+    });
+    const bin = this._resolveFfmpegBin();
+    const out = {
+      ok: true,
+      app: { version: '', storageDir: String(this.storageDir || ''), enginesDir: String(this.enginesDirFixed || this.enginesDir || '') },
+      runtime: {
+        platform: process.platform + '-' + process.arch,
+        electron: (process.versions && process.versions.electron) || '',
+        chrome: (process.versions && process.versions.chrome) || '',
+        node: (process.versions && process.versions.node) || '',
+      },
+      component: {
+        dir: String(bin.cfgDir || ''),
+        ffmpeg: String(bin.ffmpegPath || ''),
+        ffprobe: String(bin.ffprobePath || ''),
+        version: '', source: '', downloadedAt: '',   // 来自 _meta.json（自动下载时写入）
+        ffmpegVersion: '', ffprobeVersion: '',       // 来自实际可执行文件（更可信）
+      },
+      env: { missing: [], missingEncoders: [], probeFailed: false, probeReason: '' },
+    };
+    try {
+      const pj = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
+      out.app.version = String(pj.version || '');
+    } catch (e) {}
+    try {
+      const meta = JSON.parse(fs.readFileSync(path.join(String(bin.cfgDir || ''), '_meta.json'), 'utf8'));
+      out.component.version = String(meta.version || '');
+      out.component.source = String(meta.source || '');
+      out.component.downloadedAt = String(meta.downloadedAt || '');
+    } catch (e) {}
+    if (out.component.ffmpeg) out.component.ffmpegVersion = await readVer(out.component.ffmpeg);
+    if (out.component.ffprobe) out.component.ffprobeVersion = await readVer(out.component.ffprobe);
+    try {
+      const e = await this.checkEnvAsync();
+      out.env.missing = (e.missing || []).slice(0, 12);
+      out.env.missingEncoders = (e.missingEncoders || []).slice(0, 8);
+      out.env.probeFailed = !!e.probeFailed;
+      out.env.probeReason = String(e.probeReason || '');
+    } catch (e) {}
+    return out;
+  }
+
   // 关于页（README.md 位于应用目录内，随 app.asar 打包）
   getReadme() {
     try {

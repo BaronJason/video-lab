@@ -75,6 +75,7 @@ const PURE_BACKEND_ROUTES = {
   clear_done_tasks: { m: 'clearDoneTasks', a: (args) => [args[0] || {}] },
   get_changelog: { m: 'getChangelog', a: () => [] },
   get_readme: { m: 'getReadme', a: () => [] },
+  get_about_info: { m: 'getAboutInfo', a: () => [] },
   clear_task: { m: 'clearTask', a: (args) => [args[0]] },
   regroup_task: { m: 'regroupTask', a: (args) => [args[0], args[1]] },
   resume_all_tasks: { m: 'resumeAllTasks', a: () => [] },

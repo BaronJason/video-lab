@@ -174,15 +174,17 @@
       border-radius: var(--radius-6); border: 1px solid var(--border-neutral-l2);
       background: var(--bg-input-default); color: var(--text-default); font-size: 13px; }
     .modal__input:focus { outline: none; border-color: var(--brand-500); }
-    /* 舞台：画布被限高后可能比舞台窄，故居中显示（否则竖向输出会贴左、右侧留一大块） */
-    .cv-stage { position: relative; background: #14161a; border: 1px solid var(--border-neutral-l1);
-                border-radius: var(--radius-8); padding: 10px;
+    /* 舞台：**不加任何装饰**（无背景 / 无边框 / 无圆角 / 无内边距）——
+       预览就是画面本身，画布被限高变窄时露出的应是页面底色，而不是一块多余的深色底板。
+       仅保留 flex 居中（竖向输出变窄后居中，不贴左）。 */
+    .cv-stage { position: relative;
                 display: flex; align-items: center; justify-content: center; }
     /* 画布尺寸由 JS 按「可用宽 + 高度上限（视口 58%）」contain 计算后**显式给出**（见 cvSyncStageAspect）：
        纯 CSS 的 aspect-ratio + max-height 在高度被限时**不会**回头收窄宽度，会把画面压变形 —— 故用 JS 算更可靠。
        这里的 width / aspect-ratio 仅作 JS 就位前的兜底。 */
+    /* 画布：直角 + 深色画面区（代表输出画面本身），不再做圆角 —— 与"实时预览"语义一致 */
     .cv-canvas { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #0d0f12;
-                 overflow: hidden; border-radius: 4px; touch-action: none; user-select: none; }
+                 overflow: hidden; touch-action: none; user-select: none; }
     .cv-layer { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
     /* 拖动时合成帧半透明：保留画面参考，又不挡住内容盒与吸附线 */
     .cv-canvas--drag .cv-layer--comp { opacity: .35; }

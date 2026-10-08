@@ -753,7 +753,7 @@
     var W = cvCanvasW(), H = cvCanvasH();
     var ar = W / Math.max(1, H);                 // 输出宽高比（由「成片画布尺寸」决定）
     var host = stage.parentElement;              // .cv-stage（其宽由参数栏之外的剩余宽决定）
-    var availW = host ? Math.max(160, host.clientWidth - 20) : 0;   // 扣掉舞台 padding(10×2)
+    var availW = host ? Math.max(160, host.clientWidth) : 0;   // 舞台已无内边距 → 可用宽即舞台内容宽
     if (!availW) { stage.style.aspectRatio = String(W) + ' / ' + String(H); return; }
     var capH = Math.max(180, Math.round(window.innerHeight * CV_STAGE_MAX_VH));
     var w = availW, h = w / ar;

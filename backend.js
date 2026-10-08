@@ -7575,28 +7575,54 @@ let themes = [];
       fs.mkdirSync(dir, { recursive: true });
       this.config.ffmpeg_dir = dir;   // 校验与后续引擎运行都按新路径；失败回滚
       emit({ phase: 'check' });
-      let ver = 'b6.1.1';
+      // ── 主源：npmmirror 的 FFmpeg-Builds 镜像（BtbN 构建，国内可直连，版本可达 8.x）──
+      // 旧的 ffmpeg-static 镜像**最高只有 6.1.1**，而 6.1.1 的进度行**不含 elapsed（实际耗时）**，
+      // 界面那一行「已用时」永远为空（2026-10-08 实测：9.0.2 有 elapsed=，6.1.1 没有）→ 换源。
+      // 组件仍然**自带**在数据目录 ffmpeg\，**不依赖系统 PATH**（系统 PATH 可能中途异常/被清除，
+      // 这正是当初做自动下载的原因 —— 不要改成"优先用系统上的那份"）。
+      let ver = '';
+      let src = 'npmmirror:ffmpeg-static';   // 实际使用的源，写入 _meta.json 供事后核对
       try {
-        const list = await this._httpGetJson('https://registry.npmmirror.com/-/binary/ffmpeg-static/');
-        const vers = (list || []).map((x) => String(x.name || ''))
-          .filter((n) => /^b[\d.]+\/$/.test(n)).map((n) => n.replace(/\/$/, ''))
-          .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-        if (vers.length) ver = vers[vers.length - 1];
-      } catch (e) {}
-      const base = 'https://registry.npmmirror.com/-/binary/ffmpeg-static/' + ver + '/';
-      let pctBase = 0;
-      for (const pair of [['ffmpeg-win32-x64.gz', 'ffmpeg.exe'], ['ffprobe-win32-x64.gz', 'ffprobe.exe']]) {
-        await this._downloadGunzip(base + pair[0], path.join(dir, pair[1]), (pct) => {
-          emit({ phase: 'download', file: pair[1], percent: Math.min(99, Math.round(pctBase + pct / 2)) });
-        });
-        pctBase += 50;
+        const pick = await this._pickFfmpegBuilds();
+        if (pick) {
+          const url = 'https://registry.npmmirror.com/-/binary/ffmpeg-builds/' + pick.ver + '/' + pick.file;
+          await this._downloadFile(url, path.join(dir, '_ffmpeg.tar.xz'), (pct) => {
+            emit({ phase: 'download', file: 'ffmpeg-builds', percent: Math.min(80, Math.round(pct * 0.8)) });
+          });
+          await this._extractFfmpegBuild(path.join(dir, '_ffmpeg.tar.xz'), dir);
+          ver = String(pick.ver).replace(/^v/, '');
+          src = 'npmmirror:ffmpeg-builds';
+        }
+      } catch (e) {
+        this._lg('ENV', 'ffmpeg.ensure', 'FFmpeg-Builds 源失败，回退 ffmpeg-static · ' + String((e && e.message) || e));
+      }
+      try { fs.rmSync(path.join(dir, '_ffmpeg.tar.xz'), { force: true }); } catch (e) {}
+      // 回退：ffmpeg-static（gzip 单文件，内置 zlib 解压）—— 最高 6.1.1，但一定能用
+      if (!ver) {
+        let v = 'b6.1.1';
+        try {
+          const list = await this._httpGetJson('https://registry.npmmirror.com/-/binary/ffmpeg-static/');
+          const vers = (list || []).map((x) => String(x.name || ''))
+            .filter((n) => /^b[\d.]+\/$/.test(n)).map((n) => n.replace(/\/$/, ''))
+            .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+          if (vers.length) v = vers[vers.length - 1];
+        } catch (e) {}
+        const base = 'https://registry.npmmirror.com/-/binary/ffmpeg-static/' + v + '/';
+        let pctBase = 0;
+        for (const pair of [['ffmpeg-win32-x64.gz', 'ffmpeg.exe'], ['ffprobe-win32-x64.gz', 'ffprobe.exe']]) {
+          await this._downloadGunzip(base + pair[0], path.join(dir, pair[1]), (pct) => {
+            emit({ phase: 'download', file: pair[1], percent: Math.min(99, Math.round(pctBase + pct / 2)) });
+          });
+          pctBase += 50;
+        }
+        ver = v;
       }
       const env1 = await this.checkEnvAsync();
       if (env1.downloadNeeded) throw new Error('下载完成但校验未通过：' + (env1.missing || []).join('、'));
       // 落地元信息（_meta.json）：事后可核对「两个版本用的是不是同一份组件 / 何时下载的 / 版本号」，
       // 双版本共用数据目录时，这份记录是「用的是不是同一份组件」的唯一凭据
       try {
-        const meta = { version: ver, downloadedAt: new Date().toISOString(), source: 'npmmirror:ffmpeg-static', files: {} };
+        const meta = { version: ver, downloadedAt: new Date().toISOString(), source: src, files: {} };
         for (const n of ['ffmpeg.exe', 'ffprobe.exe']) {
           const st = fs.statSync(path.join(dir, n));
           meta.files[n] = { size: st.size, mtimeMs: Math.round(st.mtimeMs) };
@@ -7612,6 +7638,85 @@ let themes = [];
       this._lg('ERR', 'ffmpeg.ensure', 'FFmpeg 自动下载失败 · ' + String((e && e.message) || e), { dir: dir });
       return { ok: false, error: String((e && e.message) || e) };
     } finally { this._ffmpegBusy = false; }
+  }
+
+  /**
+   * 从 npmmirror 的 FFmpeg-Builds 镜像挑最新的 Windows x64 构建（BtbN 出品，国内可直连）。
+   * 目录形如 v6.1.3/ v7.1.5/ v8.1.3/（含 v8.1/ 这类聚合项，跳过）。
+   */
+  async _pickFfmpegBuilds() {
+    const list = await this._httpGetJson('https://registry.npmmirror.com/-/binary/ffmpeg-builds/');
+    const vers = (list || []).map((x) => String(x.name || '').replace(/\/$/, ''))
+      .filter((n) => /^v\d+\.\d+\.\d+$/.test(n))
+      .sort((a, b) => {
+        const pa = a.replace(/^v/, '').split('.').map(Number);
+        const pb = b.replace(/^v/, '').split('.').map(Number);
+        for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] - pb[i];
+        return 0;
+      });
+    if (!vers.length) return null;
+    for (let i = vers.length - 1; i >= 0; i--) {
+      const ver = vers[i];
+      const n = String(ver).replace(/^v/, '');
+      // 全功能（gpl）版：编码要用 libx264 等；只用静态包（非 shared，免带 dll）
+      const file = 'ffmpeg-' + n + '-win32-x64-gpl.tar.xz';
+      try {
+        const items = await this._httpGetJson('https://registry.npmmirror.com/-/binary/ffmpeg-builds/' + ver + '/');
+        if ((items || []).some((x) => String(x.name || '') === file)) return { ver: ver, file: file };
+      } catch (e) {}
+    }
+    return null;
+  }
+
+  /** 下载到文件（一次性缓冲；仅在组件自愈时用，140MB 级一次性操作可接受） */
+  _downloadFile(url, dest, onPct) {
+    return new Promise((resolve, reject) => {
+      this._httpGet(url, (buf) => {
+        try { fs.writeFileSync(dest, buf); resolve(dest); } catch (e) { reject(e); }
+      }, reject);
+    }).then((r) => { if (typeof onPct === 'function') onPct(100); return r; });
+  }
+
+  /**
+   * 解压 FFmpeg-Builds 的 tar.xz 并取出 ffmpeg.exe / ffprobe.exe 到目标目录。
+   * 用 Windows 自带的 tar.exe（bsdtar，支持 xz）—— 不引入新依赖，也不依赖系统 PATH 上的 7z。
+   * 压缩包内结构：<name>/bin/ffmpeg.exe
+   */
+  _extractFfmpegBuild(archive, destDir) {
+    return new Promise((resolve, reject) => {
+      const tmp = path.join(destDir, '_xtmp');
+      try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (e) {}
+      fs.mkdirSync(tmp, { recursive: true });
+      const { execFile } = require('child_process');
+      execFile('tar', ['-xf', archive, '-C', tmp], { windowsHide: true, timeout: 600000, maxBuffer: 8 * 1024 * 1024 }, (err) => {
+        if (err) { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (e2) {} return reject(new Error('解压失败：' + String(err.message || err))); }
+        try {
+          const find = (name) => {
+            const stack = [tmp];
+            while (stack.length) {
+              const d = stack.pop();
+              let ents = [];
+              try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { continue; }
+              for (const e of ents) {
+                const p = path.join(d, e.name);
+                if (e.isDirectory()) stack.push(p);
+                else if (String(e.name).toLowerCase() === name) return p;
+              }
+            }
+            return '';
+          };
+          const f1 = find('ffmpeg.exe'), f2 = find('ffprobe.exe');
+          if (!f1 || !f2) throw new Error('包内缺少 ffmpeg.exe / ffprobe.exe');
+          fs.copyFileSync(f1, path.join(destDir, 'ffmpeg.exe'));
+          fs.copyFileSync(f2, path.join(destDir, 'ffprobe.exe'));
+          fs.rmSync(tmp, { recursive: true, force: true });
+          resolve(true);
+        } catch (e2) {
+          try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (e3) {}
+          reject(e2);
+        }
+      });
+    });
   }
 
   _httpGetJson(url) {

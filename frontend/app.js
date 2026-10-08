@@ -1098,7 +1098,7 @@
       // ★ 提交类按钮放宽：环境缺失仍硬拦（必然失败），
       //   预检测不合格 / 水印缺失改为**提交时列清问题并二次确认** —— 允许先排队占位
       run.disabled = _envBad();
-      setBtnHint(run, _envBad() ? '运行环境缺失' : ((invalid || state.watermarkMissing) ? '存在问题项，提交时会再次确认' : null));
+      setBtnHint(run, _envBad() ? '运行组件未就绪' : ((invalid || state.watermarkMissing) ? '存在问题项，提交时会再次确认' : null));
     }
     var warn = $('configWarnMark');
     if (warn) warn.style.display = state.precheckInvalid ? '' : 'none';
@@ -1153,8 +1153,8 @@
     if (cnt) cnt.textContent = '已选 ' + n;
     var btn1 = $('btnBatchReplica1'), btn2 = $('btnBatchReplica2');
     var canRun = !!state.selectMode && n > 0;
-    if (btn1) { btn1.disabled = !canRun || _envBad(); setBtnHint(btn1, _envBad() ? '运行环境缺失' : (canRun ? null : '请先勾选要复刻的成片')); }
-    if (btn2) { btn2.disabled = !canRun || _envBad(); setBtnHint(btn2, _envBad() ? '运行环境缺失' : (canRun ? null : '请先勾选要复刻的成片')); }
+    if (btn1) { btn1.disabled = !canRun || _envBad(); setBtnHint(btn1, _envBad() ? '运行组件未就绪' : (canRun ? null : '请先勾选要复刻的成片')); }
+    if (btn2) { btn2.disabled = !canRun || _envBad(); setBtnHint(btn2, _envBad() ? '运行组件未就绪' : (canRun ? null : '请先勾选要复刻的成片')); }
     var all = $('chkLogAll');
     if (all) all.checked = !!state.selectMode && n > 0;
   }
@@ -1182,7 +1182,7 @@
     refreshLogConfigBar();
   }
   function batchReplica(mode) {
-    if (_envBad()) { setStatus('运行环境缺失'); return; }
+    if (_envBad()) { setStatus('运行组件未就绪'); return; }
     // 未进入选择模式时给明确提示（原先静默 return，表现为"点了没反应"）
     if (!state.selectMode) { toast('请先打开右上角「选择」开关并勾选要复刻的成片', true); return; }
     var items = [];
@@ -1720,7 +1720,7 @@
     }).catch(function () {});
   }
   function runScript() {
-    if (_envBad()) { setStatus('运行环境缺失'); return; }
+    if (_envBad()) { setStatus('运行组件未就绪'); return; }
     if (!state.activeVersion) return;
     // 成片数：显式填写优先；留空则沿用占位符所示的默认值（预检测视频总数）
     var fcInp = $('inputFilmCount');
@@ -1919,7 +1919,7 @@
       var rep = e.target.closest('.log-entry__replica');
       if (rep) {
         e.stopPropagation();
-        if (_envBad()) { setStatus('运行环境缺失'); return; }
+        if (_envBad()) { setStatus('运行组件未就绪'); return; }
         var entry = rep.closest('.log-entry');
         var logPath = entry.getAttribute('data-log-path');
         if (!logPath) { setStatus('无法定位该成片对应的日志文件'); return; }
@@ -3457,7 +3457,7 @@
         return;
       }
       // 启动自动下载成功：**静默**（用户定案 10-08「不需要确认」）—— 只更新状态栏，不弹横幅
-      if (info.auto) { setStatus('FFmpeg 组件已就绪'); return; }
+      if (info.auto) { setStatus('FFmpeg 组件已就绪'); checkEnv(); return; }
       showUpdateBanner({ __custom: {
         source: 'envfix',
         title: 'FFmpeg 组件已就绪',
@@ -3465,6 +3465,8 @@
         later: '关闭', now: '知道了',
       } }, 'downloaded');
       setStatus('FFmpeg 组件已就绪');
+      // 组件到位后重查环境：状态栏「运行组件未就绪」消失、引擎入口自动解除禁用
+      checkEnv();
     });
   }
 
@@ -3647,7 +3649,9 @@
           mark.className = 'status-bar__envwarn';
           mark.style.display = '';
         } else if (miss.length) {
-          mark.textContent = '缺少环境: ' + miss.join('、') + '（见 README 安装）';
+          // 组件缺失 = 应用正在自动下载（不再引导用户去 README 手动安装 —— 用户定案 2026-10-08）
+          mark.textContent = '运行组件未就绪：' + miss.join('、') + '（正在自动下载）';
+          mark.title = '应用会自动下载所需组件；若长时间未就绪，点上方提示条重新下载';
           mark.className = 'status-bar__envwarn';
           mark.style.display = '';
         } else {
@@ -3669,7 +3673,8 @@
       delete b.dataset.origTitle;
     } else b.removeAttribute('title');
   }
-  // 环境硬拦截：缺内置引擎/ffmpeg/ffprobe 时禁用所有调用引擎的入口，悬浮提示「运行环境缺失」
+  // 环境硬拦截：缺内置引擎/ffmpeg/ffprobe 时禁用所有调用引擎的入口，悬浮提示「运行组件未就绪」
+  // （组件会自动下载，下载完成由 env_fix_done → checkEnv() 刷新并自动解除禁用）
   function applyEnvDisabled() {
     var bad = _envBad();
     var targets = document.querySelectorAll('#btnRunScript, #btnBatchReplica1, #btnBatchReplica2, .log-entry__replica, #btnMaskStart');
@@ -3677,7 +3682,7 @@
       if (b.disabled === undefined) return;
       if (bad) {
         b.disabled = true;
-        setBtnHint(b, '运行环境缺失');
+        setBtnHint(b, '运行组件未就绪');
       } else {
         setBtnHint(b, null);
       }

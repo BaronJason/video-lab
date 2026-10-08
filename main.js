@@ -2030,8 +2030,10 @@ function registerIpc() {
     sendToSettings('env_lost', payload);
   }
   // FFmpeg 环境自愈：前端点「重新下载」触发；完成/失败广播双窗，成功才落盘 ffmpeg_dir
+  // ⚠ 手动重下必须 force：组件**损坏**（文件在但跑不起来，如被杀软替换/隔离）时探测会失败但
+  //   downloadNeeded 为 false（探测失败 ≠ 缺失）→ 不 force 会被 skip，用户点了也修不好。
   ipcMain.handle('env_fix_start', async () => {
-    const r = await api.ensureFfmpeg();
+    const r = await api.ensureFfmpeg({ force: true });
     sendToMain('env_fix_done', r);
     sendToSettings('env_fix_done', r);
     if (r.ok) persistFfmpegDir(r.dir);

@@ -741,6 +741,29 @@
   function cvCanvasW() { return Math.max(16, Number(cv.params.targetW) || 1920); }
   function cvCanvasH() { return Math.max(16, Number(cv.params.targetH) || 1080); }
 
+  /**
+   * 预览舞台比例跟随输出尺寸 —— **本地即时**（不等渲染，占位模式下也立刻正确）。
+   * 同时写入 `--cv-ar`（宽/高数值）：CSS 用它反推宽度上限，与 max-height 配合把竖向输出的预览限制在可视区内
+   * （否则 9:16 会让预览框高度≈宽度的 1.78 倍，页面被撑得很长）。
+   */
+  var CV_STAGE_MAX_VH = 0.58;   // 预览高度上限（视口比例）：超过则按比例收窄宽度（contain），保证竖向输出不成"长条"
+  function cvSyncStageAspect() {
+    var stage = $('cvCanvas');
+    if (!stage) return;
+    var W = cvCanvasW(), H = cvCanvasH();
+    var ar = W / Math.max(1, H);                 // 输出宽高比（由「成片画布尺寸」决定）
+    var host = stage.parentElement;              // .cv-stage（其宽由参数栏之外的剩余宽决定）
+    var availW = host ? Math.max(160, host.clientWidth - 20) : 0;   // 扣掉舞台 padding(10×2)
+    if (!availW) { stage.style.aspectRatio = String(W) + ' / ' + String(H); return; }
+    var capH = Math.max(180, Math.round(window.innerHeight * CV_STAGE_MAX_VH));
+    var w = availW, h = w / ar;
+    if (h > capH) { h = capH; w = h * ar; }      // 高度触顶 → 等比缩窄（绝不压扁）
+    stage.style.aspectRatio = 'auto';            // 尺寸下面显式给，避免 aspect-ratio 与显式高度互相打架
+    stage.style.width = Math.round(w) + 'px';
+    stage.style.height = Math.round(h) + 'px';
+    if (cv.box && cv.box.w) cvPaintBox();        // 画布尺寸变了：内容盒是百分比定位，需要重绘
+  }
+
   /** 画布像素 → 显示像素的比例（手柄拖动与吸附阈值换算用） */
   function cvViewScale() {
     var el = $('cvCanvas');
@@ -922,6 +945,7 @@
   }
 
   function cvRequestPreview(opts) {
+    cvSyncStageAspect();   // 输出尺寸可能刚改过：先让预览框比例跟上（本地即时，不等渲染）
     if (cv.timer) { clearTimeout(cv.timer); cv.timer = 0; }
     // 未开启「实时预览」时：连续型改动（拖内容盒 / 滑杆 / 数值）只刷新**本地占位示意**，不调渲染进程 ——
     // 这正是占位模式的意义：快速微调不必每次等一帧。明确动作（换样本 / 换背景 / 换帧 / 切开关 / 载预设）
@@ -1036,9 +1060,7 @@
     }
     if (r.bgOnly) $('cvBg').src = r.bgOnly;
     if (r.composed) $('cvComp').src = r.composed;
-    if (r.previewW && r.previewH) {
-      cvCss(stage, { aspectRatio: String(cvCanvasW()) + ' / ' + String(cvCanvasH()) });
-    }
+    cvSyncStageAspect();   // 比例按当前输出尺寸重算（含高度上限，竖向输出不会被拉成长条）
     cv.bgTotal = Number(meta.bgTotal) || 0;
     cv.bgIndex = Number(meta.bgIndex) || 0;
     cv.bgName = meta.bgPath ? String(meta.bgPath).split(/[\\/]/).pop() : '';
@@ -1591,10 +1613,11 @@
     cvApplyParamsToInputs();
     cvLoadPresets();
     cvUpdateBgInfo();
+    cvSyncStageAspect();   // 预览框比例先按当前输出尺寸就位（本地即时）
     cvPaintHold();   // 初始为占位示意（未开启实时预览）：有真实帧就做底，没有则只显示占位与提示
     // 输入变化后的自动预览统一由 renderInputHint → cvLoadSamples(true) 负责（不再单独挂按钮监听，
     // 否则会在样本清单异步扫描完成前触发渲染，白报一次「未选择视频」）
-    window.addEventListener('resize', function () { if (cv.box.w) cvPaintBox(); });
+    window.addEventListener('resize', function () { cvSyncStageAspect(); if (cv.box.w) cvPaintBox(); });
   }
 
   // ── Tab 切换（后处理 / 画布合成）──

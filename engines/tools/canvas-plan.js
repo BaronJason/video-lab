@@ -28,7 +28,7 @@ const DEFAULTS = {
   bgDir: '',              // 背景目录（bgMode=dir 时用于枚举候选）
   bgPath: '',             // 背景文件（bgMode=image|video 时直接指定）
   bgColor: '#000000',     // 纯色背景（bgMode=color）
-  watermark: '',          // 广审 PNG，可留空
+  watermark: '',          // 水印 PNG，可留空
   targetW: 1920,          // 成片画布宽（输出分辨率）
   targetH: 1080,          // 成片画布高（输出分辨率）
   scale: 0.74,            // 内容等比缩放系数（决定视频在画布中的大小）

@@ -169,8 +169,6 @@
     .cv-wrap { display: flex; gap: 12px; align-items: flex-start; }
     .cv-side { order: 2; flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
     .cv-bars { display: flex; flex-direction: column; gap: 6px; }
-    .cv-bar__sep { width: 1px; height: 16px; background: var(--border-neutral-l2); margin: 0 2px; }
-    .cv-apply { padding: 6px 8px 4px; border: 1px solid var(--border-neutral-l1); border-radius: var(--radius-6); margin-bottom: 4px; }
     /* 对话框文本输入（自绘，替代 Electron 不支持的 window.prompt） */
     .modal__field { margin: 2px 0 12px; }
     .modal__input { width: 100%; height: 32px; padding: 0 10px; box-sizing: border-box;
@@ -195,14 +193,11 @@
     .cv-canvas--raw .cv-box { display: none; }
     .cv-hd { position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; background: var(--brand-500);
              border: 1px solid #fff; border-radius: 2px; }
+    /* 只保留四个角手柄（等比缩放）；边的非等比手柄已随「内容拉伸」一并取消 */
     .cv-hd[data-hd="tl"] { left: 0; top: 0; cursor: nwse-resize; }
-    .cv-hd[data-hd="t"]  { left: 50%; top: 0; cursor: ns-resize; }
     .cv-hd[data-hd="tr"] { left: 100%; top: 0; cursor: nesw-resize; }
-    .cv-hd[data-hd="r"]  { left: 100%; top: 50%; cursor: ew-resize; }
     .cv-hd[data-hd="br"] { left: 100%; top: 100%; cursor: nwse-resize; }
-    .cv-hd[data-hd="b"]  { left: 50%; top: 100%; cursor: ns-resize; }
     .cv-hd[data-hd="bl"] { left: 0; top: 100%; cursor: nesw-resize; }
-    .cv-hd[data-hd="l"]  { left: 0; top: 50%; cursor: ew-resize; }
     .cv-hd--off { opacity: .35; cursor: not-allowed; }
     .cv-guide { position: absolute; background: #ffd166; display: none; pointer-events: none; }
     .cv-guide--v { top: 0; bottom: 0; width: 1px; }
@@ -214,6 +209,11 @@
     .cv-badge--err { background: #7f1d1d; }
     .cv-warn { font-size: 11px; line-height: 1.6; color: #d97706; min-height: 0; }
     .cv-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    /* 列表行（样本 / 背景）：不换行 —— 两个按钮并排相邻，名称占剩余宽度并省略 */
+    .cv-bar--list { flex-wrap: nowrap; }
+    .cv-bar--list .tl-label { flex: 0 0 auto; }
+    .cv-info { flex: 1 1 auto; min-width: 0; font-size: var(--body-xs-font-size); color: var(--text-tertiary);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .cv-bar input[type="range"] { width: 120px; }
     .cv-params { order: 1; flex: 0 0 330px; max-width: 360px; display: flex; flex-direction: column; gap: 5px; }
     /* 参数分组头：小标题 + 右延横线 —— 与主窗口设置页 .settings-group 同一视觉（便于快速定位分组） */
@@ -300,16 +300,18 @@
               <button class="tl-btn" id="cvAtRandom">随机换帧</button>
               <label class="opt-check opt-check--sm" title="勾选 = 显示实际合成效果（默认）；取消勾选 = 显示内容原帧，便于对照构图与比例"><input type="checkbox" id="cvShowRaw" checked><span class="opt-check__box"></span><span>实际预览</span></label>
             </div>
-            <div class="cv-bar" id="cvSampleRow" style="display:none">
+            <!-- 样本 / 背景各一行：两个按钮**并排相邻**，名称紧接在按钮右侧（超长省略，悬浮见全名） -->
+            <div class="cv-bar cv-bar--list" id="cvSampleRow" style="display:none">
               <span class="tl-label">样本</span>
               <button class="tl-btn" id="cvSamplePrev">上一个</button>
-              <span class="tl-hint" id="cvSampleInfo">—</span>
               <button class="tl-btn" id="cvSampleNext">下一个</button>
-              <span class="cv-bar__sep"></span>
+              <span class="cv-info" id="cvSampleInfo">—</span>
+            </div>
+            <div class="cv-bar cv-bar--list">
               <span class="tl-label">背景</span>
               <button class="tl-btn" id="cvBgPrev">上一个</button>
-              <span class="tl-hint" id="cvBgInfo">—</span>
               <button class="tl-btn" id="cvBgNext">下一个</button>
+              <span class="cv-info" id="cvBgInfo">—</span>
             </div>
           </div>
           <div class="cv-warn" id="cvWarn"></div>
@@ -338,8 +340,9 @@
             <input class="tl-num" type="number" id="cvScaleNum" min="0.05" max="3" step="0.01" value="0.74">
           </div>
           <div class="tl-hint" title="等比缩放决定视频在画布中的大小；成片尺寸由上方「成片画布尺寸」决定">视频在画布中的大小，非输出尺寸</div>
+          <div class="cv-group">位置</div>
           <div class="cv-row">
-            <span class="tl-label">位置</span>
+            <span class="tl-label">基准</span>
             <select class="tl-sel" id="cvPos">
               <option value="center">居中</option>
               <option value="tl">左上</option>
@@ -367,12 +370,6 @@
             <span class="cv-val" id="cvBorderWVal">0</span>
             <input class="cv-swatch" type="color" id="cvBorderColor" value="#ffffff" title="边框颜色">
           </div>
-          <div class="cv-row">
-            <span class="tl-label">水印 PNG</span>
-            <input class="tl-path" type="text" id="cvWm" placeholder="可留空" style="flex:1;min-width:0">
-            <button class="tl-btn" id="cvPickWm">选择</button>
-          </div>
-
           <div class="cv-group">背景</div>
           <div class="cv-row">
             <span class="tl-label">方式</span>
@@ -407,6 +404,13 @@
             <span class="tl-label">背景模糊</span>
             <input type="range" id="cvBgBlur" min="0" max="60" step="1" value="0">
             <span class="cv-val" id="cvBgBlurVal">0</span>
+          </div>
+
+          <div class="cv-group">水印</div>
+          <div class="cv-row">
+            <span class="tl-label">水印 PNG</span>
+            <input class="tl-path" type="text" id="cvWm" placeholder="可留空（广审图，整幅叠加）" style="flex:1;min-width:0">
+            <button class="tl-btn" id="cvPickWm">选择</button>
           </div>
 
           <div class="cv-group">参数预设</div>

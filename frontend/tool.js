@@ -779,7 +779,8 @@
     if (!n) { el.textContent = '—'; el.title = ''; return; }
     var p = cvContentPath();
     el.textContent = (cv.sampleIndex + 1) + '/' + n + ' · ' + String(p || '').split(/[\\/]/).pop();
-    el.title = '预览只用这一个样本；正式处理会对上方清单里的全部视频逐个合成（参数共用，背景每个视频独立随机）';
+    // 名称超长时界面省略 → 悬浮显示完整路径（并说明样本与批量的关系）
+    el.title = p + '\n预览只用这一个样本；正式处理会对上方清单里的全部视频逐个合成（参数共用，背景每个视频独立随机）';
   }
 
   /** 刷新样本清单：文件清单优先，否则按文件夹向后端要一份（与正式处理同一套扫描规则） */
@@ -1012,18 +1013,22 @@
     else stage.classList.remove('cv-canvas--raw');
   }
 
+  /** 背景信息（行首已有「背景」标签，这里只说内容；超长省略，完整值放 title） */
   function cvUpdateBgInfo() {
     var el = $('cvBgInfo');
     if (!el) return;
-    if (cv.params.bgMode === 'color') { el.textContent = '背景 纯色 ' + cv.params.bgColor; return; }
+    if (cv.params.bgMode === 'color') { el.textContent = '纯色 ' + cv.params.bgColor; el.title = ''; return; }
     if (cv.params.bgMode === 'dir') {
       var sz = (cv.bgSizes && cv.bgSizes[cv.bgIndex]) || '';
-      el.textContent = cv.bgTotal
+      var txt = cv.bgTotal
         ? ((cv.bgIndex + 1) + '/' + cv.bgTotal + (sz ? ' · ' + sz : '') + (cv.bgName ? ' · ' + cv.bgName : ''))
         : '未扫描';
+      el.textContent = txt;
+      el.title = txt;
       return;
     }
-    el.textContent = '背景 ' + (cv.bgName || '未选择');
+    el.textContent = cv.bgName || '未选择';
+    el.title = cv.params.bgPath || '';
   }
 
   // ── 拖动 / 缩放 / 拉伸（pointer 事件 + 本地几何变换）──

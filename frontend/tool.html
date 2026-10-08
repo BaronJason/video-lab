@@ -180,17 +180,18 @@
     .cv-canvas { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #0d0f12;
                  overflow: hidden; border-radius: 4px; touch-action: none; user-select: none; }
     .cv-layer { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-    .cv-layer--fg { display: none; }
-    .cv-canvas--drag .cv-layer--comp { display: none; }
-    .cv-canvas--drag .cv-layer--fg { display: block; }
-    /* 原帧对照：显示未经合成的内容原始帧（整帧 contain 居中，便于与合成图比对构图） */
-    .cv-canvas--raw .cv-layer--comp { display: none; }
-    .cv-canvas--raw .cv-layer--fg { display: block; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+    /* 拖动时合成帧半透明：保留画面参考，又不挡住内容盒与吸附线 */
+    .cv-canvas--drag .cv-layer--comp { opacity: .35; }
+    /* 占位示意层：未开启「实时预览」时覆盖显示 —— 真实帧做底 + 内容块虚线，几何随参数即时更新 */
+    .cv-hold { position: absolute; inset: 0; display: none; pointer-events: none; }
+    .cv-canvas--hold .cv-hold { display: block; }
+    .cv-hold__box { position: absolute; background: rgba(22, 104, 220, 0.16); border: 1px dashed var(--brand-500); }
+    .cv-hold__tag { position: absolute; left: 8px; bottom: 8px; padding: 2px 6px; border-radius: 4px;
+      font-size: 11px; background: rgba(0, 0, 0, 0.55); color: #fff; }
     /* 内容框：预览就绪即可拖动（--ready）；拖动中与就绪态都显示手柄 */
     .cv-box { position: absolute; border: 1px solid var(--brand-500); cursor: move; display: none; }
     .cv-canvas--ready .cv-box { display: block; }
     .cv-canvas--drag .cv-box { display: block; }
-    .cv-canvas--raw .cv-box { display: none; }
     .cv-hd { position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; background: var(--brand-500);
              border: 1px solid #fff; border-radius: 2px; }
     /* 只保留四个角手柄（等比缩放）；边的非等比手柄已随「内容拉伸」一并取消 */
@@ -282,7 +283,12 @@
             <div class="cv-canvas" id="cvCanvas">
               <img class="cv-layer cv-layer--bg" id="cvBg" alt="">
               <img class="cv-layer cv-layer--comp" id="cvComp" alt="">
-              <img class="cv-layer cv-layer--fg" id="cvFg" alt="">
+              <!-- 占位示意层（未开启实时预览时覆盖显示）：真实帧做底 + 内容块虚线随参数即时更新，
+                   微调不必每次等一帧渲染；勾选「实时预览」后隐藏本层 -->
+              <div class="cv-hold" id="cvHold">
+                <div class="cv-hold__box" id="cvHoldBox"></div>
+                <div class="cv-hold__tag" id="cvHoldTag">占位示意</div>
+              </div>
               <div class="cv-box" id="cvBox">
                 <span class="cv-hd" data-hd="tl"></span><span class="cv-hd" data-hd="tr"></span>
                 <span class="cv-hd" data-hd="bl"></span><span class="cv-hd" data-hd="br"></span>
@@ -298,7 +304,7 @@
               <input type="range" id="cvAtRange" min="0" max="1" value="0" step="0.05" title="拖动取帧（松手后渲染）">
               <input class="tl-num" type="number" id="cvAt" min="0" step="0.1" value="0" title="秒">
               <button class="tl-btn" id="cvAtRandom">随机换帧</button>
-              <label class="opt-check opt-check--sm" title="勾选 = 显示实际合成效果（默认）；取消勾选 = 显示内容原帧，便于对照构图与比例"><input type="checkbox" id="cvShowRaw" checked><span class="opt-check__box"></span><span>实际预览</span></label>
+              <label class="opt-check opt-check--sm" title="勾选 = 每次改动都渲染真实帧（准确，但每次要等一小会儿）；默认为占位示意：即时反馈几何，微调不用等渲染"><input type="checkbox" id="cvLive"><span class="opt-check__box"></span><span>实时预览</span></label>
             </div>
             <!-- 样本 / 背景各一行：两个按钮**并排相邻**，名称紧接在按钮右侧（超长省略，悬浮见全名） -->
             <div class="cv-bar cv-bar--list" id="cvSampleRow" style="display:none">
@@ -333,14 +339,13 @@
             <input class="tl-num" type="number" id="cvTH" min="16" max="7680" step="2" value="1080" title="画布高（输出分辨率）">
           </div>
 
-          <div class="cv-group">内容大小（等比缩放）</div>
+          <div class="cv-group">内容（大小 · 位置 · 外观）</div>
           <div class="cv-row">
             <span class="tl-label">等比缩放</span>
             <input type="range" id="cvScale" min="0.05" max="2" step="0.01" value="0.74">
             <input class="tl-num" type="number" id="cvScaleNum" min="0.05" max="3" step="0.01" value="0.74">
           </div>
           <div class="tl-hint" title="等比缩放决定视频在画布中的大小；成片尺寸由上方「成片画布尺寸」决定">视频在画布中的大小，非输出尺寸</div>
-          <div class="cv-group">位置</div>
           <div class="cv-row">
             <span class="tl-label">基准</span>
             <select class="tl-sel" id="cvPos">
@@ -358,7 +363,6 @@
             <input class="tl-num" type="number" id="cvDy" step="1" value="160">
           </div>
 
-          <div class="cv-group">外观</div>
           <div class="cv-row">
             <span class="tl-label">圆角</span>
             <input type="range" id="cvRadius" min="0" max="200" step="1" value="0">
@@ -415,8 +419,7 @@
 
           <div class="cv-group">参数预设</div>
           <div class="cv-row">
-            <select class="tl-sel" id="cvPreset" style="flex:1;min-width:0"><option value="">（未选择）</option></select>
-            <button class="tl-btn" id="cvPresetApply">加载</button>
+            <select class="tl-sel" id="cvPreset" style="flex:1;min-width:0" title="选中即加载（无需再点加载按钮）"><option value="">（未选择）</option></select>
             <button class="tl-btn" id="cvPresetSave">保存当前</button>
             <button class="tl-btn" id="cvPresetDelete">删除</button>
           </div>

@@ -5,6 +5,9 @@
   var _backupCfgDir = ''; // 备份配置目录（输入框只读显示实际落盘位置，保存用此值）
   var $ = function (id) { return document.getElementById(id); };
   var api = window.txapi;
+  // HTML 转义：IIFE 顶层共享 —— 供 renderMd（Markdown 渲染）与 loadAboutInfo（关于页组件区）共用。
+  // 此前它只定义在 renderMd 局部，导致关于页组件区运行时报「esc is not defined」（2026-10-08 实报并修复）。
+  var esc = function (s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
 
   // 数字输入框：禁用滚轮滚动改值（仅保留手动输入）
   document.addEventListener('wheel', function (ev) {
@@ -26,7 +29,6 @@
   };
   // 轻量 Markdown 渲染（标题 / 有序无序列表 / 表格 / 引用 / 行内链接与粗体 / 代码块 / 空行）
   function renderMd(text) {
-    var esc = function (s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
     // 行内：剥离 img 标签 → 转义 → 反引号代码 / **粗体** / [text](url) / <url>
     function inline(s) {
       s = String(s == null ? '' : s).replace(/<img[^>]*>/gi, '');

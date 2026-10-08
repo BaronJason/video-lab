@@ -1158,7 +1158,7 @@
         var newW = s.w;
         if (hd === 'br' || hd === 'tr') newW = s.w + dx; else newW = s.w - dx;
         newW = Math.max(16, newW);
-        // 尺寸吸附（Alt 临时关闭，与位置吸附一致）：吸到画布整分 —— 满屏 / 1/2 / 2/3 / 3/4 / 1/3 / 1/4
+        // 尺寸吸附（Alt 临时关闭，与位置吸附一致）：只两档 —— 满屏（内容贴满四边）/ 1/2（正好一半）
         var snapTag = '';
         if (!e.altKey) {
           var sz = cvSnapSizeW(newW, ratio);

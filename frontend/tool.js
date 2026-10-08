@@ -720,6 +720,7 @@
     at: 0,
     duration: 0,
     live: false,                   // 是否开启「实时预览」（默认关：占位示意即时反馈，微调不等渲染）
+    lastAR: 0,                     // 上次用于预览的宽高比：比例一变就作废旧帧（否则旧图会被按新画布拉伸）
     inflight: false, pending: false,   // 渲染中标记 / 渲染期间又改过参数的"待渲"标记（合并请求，避免排队）
     samples: [], sampleIndex: 0,   // 预览样本清单（文件夹输入 = 待处理视频；文件输入 = 所选文件）
     bgIndex: 0, bgTotal: 0, bgName: '', bgSizes: [],   // 背景候选：序号 / 总数 / 名称 / 各自尺寸（展示用）
@@ -747,14 +748,33 @@
    * （否则 9:16 会让预览框高度≈宽度的 1.78 倍，页面被撑得很长）。
    */
   var CV_STAGE_MAX_VH = 0.58;   // 预览高度上限（视口比例）：超过则按比例收窄宽度（contain），保证竖向输出不成"长条"
+
+  /** 比例/分辨率变化后旧帧不再可信：清掉它，回到占位显示（否则旧图会被按新画布**拉伸**，观感很怪） */
+  function cvClearFrame() {
+    var bg = $('cvBg'), comp = $('cvComp');
+    if (bg) bg.removeAttribute('src');
+    if (comp) comp.removeAttribute('src');
+    cvSetBadge('画布比例已改 · 待渲染（或开启实时预览）', '');
+  }
+
   function cvSyncStageAspect() {
     var stage = $('cvCanvas');
     if (!stage) return;
     var W = cvCanvasW(), H = cvCanvasH();
     var ar = W / Math.max(1, H);                 // 输出宽高比（由「成片画布尺寸」决定）
-    var host = stage.parentElement;              // .cv-stage（其宽由参数栏之外的剩余宽决定）
-    var availW = host ? Math.max(160, host.clientWidth) : 0;   // 舞台已无内边距 → 可用宽即舞台内容宽
-    if (!availW) { stage.style.aspectRatio = String(W) + ' / ' + String(H); return; }
+    // 比例变了 → 旧帧作废（同比例的纯分辨率变化不清：形状一致，缩放后仍正确）
+    if (cv.lastAR && Math.abs(cv.lastAR - ar) > 0.0001) cvClearFrame();
+    cv.lastAR = ar;
+    var raw = stage.parentElement ? stage.parentElement.clientWidth : 0;
+    if (!raw) {
+      // 面板隐藏 / 布局未就绪（clientWidth=0）：**不要**给显式尺寸 ——
+      // 否则会按最小宽 160 算出一个 160×90 的小方块（初始进入画布页时的"小方块"就是这么来的）。
+      // 交给 CSS 兜底（width:100% + aspect-ratio），等真正可见时再显式算。
+      stage.style.width = ''; stage.style.height = '';
+      stage.style.aspectRatio = String(W) + ' / ' + String(H);
+      return;
+    }
+    var availW = Math.max(160, raw);             // 舞台已无内边距 → 可用宽即舞台内容宽
     var capH = Math.max(180, Math.round(window.innerHeight * CV_STAGE_MAX_VH));
     var w = availW, h = w / ar;
     if (h > capH) { h = capH; w = h * ar; }      // 高度触顶 → 等比缩窄（绝不压扁）
@@ -1058,9 +1078,11 @@
       stage.classList.remove('cv-canvas--drag');
       stage.classList.add('cv-canvas--ready');   // 就绪后内容框可拖动（此前只在拖动中才显示 → 根本点不到）
     }
+    // ⚠ 先定画布形状再写帧：比例变化时 cvSyncStageAspect 会作废旧帧，
+    //   若放在写帧之后会把**刚拿到的新帧**一起清掉（顺序反了就白渲染一帧）
+    cvSyncStageAspect();
     if (r.bgOnly) $('cvBg').src = r.bgOnly;
     if (r.composed) $('cvComp').src = r.composed;
-    cvSyncStageAspect();   // 比例按当前输出尺寸重算（含高度上限，竖向输出不会被拉成长条）
     cv.bgTotal = Number(meta.bgTotal) || 0;
     cv.bgIndex = Number(meta.bgIndex) || 0;
     cv.bgName = meta.bgPath ? String(meta.bgPath).split(/[\\/]/).pop() : '';
@@ -1601,6 +1623,10 @@
 
   function cvOnShow() {
     if (!cv.ready) return;
+    // 面板刚从 hidden 变可见：立刻按当前输出尺寸算一次预览尺寸，并等一帧再用真实可用宽补算一次
+    // （隐藏时 clientWidth=0、算不出可用宽，不补算就会一直停在 CSS 兜底尺寸）
+    cvSyncStageAspect();
+    requestAnimationFrame(cvSyncStageAspect);
     // 切页时补齐样本清单（用户可能先选了文件夹再切到本页）
     if (!cv.meta) cvLoadSamples(true);      // 还没预览过 → 补齐清单并渲一帧（扫描完成后才渲）
     else cvLoadSamples(false);              // 已有预览 → 只刷新清单，不打扰

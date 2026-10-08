@@ -2014,17 +2014,35 @@ function registerIpc() {
   ipcMain.handle('set_skin', (e, skin) => { const v = String(skin || '').trim(); config.skin = v || 'white_blue'; saveConfig(config); return config.skin; });
   // 运行日志目录（设置页「维护」区展示与打开）
   ipcMain.handle('get_log_dir', () => ({ ok: true, dir: runLog.getDir() }));
-  // FFmpeg 环境自愈：前端点「修复」触发；完成/失败广播双窗，成功才落盘 ffmpeg_dir
+  // 自愈目录落盘：`api.config` 是构造期浅拷贝（backend 构造里 Object.assign），与顶层 config **不是同一对象**
+  // —— ensureFfmpeg 只改 api 侧内存，不显式写库的话下载目录重启即丢（既有缺陷，2026-10-08 修）。
+  function persistFfmpegDir(dir) {
+    if (!dir) return;
+    config.ffmpeg_dir = dir;
+    try { saveConfig(config); } catch (e) {}
+  }
+  // 组件缺失/下载失败才打扰用户：横幅（可点重试）+ 吐司（更醒目，落在当前视野）
+  function notifyEnvMissing(env, err) {
+    const payload = { missing: (env && env.missing) || [], hasFfmpeg: !!(env && env.ffmpeg), error: err || '' };
+    sendToMain('env_fix_available', payload);
+    sendToSettings('env_fix_available', payload);
+    sendToMain('env_lost', payload);
+    sendToSettings('env_lost', payload);
+  }
+  // FFmpeg 环境自愈：前端点「重新下载」触发；完成/失败广播双窗，成功才落盘 ffmpeg_dir
   ipcMain.handle('env_fix_start', async () => {
     const r = await api.ensureFfmpeg();
     sendToMain('env_fix_done', r);
     sendToSettings('env_fix_done', r);
-    if (r.ok) saveConfig(config);   // backend 写入的 this.config.ffmpeg_dir 与这里是同一引用
+    if (r.ok) persistFfmpegDir(r.dir);
     return r;
   });
-  // 启动检测 FFmpeg 环境：**确证缺失**才弹下载提示（滤镜链实跑比对，见 backend.checkEnvAsync）
+  // 启动检测 FFmpeg 环境：**确证缺失即静默自动下载**（用户定案 2026-10-08）
+  //   · 组件不内置只是为了省体积，不该把「体积优化」转成用户的决策负担 → 不弹确认；
+  //   · 下载进度走状态栏（env_fix_progress，见 api.onFfmpegProgress）；
+  //   · 只有**下载失败**才提示（横幅可重试 + 吐司），此时才需要用户介入。
   // ⚠ 用异步版（不阻塞事件循环）；且延迟到窗口就绪之后再跑，避免与首帧竞争
-  // ⚠ 冷启动首次加载 ffmpeg 可能超时 → probeFailed：此时**不弹窗**，延后 10 秒重探一次 ——
+  // ⚠ 冷启动首次加载 ffmpeg 可能超时 → probeFailed：此时**不下载也不弹窗**，延后 10 秒重探一次 ——
   //   早先把「超时」当成「缺滤镜」，害得冷启动必然误报「FFmpeg 组件不完整」（热态重跑却正常）
   runAfterWindowLoad(() => {
     const probe = (allowRetry) => {
@@ -2034,8 +2052,16 @@ function registerIpc() {
           return;
         }
         if (!env.downloadNeeded) return;
-        sendToMain('env_fix_available', { missing: env.missing || [], hasFfmpeg: env.ffmpeg });
-        sendToSettings('env_fix_available', { missing: env.missing || [], hasFfmpeg: env.ffmpeg });
+        api.ensureFfmpeg().then((r) => {
+          if (r && r.ok) {
+            persistFfmpegDir(r.dir);
+            const done = { ok: true, auto: true, dir: r.dir, version: r.version };
+            sendToMain('env_fix_done', done);
+            sendToSettings('env_fix_done', done);
+            return;
+          }
+          notifyEnvMissing(env, (r && r.error) || '');
+        }).catch((e) => notifyEnvMissing(env, String((e && e.message) || e)));
       }).catch(() => {});
     };
     setTimeout(() => probe(true), 500);

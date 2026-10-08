@@ -37,15 +37,29 @@ function nvencArgs(cq, codec) {
  * @returns {Promise<{code:number, stderr:string, stdout:string, error:string|null}>}
  */
 function runFfmpeg(args, { onProgress, signal, cwd, env, binary, captureStdout = false } = {}) {
-  // FFmpeg 路径解析：backend 注入的 VL_FFMPEG_BIN（自愈下载后的数据目录）优先，回退 PATH
-  binary = binary || process.env.VL_FFMPEG_BIN || 'ffmpeg';
+  // FFmpeg 路径：**只认** backend 注入的 VL_FFMPEG_BIN（启动自动下载到「数据目录\ffmpeg」后的路径）。
+  // ⚠ 不再回退裸名 `ffmpeg`（用户定案 2026-10-08）：引擎此前会静默借用系统 PATH，
+  //   于是出现「主进程判定组件缺失并拦下任务，引擎却照样跑起来」的口径不一致；
+  //   现在缺注入即明确失败，由主进程在启动时自动下载补齐。
+  binary = binary || process.env.VL_FFMPEG_BIN || '';
+  if (!binary) {
+    return Promise.resolve({ code: -1, stderr: '', stdout: '', error: 'FFmpeg 组件缺失（未注入 VL_FFMPEG_BIN）' });
+  }
   return new Promise((resolve) => {
-    const child = spawn(binary, args, {
-      windowsHide: true,
-      signal,
-      cwd,
-      env: Object.assign({}, process.env, env),
-    });
+    let child;
+    try {
+      child = spawn(binary, args, {
+        windowsHide: true,
+        signal,
+        cwd,
+        env: Object.assign({}, process.env, env),
+      });
+    } catch (e) {
+      // spawn 的**同步**异常（EFTYPE / ENOENT：路径在但文件不可执行、被杀软替换/隔离）也走 resolve，
+      // 与既有约定「错误一律 resolve({code:-1,error})」一致 —— 否则 reject 会冒到调用方，
+      // 而引擎模块普遍只判 code/error，未捕获的 reject 会直接崩掉引擎进程。
+      return resolve({ code: -1, stderr: '', stdout: '', error: String((e && e.message) || e) });
+    }
     let stderr = '';
     let stdout = '';
     // stderr 跨 chunk 缓冲：进程管道按缓冲区分块，stats 行可能被从中间切开

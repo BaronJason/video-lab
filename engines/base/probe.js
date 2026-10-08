@@ -16,8 +16,14 @@ function probe(videoPath) {
       '-show_entries', 'format=duration',
       '-of', 'default=noprint_wrappers=1:nokey=1',
       videoPath];
-    const child = spawn(process.env.VL_FFPROBE_BIN || 'ffprobe', args, { windowsHide: true });
+    // 只认 backend 注入的 VL_FFPROBE_BIN（不再回退裸名 ffprobe，见 base/ffmpeg.js 同款说明）
+    const bin = process.env.VL_FFPROBE_BIN || '';
+    if (!bin) return resolve({ valid: false, duration: 0, width: 0, height: 0 });
+    let child;
+    try { child = spawn(bin, args, { windowsHide: true }); }
+    catch (e) { return resolve({ valid: false, duration: 0, width: 0, height: 0 }); }
     let out = '';
+    child.on('error', () => resolve({ valid: false, duration: 0, width: 0, height: 0 }));
     child.stdout && child.stdout.on('data', (b) => { out += b.toString('utf8'); });
     child.on('close', (code) => {
       const lines = out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
@@ -57,7 +63,11 @@ function probeDetail(videoPath) {
   return new Promise((resolve) => {
     if (!exists(videoPath)) return resolve(empty);
     const args = ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', videoPath];
-    const child = spawn(process.env.VL_FFPROBE_BIN || 'ffprobe', args, { windowsHide: true });
+    const bin = process.env.VL_FFPROBE_BIN || '';
+    if (!bin) return resolve(empty);
+    let child;
+    try { child = spawn(bin, args, { windowsHide: true }); }
+    catch (e) { return resolve(empty); }
     let out = '';
     child.stdout && child.stdout.on('data', (b) => { out += b.toString('utf8'); });
     child.on('error', () => resolve(empty));

@@ -269,8 +269,15 @@ async function measureBitrateKbps(file) {
   const { spawn } = require('node:child_process');
   return new Promise((resolve) => {
     let out = '';
-    const child = spawn('ffprobe', ['-v', 'error', '-show_entries', 'format=bit_rate',
-      '-of', 'default=noprint_wrappers=1:nokey=1', file], { windowsHide: true });
+    // 与 base/probe.js 统一口径：只认注入的 VL_FFPROBE_BIN（本处此前用裸名 ffprobe，
+    // 同文件内两种口径并存 —— 去掉 PATH 回退后会在这里静默失败，2026-10-08 修）
+    const bin = process.env.VL_FFPROBE_BIN || '';
+    if (!bin) return resolve(0);
+    let child;
+    try {
+      child = spawn(bin, ['-v', 'error', '-show_entries', 'format=bit_rate',
+        '-of', 'default=noprint_wrappers=1:nokey=1', file], { windowsHide: true });
+    } catch (e) { return resolve(0); }
     child.stdout && child.stdout.on('data', (b) => { out += b.toString('utf8'); });
     child.on('error', () => resolve(0));
     child.on('close', () => resolve((parseFloat(out.trim()) || 0) / 1000));

@@ -71,16 +71,13 @@ Video Lab/
   视频编码使用 NVIDIA NVENC 硬件编码器，必须配备 NVIDIA 独立显卡才能生成成片；
   暂不支持 CPU 回退编码，也不支持 AMD / Intel 等其他显卡的硬件编码。
 
-- **FFmpeg / FFprobe（Gyan 官方 full build）**
+- **FFmpeg / FFprobe（自动获取，无需手动安装）**
 
-  - 下载页：<https://www.gyan.dev/ffmpeg/builds/>
-  - 直接下载：<https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z>
+  应用启动时自动检测环境，缺失即**静默下载**一份（npmmirror 的 ffmpeg-static 构建），
+  落在「数据目录\ffmpeg」（默认 `%APPDATA%\Video Lab\ffmpeg`），并**只认这一份** ——
+  不再依赖系统 PATH，避免不同机器的 PATH 差异导致环境意外；下载失败时界面会提示「重新下载」。
 
-  解压后把 `bin` 目录加入系统 PATH，或用 winget 安装；也可直接使用应用内的「一键下载」（推荐，免手动配置）：
-
-  ```bash
-  winget install --id Gyan.FFmpeg
-  ```
+  如需离线自备：把 `ffmpeg.exe` 与 `ffprobe.exe` 放进上述 `ffmpeg` 目录即可。
 
 ## 首次运行
 

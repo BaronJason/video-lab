@@ -3414,22 +3414,25 @@
       setStatus('更新包已就绪，正在重启应用…');
     });
     // FFmpeg 环境自愈：复用更新提示条与状态栏进度条（文案与来源不同）
+    // 缺失由**启动自动下载**处理（不弹确认）；此横幅只在「下载失败」时出现 → 文案按失败说，按钮是重试
     if (upd.on_env_fix_available) upd.on_env_fix_available(function (info) {
       _bannerDismissed = false;
       showUpdateBanner({ __custom: {
         source: 'envfix',
-        title: (info && info.hasFfmpeg) ? 'FFmpeg 组件不完整' : '缺少 FFmpeg 运行组件',
-        desc: '可自动下载修复',
-        later: '暂不', now: '自动下载',
+        title: 'FFmpeg 组件未就绪',
+        desc: '自动下载失败，请检查网络后重试',
+        later: '稍后', now: '重新下载',
       } }, 'available');
     });
     // 运行期环境失效（用的时候才发现）：吐司比横幅更醒目，落在当前视野内
     if (upd.on_env_lost) upd.on_env_lost(function (info) {
       var who = (info && info.missing) ? info.missing : 'FFmpeg / FFprobe';
-      toast(who + ' 不可用，请在设置页修复组件', true);
+      toast(who + ' 不可用，请重新下载组件', true);
     });
     if (upd.on_env_fix_progress) upd.on_env_fix_progress(function (info) {
-      if (info && info.phase === 'download') {
+      if (!info) return;
+      if (info.phase === 'check') { setStatus('正在检查 FFmpeg 组件…'); return; }
+      if (info.phase === 'download') {
         hideUpdateBanner();
         showUpdateMini({ percent: info.percent });
         setStatus('正在下载 FFmpeg ' + ((info && info.percent) || 0) + '%');
@@ -3437,18 +3440,20 @@
     });
     if (upd.on_env_fix_done) upd.on_env_fix_done(function (info) {
       hideUpdateMini();
-      if (info && info.ok) {
-        showUpdateBanner({ __custom: {
-          source: 'envfix',
-          title: 'FFmpeg 组件已就绪',
-          desc: '下载完成，全部功能可用',
-          later: '关闭', now: '知道了',
-        } }, 'downloaded');
-        setStatus('FFmpeg 组件已就绪');
-      } else {
+      if (!info || !info.ok) {
         hideUpdateBanner();
         setStatus('FFmpeg 下载失败：' + ((info && (info.error || info.message)) || '未知原因'), true);
+        return;
       }
+      // 启动自动下载成功：**静默**（用户定案 10-08「不需要确认」）—— 只更新状态栏，不弹横幅
+      if (info.auto) { setStatus('FFmpeg 组件已就绪'); return; }
+      showUpdateBanner({ __custom: {
+        source: 'envfix',
+        title: 'FFmpeg 组件已就绪',
+        desc: '下载完成，全部功能可用',
+        later: '关闭', now: '知道了',
+      } }, 'downloaded');
+      setStatus('FFmpeg 组件已就绪');
     });
   }
 

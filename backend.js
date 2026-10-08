@@ -78,7 +78,7 @@ const HAS_OUTPUT_PERSIST_TTL_MS = 10 * 60 * 1000;
 
 const DEFAULT_CONFIG = {
   skin: 'white_blue',
-  ffmpeg_dir: '',             // FFmpeg 自愈下载目录（数据目录 ffmpeg\）；空 = 用系统 PATH 里的
+  ffmpeg_dir: '',             // FFmpeg 组件目录（启动自动下载落到「数据目录\ffmpeg」）；空 = 尚未就绪，启动时会自动下载
   notify_task_end: true,      // 任务失败 / 本轮跑完的 Windows 系统通知（默认开启，可在 设置-通用设置 关闭）
   show_maintenance: false,    // 设置页「维护」板块是否可见（用户侧默认关闭：重建缓存/日志等属维护用途）
   backup_dir: '',             // 视频处理「处理前备份」的默认目录；留空 = 数据目录下 backup（与缓存库同目录）
@@ -1858,8 +1858,12 @@ class Api {
   _probeVideoAsync(videoPath) {
     return new Promise((resolve) => {
       const { execFile } = require('child_process');
+      // 与主进程统一口径：走 _resolveFfmpegBin（唯一来源 = 自愈目录）。
+      // 此前这里用裸名 `ffprobe` 依赖系统 PATH —— 与主进程判定不一致，去掉 PATH 回退后会直接失败。
+      const ffprobe = this._resolveFfmpegBin().ffprobePath;
+      if (!ffprobe) return resolve({ valid: false, duration: 0, width: 0, height: 0 });
       execFile(
-        'ffprobe',
+        ffprobe,
         ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', videoPath],
         { encoding: 'utf8', timeout: 60000, windowsHide: true },
         (err, stdout) => {
@@ -6783,28 +6787,24 @@ let themes = [];
   // 检测应用运行所需的外部环境是否可用（ffmpeg / ffprobe / 内置引擎）
   // 项目实际依赖的滤镜清单（三模块 + 视频处理工具的 -filter_complex 全量收集）
   // 精简版/第三方便携构建常缺 colorchannelmixer、signalstats 等 —— 只查存在性拦不住
-  // 解析 ffmpeg / ffprobe 实际生效路径：配置目录（自愈下载）优先，回退系统 PATH。
-  // 纯同步、极快（existsSync + where），可安全用于启动路径。
+  // 解析 ffmpeg / ffprobe 实际路径：**唯一来源 = 设置项 ffmpeg_dir**（启动自动下载落到「数据目录\ffmpeg」）。
+  // ⚠ 用户定案 2026-10-08：**不再回退系统 PATH**。PATH 依赖曾造成一连串意外
+  //   （主进程判定「正常」而引擎实际跑不起来、PATH 项指向不存在的目录、机内残留旧版本），
+  //   且本地有多个 ffmpeg 副本时行为不可预期 —— 缺组件一律走启动自动下载（见 main.js 启动探测）。
+  // 纯同步、极快（一次 existsSync），可安全用于启动路径。
   _resolveFfmpegBin() {
-    const cfgDir = String((this.config && this.config.ffmpeg_dir) || '').trim();
-    const resolveBin = (name, configured) => {
-      if (configured) { try { if (fs.existsSync(configured)) return configured; } catch (e0) {} }
-      try {
-        const r = require('child_process').spawnSync('where', [name], { windowsHide: true, encoding: 'utf8' });
-        if (r.status === 0) {
-          const first = String(r.stdout || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean)[0];
-          // 解析到符号链接 shim（如 WinGet Links\ffmpeg.exe）时取真实目标：
-          // 少一层重解析，也避免 Links 目录被安全策略拦下而"路径在、跑不起来"
-          if (first) { try { return fs.realpathSync(first); } catch (e2) { return first; } }
-        }
-      } catch (e) {}
-      return '';
+    // 目录来源：设置项 ffmpeg_dir 优先；**为空则回退默认自愈目录**（数据目录\ffmpeg）。
+    // ⚠ 这不是「外部 PATH 回退」—— 是同一个自愈位置的兜底：组件已下载但配置没落盘时，
+    //   下次启动仍能直接复用（否则会重复下载 60MB）。三处真相因此统一在 _resolveFfmpegBin：
+    //   环境校验 / 引擎注入（_ffmpegBinEnv）/ 校验产物都读它。
+    let cfgDir = String((this.config && this.config.ffmpeg_dir) || '').trim();
+    if (!cfgDir) cfgDir = this._ffmpegTargetDir();
+    const pick = (name) => {
+      if (!cfgDir) return '';
+      const p = path.join(cfgDir, name + '.exe');
+      try { return fs.existsSync(p) ? p : ''; } catch (e) { return ''; }
     };
-    return {
-      cfgDir,
-      ffmpegPath: resolveBin('ffmpeg', cfgDir ? path.join(cfgDir, 'ffmpeg.exe') : ''),
-      ffprobePath: resolveBin('ffprobe', cfgDir ? path.join(cfgDir, 'ffprobe.exe') : ''),
-    };
+    return { cfgDir, ffmpegPath: pick('ffmpeg'), ffprobePath: pick('ffprobe') };
   }
 
   // ── 使用前的轻量环境校验（毫秒级：只做 existsSync + where，不启动 ffmpeg 进程）──
@@ -6833,7 +6833,7 @@ let themes = [];
       this._envLostNotified = true;
       try { if (typeof this.onEnvLost === 'function') this.onEnvLost({ missing: miss, ffmpeg: q.ffmpeg, ffprobe: q.ffprobe, where: where || '' }); } catch (e) {}
     }
-    return { ok: false, error: brief + '，请到 设置-维护 修复组件' };
+    return { ok: false, error: brief + '，请重新下载组件' };
   }
 
   // 探测缓存：ffmpeg 路径 + 文件 大小/mtime 作指纹，命中即复用，避免每次启动重跑两个 ffmpeg 进程。
@@ -6844,9 +6844,9 @@ let themes = [];
     catch (e) { return ffmpegPath + '|?'; }
   }
 
-  // 环境检测（异步）：与 checkEnv 同语义，但滤镜/编码器探测走异步 execFile，
-  // **不阻塞主进程事件循环**。启动路径必须用这个 —— 同步版在冷启动（首次加载 200MB+ ffmpeg、
-  // 安全软件扫描未签名二进制）时会阻塞十几秒到数十秒，直接把窗口显示推迟到分钟级。
+  // 环境检测（**唯一入口**）：滤镜/编码器探测走异步 execFile，不阻塞主进程事件循环。
+  // ⚠ 不得改回同步实现 —— 冷启动首次加载 ffmpeg（安全软件扫描未签名二进制）会阻塞
+  //   十几秒到数十秒，把窗口显示推迟到分钟级（曾用同步版踩到，该版本已于 2026-10-08 删除）。
   //
   // ⚠ 「探测失败」必须与「确实缺滤镜」分开表达：
   //   探测失败（冷态超时、被杀软拦下、spawn 失败）只说明**这次没探到**，不代表环境不合格。
@@ -6955,51 +6955,8 @@ let themes = [];
     } catch (e) {}
   }
 
-  checkEnv() {
-    const { cfgDir, ffmpegPath, ffprobePath } = this._resolveFfmpegBin();
-    // 滤镜链完整性：-filters 实跑比对
-    const missing = [];
-    const missingEncoders = [];
-    let probeFailed = false;
-    let probeReason = '';
-    if (ffmpegPath) {
-      const { spawnSync } = require('child_process');
-      try {
-        const r = spawnSync(ffmpegPath, ['-hide_banner', '-filters'],
-          { windowsHide: true, encoding: 'utf8', timeout: ENV_PROBE_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 });
-        if (r.status === 0) {
-          const out = String(r.stdout || '');
-          for (const f of FFMPEG_REQUIRED_FILTERS) if (!out.includes(' ' + f + ' ')) missing.push(f);
-        } else probeFailed = true;
-      } catch (e2) { probeFailed = true; }
-      // 硬件编码器同样实跑比对（滤镜可用 ≠ 编码器可用）
-      try {
-        const r2 = spawnSync(ffmpegPath, ['-hide_banner', '-encoders'],
-          { windowsHide: true, encoding: 'utf8', timeout: ENV_PROBE_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 });
-        if (r2.status === 0) {
-          const out2 = String(r2.stdout || '');
-          for (const e3 of FFMPEG_REQUIRED_ENCODERS) if (!out2.includes(' ' + e3 + ' ')) missingEncoders.push(e3);
-        } else probeFailed = true;
-      } catch (e4) { probeFailed = true; }
-      if (probeFailed && !probeReason) probeReason = 'probe-failed';
-    }
-    const realMissing = missing.length > 0 || missingEncoders.length > 0;
-    return {
-      ffmpeg: !!ffmpegPath,
-      ffprobe: !!ffprobePath,
-      // 引擎入口是否就绪；false 即任务无法执行（前端据此提示重装）
-      engine: !!this._engineRunnerPath(),
-      ffmpegPath, ffprobePath,
-      filtersOk: !!ffmpegPath && !probeFailed && missing.length === 0,
-      encodersOk: !!ffmpegPath && !probeFailed && missingEncoders.length === 0,
-      missing, missingEncoders,
-      probeFailed,
-      probeReason,
-      // 与异步版同语义：只有「确证缺失」才建议下载（探测失败 ≠ 缺失）
-      downloadNeeded: !ffmpegPath || !ffprobePath || realMissing,
-      ffmpegDir: cfgDir,
-    };
-  }
+  // 注：同步版 checkEnv() 已删除（2026-10-08）—— 无任何调用者，且同步 spawn 会阻塞启动关键路径；
+  // 环境检测唯一入口 = checkEnvAsync()。
 
   // 备份自动清理：删除超过保留天数的处理前备份（走回收站，可还原）；
   // 目录取设置里的「默认备份目录」，未设置时用数据目录下的 backup
@@ -7227,16 +7184,14 @@ let themes = [];
     return path.join(this.storageDir || process.cwd(), 'ffmpeg');
   }
 
-  // 引擎子进程的 FFmpeg 路径注入：自愈下载后的数据目录优先
+  // 引擎子进程的 FFmpeg 路径注入：**唯一来源**（引擎侧已无 PATH 回退 —— 缺注入即明确报「组件缺失」，
+  // 不会静默借用系统 PATH，避免出现「主进程判定与引擎实际使用不一致」）
   _ffmpegBinEnv() {
-    const dir = String((this.config && this.config.ffmpeg_dir) || '').trim();
-    if (!dir) return {};
+    // 与 _resolveFfmpegBin 同源（含「默认自愈目录」兜底）：主进程判定与引擎实际使用的必须是同一份
+    const { ffmpegPath, ffprobePath } = this._resolveFfmpegBin();
     const out = {};
-    try {
-      const fe = path.join(dir, 'ffmpeg.exe'), pe = path.join(dir, 'ffprobe.exe');
-      if (fs.existsSync(fe)) out.VL_FFMPEG_BIN = fe;
-      if (fs.existsSync(pe)) out.VL_FFPROBE_BIN = pe;
-    } catch (e) {}
+    if (ffmpegPath) out.VL_FFMPEG_BIN = ffmpegPath;
+    if (ffprobePath) out.VL_FFPROBE_BIN = ffprobePath;
     return out;
   }
 
@@ -7274,6 +7229,16 @@ let themes = [];
       }
       const env1 = await this.checkEnvAsync();
       if (env1.downloadNeeded) throw new Error('下载完成但校验未通过：' + (env1.missing || []).join('、'));
+      // 落地元信息（_meta.json）：事后可核对「两个版本用的是不是同一份组件 / 何时下载的 / 版本号」，
+      // 双版本共用数据目录时这份记录是唯一凭据（对齐长期索引的「组件来源可追溯」）
+      try {
+        const meta = { version: ver, downloadedAt: new Date().toISOString(), source: 'npmmirror:ffmpeg-static', files: {} };
+        for (const n of ['ffmpeg.exe', 'ffprobe.exe']) {
+          const st = fs.statSync(path.join(dir, n));
+          meta.files[n] = { size: st.size, mtimeMs: Math.round(st.mtimeMs) };
+        }
+        atomicWrite(path.join(dir, '_meta.json'), JSON.stringify(meta, null, 2) + '\n');
+      } catch (e) {}
       emit({ phase: 'done', ok: true, dir: dir, version: ver });
       this._lg('ENV', 'ffmpeg.ensure', 'FFmpeg 环境就绪 · ' + ver + ' · ' + dir, { dir: dir, version: ver });
       return { ok: true, dir: dir, version: ver, env: env1 };

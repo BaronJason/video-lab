@@ -27,9 +27,7 @@
 
   var state = {
     info: null,
-    // 画布合成**默认启用**（用户定案 2026-10-08）：在画布合成页配好参数、选好输入即可直接「开始处理」，
-    // 不必再额外勾选；步骤列表里的 canvas 勾选与画布合成页的开关双向联动，可随时取消。
-    sel: { canvas: true },
+    sel: {},        // stepId → 是否勾选（仅后处理；画布合成有独立的入口与参数）
     values: {},     // stepId → { key: value }
     link: { resize: true },  // 转分辨率：比例锁链是否锁定（纯前端交互，不提交）
     root: '',
@@ -257,7 +255,6 @@
     div.className = 'tl-step' + (on ? ' tl-step--on tl-step--open' : '');
     div.setAttribute('data-step-id', step.id);
     var params = (step.id === 'resize') ? resizeFieldsHtml()
-      : (step.id === 'canvas') ? '<span class="tl-field__hint">参数在「画布合成」页设置（那里可实时预览）；与本页勾选是同一个开关</span>'
       : (step.schema || []).filter(function (sc) { return fieldVisible(step.id, sc); })
         .map(function (sc) { return paramField(step.id, sc); }).join('');
     div.innerHTML = '<div class="tl-step__head">'
@@ -300,8 +297,6 @@
   //   委托在容器上的 change 收不到，就会出现「勾上了但参数还是灰的」（实测踩到）。
   function setStepOn(sid, on) {
     state.sel[sid] = !!on;
-    // 画布合成：步骤列表的勾选与「画布合成」页的「启用」是同一个开关，必须双向一致
-    if (sid === 'canvas') { var ce = $('cvEnable'); if (ce) ce.checked = !!on; }
     var node = $('stepGroups').querySelector('[data-step-id="' + sid + '"]');
     if (node) {
       node.classList.toggle('tl-step--on', !!on);
@@ -540,13 +535,6 @@
       Object.keys(src).forEach(function (k) { if (visible[k]) dst[k] = coerce(src[k]); });
       params[id] = dst;
     });
-    // 画布合成：参数取专属面板（与预览同一套参数与滤镜链构造）；「目录随机」时把候选清单一并带上，
-    // 使正式处理与预览用**同一批候选**（否则两边各自枚举，范围可能不一致）
-    if (state.sel.canvas) {
-      var cp = Object.assign({}, cv.params);
-      if (cp.bgMode === 'dir' && (cv.bgList || []).length) cp.bgList = cv.bgList.slice();
-      params.canvas = cp;
-    }
     return {
       spec: {
         root: state.files.length ? '' : state.root,
@@ -1266,8 +1254,17 @@
     });
 
     // 预设
-    // 「启用画布合成」与步骤列表里的 canvas 勾选是同一个开关（双向一致）
-    $('cvEnable').addEventListener('change', function () { setStepOn('canvas', !!this.checked); });
+    // 画布合成页：**独立的输出设置与入口**（与后处理互不干扰 —— 参数、输出、日志都只对自己负责）
+    $('cvOutMode').addEventListener('change', cvSyncOutRows);
+    $('cvOutNameMode').addEventListener('change', cvSyncOutRows);
+    $('cvBtnPickOutDir').addEventListener('click', function () {
+      if (!api || !api.pick_directory) { toast('后端不支持文件夹选择', 'error'); return; }
+      api.pick_directory('选择画布合成的输出文件夹', String($('cvOutDir').value || '').trim() || undefined).then(function (p) {
+        if (p) { $('cvOutDir').value = p; cvSyncOutRows(); }
+      });
+    });
+    $('cvRunBtn').addEventListener('click', cvRun);
+    cvSyncOutRows();
     $('cvPresetApply').addEventListener('click', cvApplyPreset);
     $('cvPresetSave').addEventListener('click', cvSavePreset);
     $('cvPresetDelete').addEventListener('click', cvDeletePreset);
@@ -1297,6 +1294,75 @@
     if (!cv.bgTotal) { cvScanBackgrounds(true); return; }
     cv.bgIndex = ((cv.bgIndex + step) % cv.bgTotal + cv.bgTotal) % cv.bgTotal;
     cvRequestPreview({ immediate: true });
+  }
+
+  /** 画布合成：输出设置行的显隐（规则与后处理一致，但用的是**自己那套控件**） */
+  function cvSyncOutRows() {
+    var dirMode = $('cvOutMode').value === 'directory';
+    $('cvOutDirRow').hidden = !dirMode;
+    $('cvOutNameRow').hidden = !dirMode;
+    $('cvOutConflictRow').hidden = !dirMode;
+    var sfx = $('cvOutSuffix');
+    if (sfx) sfx.hidden = $('cvOutNameMode').value !== 'suffix';
+    $('cvOutHint').textContent = dirMode
+      ? '空文件夹 → 直接输出；已有文件 → 自动新建子文件夹'
+      : ('合成结果直接替换原视频' + ($('cvOutBackup').checked ? '（有备份可还原）' : '，且未开备份 —— 覆盖后不可恢复'));
+  }
+
+  /** 画布合成的提交参数：**自带的输入与输出**，与后处理完全分开（互不读取对方配置） */
+  function cvCollectSpec() {
+    if (!state.root && !state.files.length) return { error: '请先在页面上方选择要合成的文件夹或视频文件' };
+    var outMode = $('cvOutMode').value === 'overwrite' ? 'overwrite' : 'directory';
+    var outDir = String($('cvOutDir').value || '').trim();
+    if (outMode === 'directory' && !outDir) return { error: '请选择输出文件夹（或把输出方式改为「覆盖原视频」）' };
+    var p = Object.assign({}, cv.params);
+    // 候选背景清单随参数带上 → 与预览用**同一批候选**（否则两边各自枚举，范围可能不一致）
+    if (p.bgMode === 'dir' && (cv.bgList || []).length) p.bgList = cv.bgList.slice();
+    return {
+      spec: {
+        mode: 'canvas',
+        root: state.files.length ? '' : state.root,
+        files: state.files.slice(),
+        recursive: state.recursive !== false,
+        params: { canvas: p },
+        output: {
+          mode: outMode,
+          dir: outDir,
+          nameMode: $('cvOutNameMode').value === 'suffix' ? 'suffix' : 'keep',
+          suffix: String($('cvOutSuffix').value || ''),
+          onConflict: $('cvOutConflict').value,
+          backup: !!$('cvOutBackup').checked,
+        },
+      },
+    };
+  }
+
+  /** 提交画布合成任务（覆盖原视频属高风险 → 先弹大窗警告，与后处理同一口径） */
+  function cvRun() {
+    var c = cvCollectSpec();
+    if (c.error) { toast(c.error, 'error'); return; }
+    var spec = c.spec;
+    var scope = spec.files.length ? (spec.files.length + ' 个文件') : spec.root;
+    var submit = function () {
+      setStatus('正在创建画布合成任务…');
+      api.run_tool(spec).then(function (r) {
+        if (!r || !r.ok) { toast((r && r.error) || '创建任务失败', 'error'); return; }
+        showLogBox('画布合成任务已加入队列 · ' + r.taskId);
+        setStatus('已加入执行队列（在任务列表中查看进度与结果）', 'ok');
+        watchTask(r.taskId);
+      }).catch(function (e) { toast('创建任务失败：' + ((e && e.message) || e), 'error'); });
+    };
+    if (spec.output.mode === 'overwrite') {
+      showDialog({
+        title: '将覆盖原视频',
+        cssClass: 'modal-card--wide',
+        message: '<b>将合成：</b>' + esc(scope) + '<br><b>输出方式：</b>覆盖原视频<br><b>处理前备份：</b>'
+          + (spec.output.backup ? '已开启' : '<span style="color:var(--status-error-default);font-weight:600">未开启 —— 覆盖后原文件不可恢复</span>'),
+        buttons: [{ label: '取消', value: false }, { label: '确认开始', value: true, primary: true, danger: true, icon: 'play' }],
+      }).then(function (ok) { if (ok) submit(); });
+      return;
+    }
+    submit();
   }
 
   // ── 参数预设（存设置库 app scope，双版本共用同一份）──
@@ -1414,9 +1480,6 @@
     cvApplyParamsToInputs();
     cvLoadPresets();
     cvUpdateBgInfo();
-    // 与步骤列表的勾选对齐（例如预设/复用上次勾选时，面板开关也要显示实际状态）
-    var ce0 = $('cvEnable');
-    if (ce0) ce0.checked = !!state.sel.canvas;
     // 输入变化后的自动预览统一由 renderInputHint → cvLoadSamples(true) 负责（不再单独挂按钮监听，
     // 否则会在样本清单异步扫描完成前触发渲染，白报一次「未选择视频」）
     window.addEventListener('resize', function () { if (cv.box.w) cvPaintBox(); });

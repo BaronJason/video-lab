@@ -5725,8 +5725,11 @@ class Api {
   }
 
   /**
-   * 创建工具任务。
-   * @param {{root?:string, recursive?:boolean, files?:string[], stepIds:string[],
+   * 创建工具任务。两种模式**各自独立、互不干扰**（参数与输出都只对自己负责）：
+   *   · steps（默认）—— 后处理：步骤链，参数 `params[stepId]`
+   *   · canvas       —— 画布合成（竖转横批量）：独立执行器，参数 `params.canvas`
+   * 两者共享任务队列（type:'tool' 串行不抢 GPU）与输出策略实现，但**互不读取对方的参数**。
+   * @param {{mode?:'steps'|'canvas', root?:string, recursive?:boolean, files?:string[], stepIds?:string[],
    *   params?:Object, output?:Object}} spec
    * @returns {{ok:boolean, taskId?:string, error?:string}}
    */
@@ -5737,13 +5740,17 @@ class Api {
     const mod = this._toolSteps();
     if (!mod) return { ok: false, error: '程序文件不完整（缺少处理组件），请重新安装或校验程序文件' };
     const s = spec || {};
+    const isCanvas = String(s.mode || 'steps') === 'canvas';
 
-    // ① 步骤：逐个校验存在性（前端可能缓存了旧 schema）
-    const raw = Array.isArray(s.stepIds) ? s.stepIds.map(String).filter(Boolean) : [];
-    const unknown = raw.filter((id) => !mod.getStep(id));
-    if (unknown.length) return { ok: false, error: '未知的处理步骤：' + unknown.join('、') };
-    const stepIds = mod.listSteps().map((x) => x.id).filter((id) => raw.indexOf(id) >= 0);  // 固定位次
-    if (!stepIds.length) return { ok: false, error: '请至少勾选一个处理步骤' };
+    // ① 步骤：仅后处理需要（画布合成自带一套参数，不走步骤清单）
+    let stepIds = [];
+    if (!isCanvas) {
+      const raw = Array.isArray(s.stepIds) ? s.stepIds.map(String).filter(Boolean) : [];
+      const unknown = raw.filter((id) => !mod.getStep(id));
+      if (unknown.length) return { ok: false, error: '未知的处理步骤：' + unknown.join('、') };
+      stepIds = mod.listSteps().map((x) => x.id).filter((id) => raw.indexOf(id) >= 0);  // 固定位次
+      if (!stepIds.length) return { ok: false, error: '请至少勾选一个处理步骤' };
+    }
 
     // ② 输入：显式文件清单优先，否则扫描目录
     const files = (Array.isArray(s.files) ? s.files : [])
@@ -5775,25 +5782,26 @@ class Api {
     };
 
     // ④ 建任务（env 传参，与三个成片模块同一机制）
-    const stepTitles = stepIds.map((id) => (mod.getStep(id) || {}).title || id);
     const scope = files.length ? (files.length + ' 个文件') : path.basename(root);
-    const title = '视频处理 · ' + stepTitles.join(' + ') + ' · ' + scope;
+    const toolName = isCanvas ? '画布合成' : '视频处理';
+    const title = isCanvas
+      ? ('画布合成 · ' + scope)
+      : ('视频处理 · ' + stepIds.map((id) => (mod.getStep(id) || {}).title || id).join(' + ') + ' · ' + scope);
+    const toolSpec = isCanvas
+      ? {
+        mode: 'canvas',
+        params: { canvas: (s.params && s.params.canvas) || {} },
+        root, recursive: s.recursive !== false, files, output, toolName,
+      }
+      : { stepIds, params: s.params || {}, root, recursive: s.recursive !== false, files, output, toolName };
     const env = {
-      TOOL_SPEC: JSON.stringify({
-        stepIds,
-        params: s.params || {},
-        root,
-        recursive: s.recursive !== false,
-        files,
-        output,
-        toolName: '视频处理',
-      }),
+      TOOL_SPEC: JSON.stringify(toolSpec),
       VL_STORAGE_DIR: this.storageDir || '',
     };
     const task = this._createTask('tool', title, env, files.length ? files[0] : root);
     task.progress.total = files.length || 0;
     this._enqueueTask(task);
-    this._lg('RUN', 'tool.start', '视频处理任务 · ' + title, { id: task.id, stepIds, files: files.length, output });
+    this._lg('RUN', 'tool.start', toolName + '任务 · ' + title, { id: task.id, mode: isCanvas ? 'canvas' : 'steps', stepIds, files: files.length, output });
     return { ok: true, taskId: task.id };
   }
 

@@ -312,12 +312,6 @@
         </div>
 
         <div class="cv-params">
-          <div class="cv-apply">
-            <label class="opt-check opt-check--sm" title="勾选后「开始处理」会对上方清单里的全部视频逐个合成；参数与预览共用，背景每个视频独立随机">
-              <input type="checkbox" id="cvEnable" checked><span class="opt-check__box"></span><span>启用画布合成（批量）</span>
-            </label>
-            <div class="tl-hint">勾选后随「开始处理」对清单内<b>全部视频逐个合成</b>；这里的参数就是合成用的参数（与预览同一套），背景每个视频独立随机。</div>
-          </div>
           <div class="cv-group">画布尺寸</div>
           <div class="cv-row">
             <span class="tl-label">宽 × 高</span>
@@ -421,7 +415,43 @@
             <button class="tl-btn" id="cvPresetSave">保存当前</button>
             <button class="tl-btn" id="cvPresetDelete">删除</button>
           </div>
-          <div class="tl-hint">本页参数用于画布合成（需勾选上方「启用画布合成」才会参与「开始处理」）；输出方式与备份沿用下方统一入口。</div>
+          <div class="cv-group">输出设置（画布合成专用）</div>
+          <div class="cv-row">
+            <span class="tl-label">输出方式</span>
+            <select class="tl-sel" id="cvOutMode" style="flex:1;min-width:0">
+              <option value="directory">输出到指定目录</option>
+              <option value="overwrite">覆盖原视频</option>
+            </select>
+          </div>
+          <div class="cv-row" id="cvOutDirRow">
+            <span class="tl-label">目标文件夹</span>
+            <input class="tl-path" type="text" id="cvOutDir" placeholder="选择输出文件夹" style="flex:1;min-width:0">
+            <button class="tl-btn" id="cvBtnPickOutDir">选择</button>
+          </div>
+          <div class="cv-row" id="cvOutNameRow">
+            <span class="tl-label">文件名</span>
+            <select class="tl-sel" id="cvOutNameMode" style="flex:1;min-width:0">
+              <option value="keep">原名</option>
+              <option value="suffix">原名 + 后缀</option>
+            </select>
+            <input class="tl-text" type="text" id="cvOutSuffix" value="_横版" style="max-width:110px" hidden>
+          </div>
+          <div class="cv-row" id="cvOutConflictRow">
+            <span class="tl-label">冲突处理</span>
+            <select class="tl-sel" id="cvOutConflict" style="flex:1;min-width:0">
+              <option value="index">追加序号</option>
+              <option value="overwrite">覆盖</option>
+              <option value="skip">跳过</option>
+            </select>
+          </div>
+          <div class="cv-row">
+            <label class="opt-check opt-check--sm" title="覆盖原视频前先备份（可还原）">
+              <input type="checkbox" id="cvOutBackup" checked><span class="opt-check__box"></span><span>处理前备份</span>
+            </label>
+          </div>
+          <div class="tl-hint" id="cvOutHint">空文件夹 → 直接输出；已有文件 → 自动新建子文件夹</div>
+          <button class="tl-run" id="cvRunBtn"><i data-icon="play" data-size="16"></i>开始合成（对清单内全部视频）</button>
+          <div class="tl-hint">本页与「后处理」各自独立：参数与输出设置互不影响；任务同样进统一队列（串行执行）。</div>
         </div>
       </div>
     </div>

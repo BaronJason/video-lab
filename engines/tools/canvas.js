@@ -249,7 +249,7 @@ function buildCanvasPlan(params, src, opts) {
   // ⚠ 这里**不要**用 overlay 的 shortest=1：它让 overlay 跟随最短输入提前收尾 ——
   //   预览用 -ss 定位取帧时（内容与背景各自 seek），两条流的首帧到达时机不同，
   //   会出现「合成图只剩背景、内容原帧却正常」的**概率性**现象（2026-10-08 实报）。
-  //   无限背景的收尾交给**输出级 `-t`（= 内容时长）**（见 steps/canvas.js），确定且无竞态；
+  //   无限背景的收尾交给**输出级 `-t`（= 内容时长）**（见 canvasbatch.js），确定且无竞态；
   //   图片背景是单帧输入 + overlay 默认 repeatlast=1，本身就是有限流。
   parts.push('[bg][c]overlay=' + Math.round(offset.x) + ':' + Math.round(offset.y) + ':format=auto' + composedLabel);
   if (hasWm) {

@@ -14,11 +14,11 @@
 'use strict';
 
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-const crypto = require('node:crypto');
 
 const pipeline = require('./pipeline');
+const locks = require('./locks');
+const canvasbatch = require('./canvasbatch');
 
 /** 读环境变量里的任务规格（主进程注入的 JSON） */
 function readSpec() {
@@ -42,39 +42,7 @@ function resolveFiles(spec, storageDir) {
   return [];
 }
 
-// 本次运行的加锁目录：输出到指定目录时锁该目录，覆盖原文件时锁源文件所在目录
-// （文件可能分散在多个目录，取最上层公共目录；取不到则退回第一个文件所在目录）
-function lockDirFor(spec, files) {
-  const mode = String((spec.output && spec.output.mode) || '');
-  const outDir = String((spec.output && spec.output.dir) || '').trim();
-  if (mode === 'directory' && outDir) return outDir;
-  const dirs = files.map((f) => path.dirname(path.resolve(f)));
-  if (!dirs.length) return '';
-  if (dirs.length === 1) return dirs[0];
-  let common = dirs[0].split(path.sep);
-  for (const d of dirs.slice(1)) {
-    const parts = d.split(path.sep);
-    let i = 0;
-    while (i < common.length && i < parts.length && common[i] === parts[i]) i++;
-    common = common.slice(0, i);
-  }
-  const joined = common.join(path.sep);
-  return joined || dirs[0];
-}
-
-/**
- * 锁文件路径 —— 必须落在**被处理目录之外**，两条原因：
- *   ① 锁文件落在输出目录里会把它变成"非空"，直接破坏「空目录 → 直接输出」规则
- *      （实测踩到：本该输出到空目录，结果被判定为非空而新建了子目录）
- *   ② 不在用户的视频目录里留下与业务无关的残留文件
- * 因此按目标目录路径生成稳定的锁名，锁文件统一放在数据目录的 `.locks` 下；
- * 同一目录 → 同一把锁，不同目录互不阻塞。
- */
-function lockPathFor(dir) {
-  const base = String(process.env.VL_STORAGE_DIR || '').trim() || os.tmpdir();
-  const h = crypto.createHash('sha1').update(path.resolve(dir).toLowerCase()).digest('hex').slice(0, 16);
-  return path.join(base, '.locks', 'tool-' + h + '.lock');
-}
+// 加锁目录 / 锁文件路径：见 locks.js（与画布合成执行器共用同一套实现）
 
 async function run(ctx) {
   const logger = ctx.logger;
@@ -84,6 +52,23 @@ async function run(ctx) {
     logger.diag('fail', { step: '参数解析', msg: 'TOOL_SPEC 缺失或不是合法 JSON' });
     logger.error('参数解析', 'TOOL_SPEC 缺失或不是合法 JSON');
     return 1;
+  }
+
+  // 两种运行模式，**各自独立、互不干扰**：
+  //   steps（默认）—— 后处理：步骤链（pipeline.js），带自己的输出设置
+  //   canvas       —— 画布合成（竖转横批量）：独立执行器（canvasbatch.js），带自己的输出设置
+  // 之所以分开：两者能力有重叠（转分辨率 ↔ 画布尺寸、裁剪/变速 ↔ 合成时长），混在一条链里会互相干扰；
+  // 分开后各自的参数、输出策略、日志语义都只对自己负责。
+  if (String(spec.mode || 'steps') === 'canvas') {
+    try {
+      return await canvasbatch.run(spec, ctx);
+    } catch (e) {
+      logger.diag('fail', { step: '处理异常', msg: (e && e.message) || String(e), stack: String((e && e.stack) || '').slice(0, 800) });
+      logger.error('处理异常', (e && e.message) || String(e));
+      return 1;
+    } finally {
+      logger.done();
+    }
   }
 
   const stepIds = Array.isArray(spec.stepIds) ? spec.stepIds.map(String) : [];
@@ -102,13 +87,13 @@ async function run(ctx) {
   }
 
   // ── 互斥锁：与其它模块同一套语义（等待 / 已获取 / 已释放 三类协议行）──
-  const lockRoot = lockDirFor(spec, files);
+  const lockRoot = locks.lockDirFor(spec, files);
   logger.lockWaiting('准备处理视频...');
   let lock = null;
   let code = 1;
   try {
     if (lockRoot) {
-      try { lock = await ctx.lock.acquireLock(lockPathFor(lockRoot)); } catch (e) {
+      try { lock = await ctx.lock.acquireLock(locks.lockPathFor(lockRoot)); } catch (e) {
         logger.diag('fail', { step: '互斥锁', msg: (e && e.message) || String(e), lockRoot: String(lockRoot || '') });
         logger.error('互斥锁', (e && e.message) || String(e));
         return 1;

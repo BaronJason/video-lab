@@ -334,8 +334,12 @@ function zhLiveLine(kv) {
       v = m ? (parseFloat(m[1]) / 1024).toFixed(1) + 'MB' : v;
     }
     if (k === 'elapsed') {
-      const sec = parseElapsedSec(v);
-      v = Number.isNaN(sec) ? String(v) : zhDuration(sec);
+      // 与 time= 保持**同一种格式**（HH:MM:SS.xx）：ffmpeg 原生 elapsed 是 H:MM:SS.xx（小时无前导零），
+      // 这里只补齐小时位，不再换成「1分23秒」这类中文 —— 与同行的时间列对齐才便于比对。
+      const em = String(v).match(/^(\d+):(\d{1,2}):(\d{1,2}(?:\.\d+)?)$/);
+      v = em
+        ? (em[1].padStart(2, '0') + ':' + em[2].padStart(2, '0') + ':' + em[3])
+        : v;
     }
     parts.push(label + '=' + v);
   }

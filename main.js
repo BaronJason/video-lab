@@ -2050,6 +2050,42 @@ function registerIpc() {
   // ⚠ 用异步版（不阻塞事件循环）；且延迟到窗口就绪之后再跑，避免与首帧竞争
   // ⚠ 冷启动首次加载 ffmpeg 可能超时 → probeFailed：此时**不下载也不弹窗**，延后 10 秒重探一次 ——
   //   ⚠ 不要把「超时」当成「缺滤镜」：否则冷启动必然误报「FFmpeg 组件不完整」（热态重跑却正常）
+  // 组件「能用但版本过旧」时**静默升级**：旧源（ffmpeg-static）最高 6.1.1，其进度行**不含 elapsed（实际耗时）**，
+  // 界面那一行永远为空。这是我们换源留下的历史包袱，不该让用户承担 → 启动空闲期自动升到 FFmpeg-Builds（国内镜像）。
+  // 失败**不弹窗**（只在运行日志留痕），且 7 天内不重复尝试，避免每次启动都去下 140MB。
+  function maybeUpgradeFfmpeg() {
+    try {
+      const dir = String(config.ffmpeg_dir || path.join(storageDir(), 'ffmpeg'));
+      const markPath = path.join(storageDir(), 'ffmpeg', '_upgrade.json');
+      let ver = '';
+      try { ver = String((JSON.parse(fs.readFileSync(path.join(dir, '_meta.json'), 'utf8')) || {}).version || ''); } catch (e) {}
+      const m = ver.match(/(\d+)\.(\d+)/);
+      const major = m ? parseInt(m[1], 10) : 0;
+      if (major >= 7) return;   // 7.0+ 的进度行带 elapsed —— 无需升级
+      let mark = {};
+      try { mark = JSON.parse(fs.readFileSync(markPath, 'utf8')) || {}; } catch (e) {}
+      const COOL = 7 * 24 * 3600 * 1000;
+      if (mark.at && (Date.now() - Number(mark.at)) < COOL) return;   // 近期已试过（成功或失败）→ 不再重试
+      api.ensureFfmpeg({ force: true }).then((r) => {
+        try {
+          fs.mkdirSync(path.dirname(markPath), { recursive: true });
+          fs.writeFileSync(markPath, JSON.stringify({ at: Date.now(), ok: !!(r && r.ok), version: (r && r.version) || '' }));
+        } catch (e) {}
+        if (r && r.ok) {
+          persistFfmpegDir(r.dir);
+          const done = { ok: true, auto: true, upgraded: true, dir: r.dir, version: r.version };
+          sendToMain('env_fix_done', done);
+          sendToSettings('env_fix_done', done);
+        }
+      }).catch((e) => {
+        try {
+          fs.writeFileSync(markPath, JSON.stringify({ at: Date.now(), ok: false, error: String((e && e.message) || e) }));
+        } catch (e2) {}
+        try { writeUpdateLog('FFmpeg 组件静默升级失败：' + String((e && e.message) || e)); } catch (e3) {}
+      });
+    } catch (e) {}
+  }
+
   runAfterWindowLoad(() => {
     const probe = (allowRetry) => {
       api.checkEnvAsync().then((env) => {
@@ -2057,7 +2093,8 @@ function registerIpc() {
           if (allowRetry) setTimeout(() => probe(false), 10000);
           return;
         }
-        if (!env.downloadNeeded) return;
+        // 组件已就绪 → 再看**版本是否过旧**（旧源 6.1.1 缺 elapsed），过旧则静默升级
+        if (!env.downloadNeeded) { maybeUpgradeFfmpeg(); return; }
         api.ensureFfmpeg().then((r) => {
           if (r && r.ok) {
             persistFfmpegDir(r.dir);

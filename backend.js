@@ -17,6 +17,8 @@ const EXCLUDED_TOP_DIRS = new Set([
 
 // 日志文件名特征（用于区分配置与日志）
 const LOG_NAME_RE = /(拼接日志|复刻日志)/;
+// 引擎写在成片目录里的源配置留档（复刻侧）：属产物附件而非可执行配置，配置索引须排除
+const BACKUP_NAME_RE = /^配置备份-/;
 // 复刻模式名称，按 video_replica.ps1 的 mode 映射；两种模式在侧栏各作一个配置名，仅含日志无配置
 const REPLICA_MODES = ['原片复刻', '去重复刻'];
 const REPLICA_PROJECT = '复刻'; // 侧栏中的虚拟项目名（仅含日志，无配置）
@@ -898,6 +900,7 @@ class Api {
         for (const full of files) {
           if (!path.basename(full).toLowerCase().endsWith('.txt')) continue;
           if (LOG_NAME_RE.test(path.basename(full))) continue;
+          if (BACKUP_NAME_RE.test(path.basename(full))) continue;
           let st;
           try { st = fs.statSync(full); } catch (e) { continue; }
           const mtimeMs = st.mtimeMs, size = st.size;
@@ -1116,6 +1119,7 @@ class Api {
         for (const full of files) {
           if (!path.basename(full).toLowerCase().endsWith('.txt')) continue;
           if (LOG_NAME_RE.test(path.basename(full))) continue;
+          if (BACKUP_NAME_RE.test(path.basename(full))) continue;
           let st2;
           try { st2 = await fs.promises.stat(full); } catch (e) { continue; }
           const mtimeMs = st2.mtimeMs, size = st2.size;
@@ -3170,6 +3174,42 @@ class Api {
     return { ok: true, dir: outc.outDir };
   }
 
+  // ── 任务 TXT 快照 ──
+  // 引擎执行成功后会「把 TXT 移入成片目录作为正本」，而 TXT 路径由「项目/月/MMdd/配置名」决定：
+  // 同一配置名在同一天提交多个任务时指向同一个文件，前一个任务把它搬走后，后一个任务就没有 TXT 可用；
+  // 排队期间重新生成配置又会覆盖该文件，让先提交的任务用到后改的配置。
+  // 故入队时固化一份任务专属副本，启动前按快照还原（原位内容与快照一致则跳过），两个问题一并解决。
+  _txtSnapPath(taskId) {
+    return this.storageDir ? path.join(this.storageDir, 'txt-snap', String(taskId) + '.txt') : '';
+  }
+  _snapshotTaskTxt(task) {
+    try {
+      const src = String((task && task.env && task.env.REPLICA_TXT) || '').trim();
+      const dst = this._txtSnapPath(task && task.id);
+      if (!src || !dst || !fs.existsSync(src) || !fs.statSync(src).isFile()) return;
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.copyFileSync(src, dst);
+    } catch (e) { /* 快照失败不阻断入队，退回原有行为 */ }
+  }
+  _restoreTaskTxt(task) {
+    try {
+      const src = String((task && task.env && task.env.REPLICA_TXT) || '').trim();
+      const snap = this._txtSnapPath(task && task.id);
+      if (!src || !snap || !fs.existsSync(snap)) return; // 无快照（历史任务）保持原行为
+      if (fs.existsSync(src)) {
+        const a = fs.readFileSync(src);
+        const b = fs.readFileSync(snap);
+        if (a.length === b.length && a.equals(b)) return;
+      }
+      fs.mkdirSync(path.dirname(src), { recursive: true });
+      fs.copyFileSync(snap, src);
+      // 仅在真正写回时留痕：此时原位配置已被同名其他任务搬走，或被重新生成的配置覆盖
+      if (task.log) task.log.push('[已按提交快照还原配置] ' + path.basename(src));
+      this._lg('MOD', 'task.txtsnap', '按提交快照还原配置 · ' + String(task.title || '').slice(0, 50),
+        { id: task.id, txt: src });
+    } catch (e) { /* 还原失败则交由引擎按原样报错 */ }
+  }
+
   _createTask(type, title, env, srcPath) {
     const id = 'task_' + (++this.taskSeq) + '_' + Date.now().toString(36);
     const task = {
@@ -3182,6 +3222,7 @@ class Api {
       groupDate: this._taskGroupDate(type, env, Date.now()), // 业务归属日 MMDD：凌晨0-4点完成/提交归前一天（仅前端排序使用，不展示）
     };
     this.tasks.set(id, task);
+    this._snapshotTaskTxt(task);
     this._emitTasks();
     return task;
   }
@@ -4740,6 +4781,7 @@ class Api {
   }
 
   _spawnEngine(type, env, task) {
+    this._restoreTaskTxt(task); // 启动前按快照还原 TXT：前序任务可能已把它移入成片目录，或排队期间被重新生成的配置覆盖
     // 以内置 Node 引擎执行任务；stdout/stderr 实时捕获与协议行解析供任务窗口显示。
     const { spawn } = require('child_process');
     const childEnv = Object.assign({}, env);

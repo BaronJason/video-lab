@@ -791,6 +791,13 @@ async function run(ctx, env = process.env) {
     : { pools: [], exclude: [], src: '', fromConfig: 0, fromLog: 0 };
   const outRoot = path.join(cfg.outputDir || derivedRoot, modeName);
   try { fs.mkdirSync(outRoot, { recursive: true }); } catch (e) {}
+  // 源配置备份：主进程已在启动前按提交快照还原 txtPath，故此处复制到的即本次执行所用配置。
+  // 放在处理开始前，任务失败/中断也能留档（对齐批量侧「正本随任务开始时移入成片目录」）。
+  try {
+    const snapDest = path.join(outRoot, '配置备份-' + path.basename(txtPath));
+    fs.copyFileSync(txtPath, snapDest);
+    logger.info('配置备份就位：' + path.basename(snapDest));
+  } catch (e) { /* 备份失败不阻断任务 */ }
 
   // ── 复刻日志（同日同模式复用同一文件，续写时补分隔线） ──
   const timeTag0 = `${pad(d0.getMonth() + 1)}${pad(d0.getDate())}`;

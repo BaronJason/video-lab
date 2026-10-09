@@ -1331,6 +1331,21 @@ let lastDownload = null; // 已下载但未安装的更新包 { zipPath, info }�
 function setupUpdater() {
   try { return require('electron-updater').autoUpdater; } catch (e) { return null; }
 }
+// 选择 setup 更新源：依次探测候选（取 latest.yml，仅数百字节）返回首个可用者，全失败回退直连。
+// 仅判断「源是否可用」不校验版本：随后 electron-updater 会用同一源拉 latest.yml 与安装包。
+async function pickSetupFeedUrl() {
+  const cands = accelUrls(UPDATE_PUBLISH_URL);
+  for (const c of cands) {
+    try {
+      const r = await netGet(c + '/latest.yml', 8000);
+      if (r.status === 200 && r.body && /version\s*:/.test(r.body.toString('utf8'))) return c;
+      writeUpdateLog('setup 更新源探测未通过：' + c + '（HTTP ' + r.status + '）');
+    } catch (e) {
+      writeUpdateLog('setup 更新源探测失败：' + c + ' → ' + ((e && e.message) || String(e)));
+    }
+  }
+  return cands[cands.length - 1];
+}
 // setup 安装版下载：electron-updater 检查并下载 setup 安装包（调用方 startUpdate 负责互斥锁与已下载复用）
 async function runSetupStartUpdate() {
   const au = setupUpdater();
@@ -1349,9 +1364,9 @@ async function runSetupStartUpdate() {
   });
   au.on('update-downloaded', () => {});
   au.on('error', (e) => { writeUpdateLog('electron-updater: ' + (e && e.message)); sendToMain('update_error', { message: e && e.message }); });
-  // 更新源走加速地址（首选 gh-proxy.com）：latest.yml 与安装包都经加速站拉取（generic 源），失败不影响默认源
+  // 更新源取探测出的可用加速地址（全不可用时回退直连），latest.yml 与安装包都经它拉取（generic 源）
   try {
-    const feedUrl = accelUrls(UPDATE_PUBLISH_URL)[0];
+    const feedUrl = await pickSetupFeedUrl();
     au.setFeedURL({ provider: 'generic', url: feedUrl });
     writeUpdateLog('setup 更新源：' + feedUrl);
   } catch (ef) {

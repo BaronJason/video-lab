@@ -131,7 +131,7 @@ async function processFile(file, steps, opts) {
     targetKbps: Number(enc.ramp.targetKbps),
   } : null;
   // 「码率控制」步骤本身不产出滤镜片段，但**要求重编码一遍** ——
-  // 若只看滤镜链是否为空，就会把它误判成「无需处理」而直接跳过（曾真实踩到）。
+  // 若只看滤镜链是否为空，就会把它误判成「无需处理」而直接跳过。
   const encodeWanted = !!ramp || (enc.cq != null && isFinite(Number(enc.cq)));
 
   if (chain.isEmpty() && !trimmed && !encodeWanted) {

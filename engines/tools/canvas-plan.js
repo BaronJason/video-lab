@@ -11,7 +11,7 @@
 // 设计约束：
 //   · 纯逻辑：无 IO、无子进程、不依赖 Electron —— 主进程（预览渲染）与引擎子进程（批量执行）共用
 //   · 单一真相：预览与正式处理都走 buildCanvasPlan()，参数一致则表达式一致（预览所见即所得由结构保证）
-//   · 滤镜一律 CPU：本模块不提供任何硬件滤镜入口（遮罩模块曾因全 GPU 管线导致成片闪烁）
+//   · 滤镜一律 CPU：本模块不提供任何硬件滤镜入口
 //   · 内容缩放默认**等比**；拉伸为显式开关，开启时写 warnings，由前端提示画面会变形
 //
 // 用法：
@@ -257,7 +257,7 @@ function buildCanvasPlan(params, src, opts) {
   // ⚠ 两条流都要把时间戳归零（`setpts=PTS-STARTPTS`）：预览用 `-ss` 前置定位取帧时，内容流
   //   首帧 PTS 不为 0（seek 到关键帧后仍带着原时间轴），而背景（lavfi / 图片）从 0 起 ——
   //   overlay 以**先到的时间轴**为准，`-frames:v 1` 拿到的第一帧就只有背景：
-  //   表现为「合成图只剩背景，而内容原帧正常」（2026-10-08 实报，且只在部分时间点出现）。
+  //   表现为「合成图只剩背景，而内容原帧正常」。
   //   归零后两条流同时起步，任意时间点都能正确合成。
   const TS0 = 'setpts=PTS-STARTPTS';
   if (forEncode) {
@@ -274,7 +274,7 @@ function buildCanvasPlan(params, src, opts) {
   let composedLabel = forEncode ? (hasWm ? '[comp0]' : (finalLabel || '[comp0]')) : '[comp0]';
   // ⚠ 这里**不要**用 overlay 的 shortest=1：它让 overlay 跟随最短输入提前收尾 ——
   //   预览用 -ss 定位取帧时（内容与背景各自 seek），两条流的首帧到达时机不同，
-  //   会出现「合成图只剩背景、内容原帧却正常」的**概率性**现象（2026-10-08 实报）。
+  //   会出现「合成图只剩背景、内容原帧却正常」的**概率性**现象。
   //   无限背景的收尾交给**输出级 `-t`（= 内容时长）**（见 canvas-run.js），确定且无竞态；
   //   图片背景是单帧输入 + overlay 默认 repeatlast=1，本身就是有限流。
   parts.push('[bg][c]overlay=' + Math.round(offset.x) + ':' + Math.round(offset.y) + ':format=auto' + composedLabel);

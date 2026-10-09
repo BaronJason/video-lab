@@ -15,7 +15,7 @@
 
   var _inReport = false;
 
-  // 当前任务 id：VL_TASK_ID 原先只注入引擎，前端异常落盘后无法与任务日志关联 —— 此处补齐前端侧。
+  // 当前任务 id：VL_TASK_ID 需同时注入前端，否则前端异常落盘后无法与任务日志关联。
   // 页面在"当前任务"变化时调用 window.vlSetTaskId(id)（任务窗口最明确）；未设置时保持空，不臆造。
   var _taskId = '';
   window.vlSetTaskId = function (id) { _taskId = String(id == null ? '' : id).slice(0, 80); };

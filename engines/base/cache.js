@@ -147,7 +147,7 @@ class CacheStore {
   }
 
   // readOnly：只读用途（如 replica 仅消费缓存）不得建表 / 写 meta / 改 journal_mode ——
-  // 否则一次「读缓存」就会改动调用方并不拥有的库（曾因此把运行中的 clip_cache.db 写脏）。
+  // 否则一次「读缓存」就会改动调用方并不拥有的库。
   open(opts) {
     const readOnly = !!(opts && opts.readOnly);
     if (this._db && !this._db.closed) return this._db;
@@ -402,7 +402,7 @@ class CacheStore {
   // 把「数千次磁盘调用」压缩到「通常为零次」的关键就在 knownPaths。
   // 但【已置位的条目不得走快速通道】：文件可能已被放回原路径，必须重新核验并复活。
   // ⚠ 刻意【不按工作目录(root)前缀删除】：素材位于工作目录之外是常态，
-  //   曾因此把正常素材条目判为「旧 root 残留」整批清掉，导致重启后首次预检测全量重探（实测 7.7s）。
+  //   否则会把正常素材条目判为「旧 root 残留」整批清掉，导致重启后首次预检测全量重探。
   gcPlan(knownPaths, opts) {
     const now = Number(opts && opts.now) || Date.now();
     const retainMs = (opts && opts.retainMs != null) ? Number(opts.retainMs) : MISSING_RETAIN_MS;
@@ -445,7 +445,7 @@ class CacheStore {
   }
 
   // 待核验条目数（一次 COUNT 查询、零文件 IO）：用于把清理任务分批排入空闲队列，
-  // 而不是启动后一次性核验（旧做法实测冷态冻 49.5 秒）。
+  // 而不是启动后一次性核验。
   gcPendingCount(now, verifyTtlMs) {
     try {
       const t = Number(now) || Date.now();

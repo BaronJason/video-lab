@@ -6,7 +6,7 @@
   var $ = function (id) { return document.getElementById(id); };
   var api = window.txapi;
   // HTML 转义：IIFE 顶层共享 —— 供 renderMd（Markdown 渲染）与 loadAboutInfo（关于页组件区）共用。
-  // 此前它只定义在 renderMd 局部，导致关于页组件区运行时报「esc is not defined」（2026-10-08 实报并修复）。
+  // 定义在 IIFE 顶层供 renderMd 与 loadAboutInfo 共用；只定义在某一函数内时，另一处会报「esc is not defined」。
   var esc = function (s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
 
   // 数字输入框：禁用滚轮滚动改值（仅保留手动输入）
@@ -23,7 +23,7 @@
   var state = {
     batch: { root: '', max_duration: '', max_retry: '', speed_limit: '', txt_prefix: [], producer: '', suffix_mark: '' },
     // ⚠ 复刻不再携带 max_duration / speed_limit —— 这两项与批量拼接共用同一套（后端 runReplica 读 config.batch），
-    //   携带空字符串随保存写库会把后端校验/默认值覆盖掉，曾导致所有复刻任务启动被拒（2026-10-08 实报）
+    //   携带空字符串随保存写库会把后端校验/默认值覆盖掉，导致所有复刻任务启动被拒
     replica: { dedup_ratio: '', dedup_ratio_max: '', dedup_ratio_on: true, dedup_ratio_max_on: true },
     mask: { root: '', watermark_mov: '', watermark_alpha: '' }
   };
@@ -89,8 +89,8 @@
     return html;
   }
 
-  // 绑定「变更即保存」：原先 wrapAllInputs 同时负责插红色 *（未保存标记）与绑定变更事件；
-  // 取消「未保存」概念后星号与包裹层都不要了，只保留事件绑定（即时保存靠它触发）。
+  // 绑定「变更即保存」：只负责事件绑定（即时保存靠它触发）；
+  // 不再插红色 *（未保存标记）与包裹层 —— 已无「未保存」概念。
   function wrapAllInputs() {
     document.querySelectorAll('.form-input').forEach(function (input) {
       if (input.dataset.wrapped) return;
@@ -278,7 +278,7 @@
 
   // 多值标签（提取前缀 / 后缀）增删或改序后：刷新成片名预览并重算「未保存」标记。
   // ⚠ 必须定义在顶层：loadSettings 的回调与 bindSave 两处都要引用它 ——
-  // 曾误定义在 bindSave 内部，导致 loadSettings 回调求值该标识符时抛 ReferenceError，
+  // 定义在 bindSave 内部会让 loadSettings 回调求值该标识符时抛 ReferenceError，
   // 被外层 .catch 捕获后报「读取设置失败」，且整个设置页只加载到一半。
   function onBatchTagsChanged() { updatePreview(); recomputeDirty(); }
 
@@ -633,7 +633,7 @@
       
       // ⚠ 复刻**不再单独保存**时长上限与倍速阈值（两者与批量共用，见上方 state 收集处的注释），
       //    这两个字段在 state 里恒为空字符串 —— 若仍拿它们做必填校验，missing 会永远非空，
-      //    于是 collectAndSave 每次都在校验处提前 return：**全部即时保存（含皮肤）静默失效**（2026-10-08 实报并修复）。
+      //    于是 collectAndSave 每次都在校验处提前 return：**全部即时保存（含皮肤）静默失效**。
       if (!(parseFloat(state.replica.dedup_ratio) > 0)) missing.push('视频复刻·重复度下限');
       // 上下限关系校验（仅两者都启用时）；上限用于规避「去重过高被判定为全新视频」
       var rdMin = parseFloat(state.replica.dedup_ratio), rdMax = parseFloat(state.replica.dedup_ratio_max);
@@ -641,7 +641,7 @@
       if (state.replica.dedup_ratio_max_on && rdMax > 0 && rdMin > 0 && rdMax < rdMin) missing.push('视频复刻·重复度上限（不能小于下限）');
       // 即时保存（silent）时必填项可能正被用户改写 → 只跳过，不弹「参数未设置」打扰输入
       // ⚠ 即时保存的「失败可见」原则：silent 只用于"用户正在输入、必填暂空"的草稿态，
-      //   但**拦下保存**这件事本身必须让用户看见 —— 静默拦下会让人以为已生效（2026-10-08 实报）。
+      //   但**拦下保存**这件事本身必须让用户看见 —— 静默拦下会让人以为已生效。
       if (missing.length) { setStatus('暂未保存（请先补全）：' + missing.join('、'), false); return; }
 
       // 访问令牌：主进程只接受 8–64 位，越界会被**静默忽略**（表现为"改了没反应"）→ 这里先给可读提示

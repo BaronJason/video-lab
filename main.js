@@ -2353,8 +2353,8 @@ function closeGuidePanel() {
 // 跳过（root 仍无效）时保持 root 为空：主窗口进入「空项目列表 + 居中选择路径」引导态
 async function ensureConfig() {
     const br = getBatchRoot(config);   // 工作目录取自批量模式的 batch.root
-    // ⚠ 工作目录可能在机械盘：主进程**不得**同步 stat —— 冷态首次访问会冻结事件循环
-    //   （曾出现 ready-to-show 之后卡上百秒）。改用 fs.promises 异步判断，且只判一次。
+    // ⚠ 工作目录可能在机械盘：主进程**不得**同步 stat —— 冷态首次访问会冻结事件循环；
+    //   改用 fs.promises 异步判断，且只判一次。
     let ok = false;
     if (br) {
       try { const st = await fs.promises.stat(br); ok = st.isDirectory(); } catch (e) { ok = false; }
@@ -2456,7 +2456,7 @@ app.whenReady().then(async () => {
       scheduleDailyUpdateCheck();
     }
     // 任务列表恢复：读上百条任务日志，是最重的一步 —— 放到窗口加载后且让出一轮事件循环，
-    // 保证窗口已经画出来再占用主进程（原先它排在 createWindow 之前，直接拖慢每次冷启动）。
+    // 保证窗口已经画出来再占用主进程。
     // ⚠ 这里只计「同步段」：批量任务的输出目录校验已由 backend 转入异步（冷态下同步 existsSync
     //   会逐任务冷访问机械盘 → 冻结主进程，实测约 9 秒），故异步部分不计入本耗时。
     setTimeout(() => {
@@ -2547,7 +2547,7 @@ async function waitForWindowContent(win, timeoutMs) {
 
 // 渲染进程 / 子进程异常退出（主进程仍在运行，但往往正是故障现场）
 // ★ 自愈（偶发白屏且显示源码，托盘菜单同样异常，只能强制结束重开）：
-//   原先这里**只记日志、不做任何恢复** —— 所以一旦渲染进程异常，界面就永久白屏，必须手动重启。
+//   这里**必须做恢复** —— 只记日志的话，一旦渲染进程异常，界面就永久白屏，必须手动重启。
 //   现补「自动重载」：崩溃后重建页面；带次数限制（5 分钟内最多 3 次），避免真正性崩溃时无限循环。
 const _renderGoneAt = [];
 function _shouldAutoReload() {

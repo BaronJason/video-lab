@@ -1182,7 +1182,7 @@
   }
   function batchReplica(mode) {
     if (_envBad()) { setStatus('运行组件未就绪'); return; }
-    // 未进入选择模式时给明确提示（原先静默 return，表现为"点了没反应"）
+    // 未进入选择模式时给明确提示
     if (!state.selectMode) { toast('请先打开右上角「选择」开关并勾选要复刻的成片', true); return; }
     var items = [];
     for (var k in (state.selectedLogPaths || {})) { var v = state.selectedLogPaths[k]; if (v) items.push({ path: (v.path || v), video: v.video || '' }); }
@@ -2397,16 +2397,16 @@
 
   // 载入遮罩：工作路径扫描时提示用户
   // 已取消前台遮罩：所有「扫描 / 检测」类等待改为底部状态栏提示，
-  // 界面保持可交互 —— 原先的遮罩带 backdrop-filter 模糊，是"窗口冻结一会儿"的观感来源。
+  // 界面保持可交互 —— 遮罩若带 backdrop-filter 模糊，会给人"窗口冻结一会儿"的观感。
   function showBusy(text) { setStatus(text || '请稍候…'); }
   function hideBusy() { setStatus(''); }
   // 设置窗口开/关时的主窗口模糊遮罩
   function showSettingsDim() { var o = $('settingsDim'); if (o) { hideBusy(); o.style.display = 'block'; } }
   function hideSettingsDim() { var o = $('settingsDim'); if (o) o.style.display = 'none'; }
   // 带进度条的等待窗口：重置预检测全量检测期间使用；提供「缩到后台」入口
-  // 预检测一律后台进行：原先会弹前台遮罩且带模糊背景，
-  // 切换窗口时肉眼可见卡顿；而预检测不需要用户做任何选择（原「后台检测」按钮已成冗余），
-  // 故不再显示遮罩，直接进入状态栏右下角的 probe-mini 进度显示（内含取消按钮）。
+  // 预检测一律后台进行：前台遮罩（带模糊背景）会在切换窗口时造成肉眼可见卡顿，
+  // 而预检测不需要用户做任何选择，故不显示遮罩，
+  // 直接进入状态栏右下角的 probe-mini 进度显示（内含取消按钮）。
   function showBusyProgress() {
     state.precheckBackground = true;
     hideBusy();
@@ -4571,7 +4571,7 @@
           html += '</div></div>';
         });
       } else {
-        // 单时长分组：不显示分组头，所有文件直接平铺列出（和原来一致）
+        // 单时长分组：不显示分组头，所有文件直接平铺列出
         var g = rawGroups[0];
         g.files.forEach(function (f) {
           var full = rd.single ? rd.path : maskFullPath(rd.path, f.sub, f.name);

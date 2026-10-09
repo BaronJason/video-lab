@@ -80,7 +80,7 @@
         + '<div class="modal__title">' + esc(opts.title) + '</div>';
       if (opts.message) html += '<div class="modal__message">' + opts.message + '</div>';
       // 文本输入（可选）：**不要用 window.prompt** —— Electron 渲染进程不支持它，
-      // 会直接抛 "prompt() is not supported."（表现为界面异常且功能不可用，2026-10-08 实报）。
+      // 会直接抛 "prompt() is not supported."。
       if (opts.input) {
         html += '<div class="modal__field"><input type="text" class="modal__input"'
           + ' placeholder="' + esc(opts.input.placeholder || '') + '"'
@@ -434,7 +434,7 @@
   }
 
   /**
-   * 输出设置数据层：**一套 UI、两套数据**（用户定案 2026-10-08）。
+   * 输出设置数据层：**一套 UI、两套数据**。
    * 后处理与画布合成的输出项完全相同，界面没必要各写一份；但两者的**取值必须互不影响** ——
    * 于是共用 DOM，按当前标签页绑定到各自的数据：切换前先把 DOM 存回旧模块，再载入新模块。
    */
@@ -1076,7 +1076,7 @@
     var stage = $('cvCanvas');
     if (stage) {
       stage.classList.remove('cv-canvas--drag');
-      stage.classList.add('cv-canvas--ready');   // 就绪后内容框可拖动（此前只在拖动中才显示 → 根本点不到）
+      stage.classList.add('cv-canvas--ready');   // 就绪后内容框可拖动（只在拖动中显示的话点不到）
     }
     // ⚠ 先定画布形状再写帧：比例变化时 cvSyncStageAspect 会作废旧帧，
     //   若放在写帧之后会把**刚拿到的新帧**一起清掉（顺序反了就白渲染一帧）
@@ -1120,10 +1120,10 @@
   }
 
   /**
-   * 吸附（**四宫格**：只对齐**中线与四条边**，不用三分线 —— 用户定案 2026-10-08）。
+   * 吸附（**四宫格**：只对齐**中线与四条边**，不用三分线）。
    * 内容盒的左/中/右三处，各自吸附画布的左边、中线、右边；上/中/下同理。
    * ⚠ 取**距离最近**的一条线吸合：早先按"先命中先返回"处理，候选一多会互相竞争
-   *   —— 表现为「在顶部附近往上拖反而往下走、往下拖又往上走」（2026-10-08 实报）。
+   *   —— 表现为「在顶部附近往上拖反而往下走、往下拖又往上走」。
    */
   function cvSnap(b, alt) {
     if (alt) { cvDrawGuides(0, 0, false); return b; }
@@ -1282,7 +1282,7 @@
     }
     // 成片画布尺寸（输出分辨率）：与「转分辨率」同一套交互（常用比例 + 宽高联动 + 锁链解绑）。
     // 这套交互原是为「内容非等比拉伸」做的 —— 内容拉伸已按原方案移除（回归等比缩放），
-    // 交互整体迁移到输出尺寸上（用户定案 2026-10-08）：比例与宽高同行、不单独占行。
+    // 交互整体迁移到输出尺寸上：比例与宽高同行、不单独占行。
     (function () {
       var ratioEl = $('cvRatio'), wEl = $('cvTW'), hEl = $('cvTH'), linkEl = $('cvLink');
       if (!ratioEl || !wEl || !hEl) return;
@@ -1349,7 +1349,7 @@
       var prev = cv.params.posMode;
       cv.params.posMode = String(el.value);
       // 切换位置基准时把偏移归零：dx/dy 是**相对基准**的偏移，默认 dy=160 是给居中场景的；
-      // 选四角时若沿用旧偏移，内容会被推离角落，看上去"不在对应位置、边上留一大块空白"（2026-10-08 实报）。
+      // 选四角时若沿用旧偏移，内容会被推离角落，看上去"不在对应位置、边上留一大块空白"。
       if (prev !== cv.params.posMode) {
         cv.params.dx = 0; cv.params.dy = 0;
         cvWriteBackInputs(['dx', 'dy']);
@@ -1409,7 +1409,7 @@
         cv.params.bgDir = String(d);
         $('cvBgDir').value = String(d);
         cvScanBackgrounds(true);
-      }).catch(function (e) { toast('选择目录失败：' + ((e && e.message) || e), 'error'); });
+      }).catch(function (e) { toast('选择文件夹失败：' + ((e && e.message) || e), 'error'); });
     });
     $('cvPickBgPath').addEventListener('click', function () {
       api.pick_image(cv.params.bgPath).then(function (f) {
@@ -1430,7 +1430,7 @@
 
     // 预设
     // 画布合成页不写自己的输出设置与按钮：与后处理共用下方那一份（见 outStore / outBind / syncRunButton）
-    // 参数预设：**选中即加载**（用户定案 2026-10-08：不必再点一次「加载」按钮）
+    // 参数预设：**选中即加载**（不必再点一次「加载」按钮）
     $('cvPreset').addEventListener('change', function () { if (String(this.value || '')) cvApplyPreset(); });
     $('cvPresetSave').addEventListener('click', cvSavePreset);
     $('cvPresetDelete').addEventListener('click', cvDeletePreset);

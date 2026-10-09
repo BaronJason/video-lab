@@ -10,7 +10,7 @@
 //   raw    —— 完全自定义的 filter_complex 片段（标签自管）
 //
 // ★ 硬约束：**只允许 CPU 滤镜** —— 本模块不提供任何 *_cuda / hwupload 入口，
-//   从设计上排除「全 GPU 管线」那条曾导致成片闪烁的路。
+//   从设计上排除「全 GPU 管线」这条会导致成片闪烁的路径。
 'use strict';
 
 const FORCE_FORMAT = 'format=yuv420p';   // 送 NVENC 前的像素格式兜底（10bit 源等）

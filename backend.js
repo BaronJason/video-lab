@@ -1502,7 +1502,7 @@ class Api {
 
   // 配置内容缓存（「将需要 io 的部分全部缓存化，txt 路径以及里面的全部内容」）：
   //   打开配置 = 一次主键查询 + **一次 stat 校验**，内容直接取缓存（免读整份文件、免解析）；
-  //   指纹不同才回退读文件并更新缓存。相比原来"每次打开都读全文件 + 解析"，IO 从 O(文件大小) 降到 O(1)。
+  //   指纹不同才回退读文件并更新缓存（否则每次打开都要读全文件 + 解析，IO 为 O(文件大小)）。
   _configFromCacheRow(filePath, row) {
     const raw = row.raw || '';
     let parsed = {};
@@ -2637,7 +2637,7 @@ class Api {
     report({ done: base + probed, total, finished: true, cancelled });
     // 失效清理放到后台执行（用户主动点刷新即清，不受后台 1h 节流限制）。
     // 传入本次刚枚举出的路径集合：这些文件必然存在，GC 直接判「保留」，不再逐条 fs.stat
-    // （原先数千条同步 existsSync 会占住主线程数秒～数十秒，把紧随其后的行内预检测 IPC 一起堵住，
+    // （同步 existsSync 会占住主线程数秒～数十秒，把紧随其后的行内预检测 IPC 一起堵住，
     //  前端表现为刷新完成后徽章仍长时间停在「检测中…」）；剩余候选项也已异步分批并让路事件循环。
     // 遮罩素材：单独认领使用计数并落库标注 mask 作用域 ——
     // 作用域位掩码即归属标记（与批量/复刻分开，同一素材多模式共用时按位或累加）；
@@ -3186,7 +3186,7 @@ class Api {
     return task;
   }
 
-  // 续跑任务标题：反复续跑时不要把「（续跑）」累加成一串（曾出现「xx（续跑）（续跑）」）。
+  // 续跑任务标题：反复续跑时不要把「（续跑）」累加成一串。
   _resumeTitle(base) {
     return String(base || '').replace(/（续跑）\s*$/, '').trim() + '（续跑）';
   }
@@ -3810,7 +3810,7 @@ class Api {
     return ok;
   }
   // 批量任务输出目录的异步校验（restoreTasks 的延后部分）。
-  // 语义与原先的同步版完全一致：记录指向有效目录则保留；失效时仅按「提交时刻 + 配置名」
+  // 语义：记录指向有效目录则保留；失效时仅按「提交时刻 + 配置名」
   // 确定性推算规范输出路径（脚本本就会创建的目录），绝不跨日/跨盘搜索猜替代品。
   // 与同步版的唯一差异：修正发生在任务恢复之后（首次 emitTasks 用的是记录值），
   // 有修正时会再发一次 emitTasks 让界面刷新 —— 换来的是启动关键路径不再被磁盘 IO 冻住。
@@ -5066,7 +5066,7 @@ class Api {
   // 校验 批量/复刻 配置参数是否已设置：数字须>0，字符串须非空（txt_prefix 允许空）。返回缺失项标签，空数组=齐全
   // ⚠ 复刻**不再校验** max_duration / speed_limit —— 这两项与批量拼接共用同一套（见 runReplica 内注释与
   //    BATCH_MAX_DURATION 等取值来源都是 config.batch），复刻配置里根本没有这两个字段；
-  //   若仍按复刻必填校验，前端一保存就会把空值写进 replica 并导致所有复刻任务启动被拒（2026-10-08 实报）。
+  //   若仍按复刻必填校验，前端一保存就会把空值写进 replica 并导致所有复刻任务启动被拒。
   _settingsError(group) {
     const cfg = this.config[group] || {};
     const nums = group === 'batch'
@@ -5452,7 +5452,7 @@ class Api {
 
   /**
    * 背景候选枚举：扫描目录（两层内）。**不再限制背景尺寸** —— 适配方式（填充 / 适应 / 拉伸）能处理任意尺寸，
-   * 尺寸只用于界面展示与「小于画布会被放大」的提醒（用户定案 2026-10-08：既然尺寸可调，背景就不该锁尺寸）。
+   * 尺寸只用于界面展示与「小于画布会被放大」的提醒（既然尺寸可调，背景就不该锁尺寸）。
    * 返回稳定排序（按路径）的清单，保证「同索引 = 同背景」，前端上一个/下一个切换才有确定性。
    */
   async canvasListBackgrounds(dir) {
@@ -5703,7 +5703,7 @@ class Api {
       // 磁盘产物上限（超出按 mtime 淘汰，避免长期堆积）
       this._canvasPreviewTrimAsync(outDir, 150);
       // ⚠ verb 用 RUN（info）：VERB_LVL 把 UI 映射为 error 级，而预览是**正常**操作 ——
-      //   用 UI 会让每次预览都进 error 日志与 30 天 error 索引（噪音，2026-10-08 修正）
+      //   用 UI 会让每次预览都进 error 日志与 30 天 error 索引
       this._lg('RUN', 'canvas.preview', '画布合成预览 · ' + pvW + '×' + pvH + ' · ' + (Date.now() - startedAt) + 'ms'
         + ' · 内容盒 ' + result.meta.contentBox.w + '×' + result.meta.contentBox.h
         + ' @' + result.meta.contentBox.x + ',' + result.meta.contentBox.y
@@ -7638,7 +7638,7 @@ let themes = [];
       emit({ phase: 'check' });
       // ── 主源：npmmirror 的 FFmpeg-Builds 镜像（BtbN 构建，国内可直连，版本可达 8.x）──
       // 旧的 ffmpeg-static 镜像**最高只有 6.1.1**，而 6.1.1 的进度行**不含 elapsed（实际耗时）**，
-      // 界面那一行「已用时」永远为空（2026-10-08 实测：9.0.2 有 elapsed=，6.1.1 没有）→ 换源。
+      // 界面那一行「已用时」会永远为空 → 故换此源。
       // 组件仍然**自带**在数据目录 ffmpeg\，**不依赖系统 PATH**（系统 PATH 可能中途异常/被清除，
       // 这正是当初做自动下载的原因 —— 不要改成"优先用系统上的那份"）。
       let ver = '';

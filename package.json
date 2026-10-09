@@ -18,7 +18,7 @@
     "publish": [
       {
         "provider": "generic",
-        "url": "https://github.com/BaronJason/video-lab/releases/latest/download"
+        "url": "https://github.com/HirannU-OVO/video-lab/releases/latest/download"
       }
     ],
     "directories": {

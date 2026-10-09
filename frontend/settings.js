@@ -774,7 +774,7 @@
     // 右上角 GitHub 按钮：打开主仓库主页
     var gh = document.getElementById('btnGitHub');
     if (gh && api && api.open_external) gh.addEventListener('click', function () {
-      api.open_external('https://github.com/BaronJason/video-lab').catch(function () {});
+      api.open_external('https://github.com/HirannU-OVO/video-lab').catch(function () {});
     });
     // 「维护」区：重建预检测缓存（低频兜底操作）。两段式确认，避免误触这个耗时动作
     var brp = document.getElementById('btnRebuildPrecheck');

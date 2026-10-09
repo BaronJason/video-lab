@@ -965,7 +965,7 @@ api.onVersionsChanged = sendVersionsChangedToAll;
 //         安装过程不经应用代码（早期曾实现自动安装脚本，因调试不稳定已弃用）
 // setup 安装版：electron-updater 静默升级安装并重启
 const UPDATE_ENABLED = true;
-const GITHUB_REPO = 'BaronJason/video-lab';
+const GITHUB_REPO = 'HirannU-OVO/video-lab';
 const GITEE_REPO = 'hirannu/video-lab';
 const UPDATE_API_URL = 'https://api.github.com/repos/' + GITHUB_REPO + '/releases/latest';
 // 码云 release 检查地址（GitHub 同款 API 结构：tag_name + assets[]）

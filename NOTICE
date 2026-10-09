@@ -2,12 +2,11 @@ Video Lab NOTICE
 ================
 
 授权：
-- 代码部分（除 frontend/skins/ 外）：MIT，见 LICENSE。
-- 皮肤部分（frontend/skins/ 整个目录）：CC BY-NC-SA 4.0，见该目录下许可文件。
+- 代码部分（除 frontend/skins/assets/ 外）：MIT，见 LICENSE。
+- 素材部分（frontend/skins/assets/ 下的图片素材）：CC BY-NC-SA 4.0，见该目录下许可文件。
 
-皮肤「深海女仆（Maid Atelier）」（frontend/skins/Maid_Atelier.css / Maid_Atelier.js
-及 frontend/skins/assets/ 下素材）移植自 maid-atelier（dsh-deep-whale 仓库），
-依据其 NOTICE 保留创作链：
+皮肤「深海女仆（Maid Atelier）」移植自 maid-atelier（dsh-deep-whale 仓库，上游同样按
+「代码 MIT / 素材 CC BY-NC-SA 4.0」分离授权）。依据其 NOTICE 保留创作链：
 
 1. 一创：上善（上善无形）—— 鲸鱼娘（whale-girl）角色形象原作
    Pixiv: https://www.pixiv.net/users/62155430
@@ -18,5 +17,5 @@ Video Lab NOTICE
 3. 三创（皮肤实现）：Small-tailqwq —— DeepSeek 元素再设计与皮肤工程实现
    仓库: https://github.com/Small-tailqwq/dsh-deep-whale（maid-atelier 子目录）
 
-皮肤工程脚手架：zhu1090093659/dsh-web-ui（作者 Solitude）
-https://github.com/zhu1090093659/dsh-web-ui
+皮肤工程脚手架：zhu1090093659/dsh-web（作者 Solitude，Apache-2.0）
+https://github.com/zhu1090093659/dsh-web

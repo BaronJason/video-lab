@@ -102,7 +102,7 @@ npx electron-builder --win --x64   # 打包（产出 win-unpacked 与 Setup 安�
 内置皮肤「深海女仆（Maid Atelier）」移植自开源皮肤项目 `maid-atelier`（dsh-deep-whale 仓库）：
 
 - 皮肤项目地址：<https://github.com/Small-tailqwq/dsh-deep-whale/tree/main/maid-atelier>
-- 皮肤源码与素材授权协议：知识共享 署名-非商业性使用-相同方式共享 4.0 国际（**[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)**）
+- 上游授权（分离）：**代码 MIT** / **素材 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)**（署名-非商业性使用-相同方式共享）
 
 按 CC BY-NC-SA 4.0 的署名要求，本皮肤保留完整创作链，原始作者与主页如下：
 
@@ -112,14 +112,14 @@ npx electron-builder --win --x64   # 打包（产出 win-unpacked 与 Setup 安�
 | 二创 | ZipZipPipe | 女仆鲸鱼娘二次设计（含 DeepSeek 元素，GPT Image 2 生成） | [Pixiv](https://www.pixiv.net/users/18604994) · [Bilibili](https://b23.tv/Pnw6nG8) |
 | 三创（皮肤实现） | Small-tailqwq | DeepSeek 元素再设计与皮肤工程实现 | [GitHub](https://github.com/Small-tailqwq/dsh-deep-whale) |
 
-皮肤工程脚手架来自 [zhu1090093659/dsh-web-ui](https://github.com/zhu1090093659/dsh-web-ui)（作者：Solitude）。
+皮肤工程脚手架来自 [zhu1090093659/dsh-web](https://github.com/zhu1090093659/dsh-web)（作者：Solitude，Apache-2.0）。
 
 依据授权条款：本皮肤素材仅限**非商业性**使用；对包含本皮肤的部分进行再分发或修改时，须以**相同方式共享（ShareAlike）**并保留上述署名与完整创作链。
 
 本仓库采用分离授权：
 
-- **代码部分**（除 `frontend/skins/` 外）：**[MIT](./LICENSE)**
-- **皮肤部分**（`frontend/skins/` 整个目录）：**[CC BY-NC-SA 4.0](./frontend/skins/LICENSE-CC-BY-NC-SA-4.0.txt)** —— 仅限非商业性使用
+- **代码部分**（除 `frontend/skins/assets/` 外）：**[MIT](./LICENSE)**
+- **素材部分**（`frontend/skins/assets/` 下的图片素材）：**[CC BY-NC-SA 4.0](./frontend/skins/assets/LICENSE-CC-BY-NC-SA-4.0.txt)** —— 仅限非商业性使用
 
 创作链与第三方素材声明见 [`NOTICE`](./NOTICE)。
 

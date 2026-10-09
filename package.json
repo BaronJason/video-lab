@@ -40,6 +40,9 @@
       "icon/**/*",
       "README.md",
       "CHANGELOG.md",
+      "LICENSE",
+      "LICENSE-ARTWORK",
+      "NOTICE",
       "package.json"
     ],
     "extraResources": [

@@ -3,7 +3,8 @@ Video Lab NOTICE
 
 授权：
 - 代码部分（除 frontend/skins/assets/ 外）：MIT，见 LICENSE。
-- 素材部分（frontend/skins/assets/ 下的图片素材）：CC BY-NC-SA 4.0，见该目录下许可文件。
+- 素材部分（frontend/skins/assets/ 下的图片素材）：CC BY-NC-SA 4.0，见 LICENSE-ARTWORK
+  （该素材目录内另有一份许可副本，随分发包一并提供）。
 
 皮肤「深海女仆（Maid Atelier）」移植自 maid-atelier（dsh-deep-whale 仓库，上游同样按
 「代码 MIT / 素材 CC BY-NC-SA 4.0」分离授权）。依据其 NOTICE 保留创作链：

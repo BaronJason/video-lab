@@ -119,7 +119,7 @@ npx electron-builder --win --x64   # 打包（产出 win-unpacked 与 Setup 安�
 本仓库采用分离授权：
 
 - **代码部分**（除 `frontend/skins/assets/` 外）：**[MIT](./LICENSE)**
-- **素材部分**（`frontend/skins/assets/` 下的图片素材）：**[CC BY-NC-SA 4.0](./frontend/skins/assets/LICENSE-CC-BY-NC-SA-4.0.txt)** —— 仅限非商业性使用
+- **素材部分**（`frontend/skins/assets/` 下的图片素材）：**[CC BY-NC-SA 4.0](./LICENSE-ARTWORK)** —— 仅限非商业性使用
 
 创作链与第三方素材声明见 [`NOTICE`](./NOTICE)。
 

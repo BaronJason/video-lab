@@ -22,6 +22,4 @@ SOFTWARE.
 
 ---
 
-注意：本 MIT 许可适用于**本仓库除 frontend/skins/ 目录外的全部内容**。
-frontend/skins/（皮肤 CSS / JS 与 assets 素材）适用 CC BY-NC-SA 4.0（署名-非商业性使用-相同方式共享），
-完整条款见 frontend/skins/LICENSE-CC-BY-NC-SA-4.0.txt，来源与创作链见 NOTICE。
+frontend/skins/ 目录适用 CC BY-NC-SA 4.0，详见 NOTICE。

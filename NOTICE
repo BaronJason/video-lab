@@ -1,8 +1,15 @@
 Video Lab NOTICE
 ================
 
-本仓库基于 CC BY-NC-SA 4.0（署名-非商业性使用-相同方式共享）整体授权，完整条款见
-LICENSE。以下为第三方素材与衍生创作的署名链：
+本仓库采用**分离授权**（代码与皮肤适用不同许可）：
+
+1. **代码部分** —— 本仓库除 frontend/skins/ 目录外的全部内容（Electron 主进程、
+   后端、引擎、前端逻辑、构建脚本等）：**MIT License**，完整条款见根目录 LICENSE。
+2. **皮肤部分** —— frontend/skins/ 整个目录（各皮肤 CSS / JS 与 assets 下素材）：
+   **CC BY-NC-SA 4.0**（署名-非商业性使用-相同方式共享），
+   完整条款见 frontend/skins/LICENSE-CC-BY-NC-SA-4.0.txt。
+
+皮肤部分**受上游授权约束**（来源与创作链如下），因此不能随代码一并转为 MIT：
 
 皮肤「深海女仆（Maid Atelier）」（frontend/skins/Maid_Atelier.css / Maid_Atelier.js
 及 frontend/skins/assets/ 下素材）移植自 maid-atelier（dsh-deep-whale 仓库），
@@ -20,5 +27,5 @@ LICENSE。以下为第三方素材与衍生创作的署名链：
 皮肤工程脚手架：zhu1090093659/dsh-web-ui（作者 Solitude）
 https://github.com/zhu1090093659/dsh-web-ui
 
-依据 CC BY-NC-SA 4.0：本仓库（含皮肤素材）仅限非商业性使用；再分发或修改须以
-相同方式共享并保留上述署名与完整创作链。
+依据 CC BY-NC-SA 4.0：**皮肤部分**仅限非商业性使用；对皮肤部分再分发或修改时，
+须以**相同方式共享（ShareAlike）**并保留上述署名与完整创作链。

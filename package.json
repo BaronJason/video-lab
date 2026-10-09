@@ -3,6 +3,7 @@
   "version": "2.4.1",
   "description": "Video Lab",
   "author": "Video Lab",
+  "license": "MIT",
   "main": "main.js",
   "scripts": {
     "start": "node run.js"

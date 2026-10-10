@@ -610,7 +610,9 @@ async function run(ctx, env = process.env) {
   // ── 索引自动修复不存在的目录 ──
   const invalidInput = async (msg) => {
     if (msg) { logger.info(''); logger.info(msg); }
-    logger.info('请手动修改TXT后重新拖入。');
+    // ⚠ 不要说「请修改 TXT」—— 走到这里的多数原因跟 TXT 无关（素材不合规、水印不是 PNG、
+    //   文件夹里没有视频…），旧文案会把人往错误方向引。改为中性、可执行的措辞。
+    logger.info('请按上面的提示处理后，重新拖入 TXT。');
     return 1;
   };
   const missingPaths = folderLines.filter((p) => !exists(p));
@@ -830,7 +832,8 @@ async function run(ctx, env = process.env) {
 
     if (allVideos.length === 0) {
       logger.info('');
-      logger.info(`❌ 路径 ${f} 过滤后无任何合规视频（分辨率/时长不符，或 FFprobe 不可用）`);
+      // 写清「什么才算合规」：旧文案只说"分辨率/时长不符"，用户无从知道标准是竖版 1080×1920
+      logger.info(`❌ 路径 ${f} 里没有可用素材：只认竖版 1080×1920 且有时长的视频（素材确实符合时，请检查 FFprobe 是否可用）`);
       return invalidInput('');
     }
 

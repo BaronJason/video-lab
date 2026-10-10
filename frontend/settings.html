@@ -392,6 +392,16 @@
           <button type="button" class="btn btn-ghost" id="btnExportDiagMasked">路径打码后导出</button>
         </div>
       </div>
+
+      <div class="settings-group"><span class="settings-group__title">数据目录</span></div>
+      <div class="form-group">
+        <div class="form-group__desc">软件运行中留下的中间产物与历史残留（成片、备份、日志不在此列）。清理<b>一律进回收站</b>，可随时还原。</div>
+        <div class="opt-row">
+          <button type="button" class="btn btn-ghost" id="btnDataDirScan">查看可清理项</button>
+          <button type="button" class="btn btn-ghost" id="btnDataDirClean">清理勾选项</button>
+        </div>
+        <div id="dataDirList" style="display:none;margin-top:8px"></div>
+      </div>
     </section>
 
     <section class="settings-view" id="view-changelog">

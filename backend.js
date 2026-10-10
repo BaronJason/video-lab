@@ -2302,6 +2302,163 @@ class Api {
     return { ok: true, removed: r.removed || 0, freed: r.freed || 0, size: r.size || 0 };
   }
 
+  // ── A6（「内置FFmpeg与数据目录自维护·方案」§五）：数据目录清理 ──
+  // 口径：**宁少勿多，绝不误伤**。
+  //   · 只清「可再生的内部产物」与「历史残留」；成片、备份、日志一律不碰；
+  //   · 日志是事后唯一证据（见《日志体系方案》）→ 只展示体积、永不清理，按各自保留期自清；
+  //   · ⚠ **在跑 / 排队 / 暂停 / 失败 / 停止的任务，其 TXT 快照是「启动前还原配置」与「续跑」的
+  //     唯一依据 —— 必须保留**。这是本功能最容易踩的坑：一键清理若把排队任务的快照清掉，
+  //     那些任务启动时就拿不到自己的配置了。
+  //   · ffmpeg\ 仅在「当前正用它」时不可清，换过组件目录的用户可据此回收（本机 310 MB）。
+  _ddSize(p) {
+    try { const st = fs.statSync(p); return st.isFile() ? st.size : 0; } catch (e) { return 0; }
+  }
+  // 递归汇总目录内的文件清单与体积
+  _ddWalk(d) {
+    const files = [];
+    const w = (x) => {
+      let ns = [];
+      try { ns = fs.readdirSync(x, { withFileTypes: true }); } catch (e) { return; }
+      for (const e2 of ns) {
+        const p = path.join(x, e2.name);
+        if (e2.isDirectory()) w(p); else files.push(p);
+      }
+    };
+    w(d);
+    return files;
+  }
+  // 扫描数据目录 → 可清项清单（含体积 / 条数 / 不可清原因）
+  dataDirScan() {
+    const dir = String(this.storageDir || '');
+    const tasks = this.tasks || new Map();
+    const items = [];
+    const add = (o) => items.push(Object.assign(
+      { key: '', label: '', count: 0, bytes: 0, files: [], cleanable: true, reason: '', desc: '' }, o));
+    const abs = (n) => path.join(dir, n);
+
+    // ① 画布预览中间产物（A4 起改为生成后即删；此处清历史遗留）
+    try {
+      const pv = abs('preview');
+      const files = fs.existsSync(pv)
+        ? fs.readdirSync(pv).filter((n) => /\.(png|jpe?g)$/i.test(n)).map((n) => path.join(pv, n)) : [];
+      add({ key: 'preview', label: '画布预览中间产物', files,
+        desc: '预览图只为在界面上显示一次，用完即无价值（新版本已改为生成后立即删除，这里是历史遗留）' });
+    } catch (e) {}
+
+    // ② TXT 提交快照：只清「任务已不存在 / 已完成 / 超 30 天」三类
+    try {
+      const sd = abs('txt-snap');
+      const all = fs.existsSync(sd) ? fs.readdirSync(sd).filter((n) => /\.txt$/i.test(n)) : [];
+      const DEAD = 30 * 24 * 3600 * 1000, now = Date.now();
+      const dead = [], keep = [];
+      for (const n of all) {
+        const p = path.join(sd, n);
+        const t = tasks.get(n.replace(/\.txt$/i, ''));
+        let age = 0;
+        try { age = now - fs.statSync(p).mtimeMs; } catch (e) { age = 0; }
+        if (!t || t.status === 'done' || age > DEAD) dead.push(p);   // 任务没了 / 已完成 / 早已过期
+        else keep.push(n);                                            // 未完成：续跑与启动前还原还要用
+      }
+      // ⚠ 必须写 files: dead —— 这条曾是 `files` 简写（该作用域无此变量），
+      //   ReferenceError 被外层 catch 静默吞掉，导致整项从清单里消失且毫无提示（已被隔离测试抓出）。
+      add({ key: 'txtsnap', label: 'TXT 提交快照（已无用）', files: dead,
+        desc: '快照只在任务启动前用于还原配置；任务已完成、已不存在或超过 30 天时它再无用途' });
+      if (keep.length) {
+        add({ key: 'txtsnap-live', label: 'TXT 提交快照（保留中）', cleanable: false, count: keep.length,
+          reason: '有 ' + keep.length + ' 个任务在跑 / 排队 / 未完成，它们启动或续跑时要按快照还原配置',
+          desc: '这些任务结束后会自动清理，不必手动处理' });
+      }
+    } catch (e) {}
+
+    // ③ 配置备份残留（如 config.json.bak-rootswitch：切换保存位置时留下的旧副本）
+    try {
+      const files = fs.existsSync(dir)
+        ? fs.readdirSync(dir).filter((n) => /\.bak(-|$)/i.test(n)).map((n) => abs(n)) : [];
+      add({ key: 'cfgbak', label: '配置备份残留', files,
+        desc: '切换保存位置 / 迁移时留下的旧副本；确认当前配置正常后即可清理（进回收站，可还原）' });
+    } catch (e) {}
+
+    // ④ 数据搬迁残留（*.migrated）：数据搬进 AppData 后，旧位置三个库改名留下的副本
+    try {
+      const dirs = [dir];
+      try {
+        const el = require('electron');
+        if (el && el.app && el.app.isPackaged) dirs.push(path.dirname(process.execPath));
+      } catch (e) { /* 非 Electron 环境：只扫数据目录 */ }
+      const files = [];
+      for (const d of dirs) {
+        let ns = [];
+        try { ns = fs.readdirSync(d); } catch (e) { continue; }
+        for (const n of ns) if (/\.migrated$/.test(n)) files.push(path.join(d, n));
+      }
+      add({ key: 'migrated', label: '数据搬迁残留', files,
+        desc: '数据搬进 AppData 后，旧位置三个库改名留下的副本（回滚取证用）；新版数据确认正常后即可清理' });
+    } catch (e) {}
+
+    // ⑤ FFmpeg 组件目录：**只有当前没在用它**时才可清
+    try {
+      const ffDir = abs('ffmpeg');
+      const files = fs.existsSync(ffDir) ? this._ddWalk(ffDir) : [];
+      const active = String(this._resolveFfmpegBin().cfgDir || '');
+      let inUse = true;   // 判不出来时按"在用"处理 —— 宁可少清，不能把软件清坏
+      try { if (active) inUse = path.resolve(active) === path.resolve(ffDir); } catch (e) { inUse = true; }
+      add({ key: 'ffmpeg', label: 'FFmpeg 组件目录', files, cleanable: !inUse,
+        reason: inUse ? '当前正在使用这份组件，清理后软件将无法处理视频' : '',
+        desc: inUse ? '' : '当前使用的是另一份组件，这份可以回收' });
+    } catch (e) {}
+
+    // ⑥⑦ 只展示不清理的两项：让用户知道它们的去向，免得以为"没清干净"
+    try {
+      const lg = this._ddWalk(abs('log'));
+      add({ key: 'log', label: '运行日志', files: [], cleanable: false, count: lg.length,
+        bytes: lg.reduce((s, p) => s + this._ddSize(p), 0),
+        reason: '日志是排查「某次成片去哪了」的唯一证据，任何清理都不触碰它',
+        desc: '按各自保留期自动清理（app 7 天 / error 30 天 / engine 7 天）' });
+      const bk = this._ddWalk(abs('backup'));
+      add({ key: 'backup', label: '处理前备份', files: [], cleanable: false, count: bk.length,
+        bytes: bk.reduce((s, p) => s + this._ddSize(p), 0),
+        reason: '属于你的数据，只能由你决定',
+        desc: '在「视频处理」设置里开启自动清理并按保留天数处理' });
+    } catch (e) {}
+
+    // 体积/条数只在可清项上按文件清单算（不可清项已自行给出）
+    for (const it of items) {
+      if (!it.files.length) continue;
+      it.count = it.files.length;
+      it.bytes = it.files.reduce((s, p) => s + this._ddSize(p), 0);
+    }
+    const cl = items.filter((it) => it.cleanable && it.files.length);
+    return {
+      ok: true, dir, items,
+      cleanableCount: cl.reduce((s, it) => s + it.count, 0),
+      cleanableBytes: cl.reduce((s, it) => s + it.bytes, 0),
+    };
+  }
+  // 执行清理：一律进回收站（可还原，遵循项目硬约束）；清完重新扫描，返回最新状态
+  dataDirClean(keys) {
+    const want = Array.isArray(keys) ? keys.map(String) : [];
+    const scan = this.dataDirScan();
+    const picked = scan.items.filter((it) => want.indexOf(it.key) >= 0 && it.cleanable && it.files.length);
+    let removed = 0, freed = 0;
+    for (const it of picked) {
+      for (const f of it.files) {
+        const sz = this._ddSize(f);
+        if (this._recycleFile(f)) { removed++; freed += sz; }
+      }
+    }
+    // 空目录顺手收掉：只收 preview —— txt-snap 里可能还有在跑任务的快照，绝不能整个动
+    try {
+      const pv = path.join(String(this.storageDir || ''), 'preview');
+      if (fs.existsSync(pv) && fs.readdirSync(pv).length === 0) fs.rmdirSync(pv);
+    } catch (e) {}
+    try {
+      this._lg('SYS', 'datadir.clean',
+        '清理数据目录 · 移除 ' + removed + ' 项 · 释放 ' + this._humanSize(freed),
+        { keys: picked.map((it) => it.key), removed, freed });
+    } catch (e) {}
+    return Object.assign({ ok: true, removed, freed }, this.dataDirScan());
+  }
+
   // 启动后空闲期的失效清理：**入队**（不分冷热），由空闲队列串行 + 自适应节流执行；
   // 剩下的条目留给后续轮次 —— 清理是维护任务，慢一点没有代价，但绝不能把界面冻住。
   async gcVideoCacheIdle(perJob) {
@@ -3408,7 +3565,9 @@ class Api {
       [/一次性编码失败/, '视频编码失败（请检查源视频与 ffmpeg）'],
       [/无法自动修复/, '存在缺失的视频片段且无法自动修复'],
       [/检测到\s*\d+\s*个片段不存在/, '存在缺失的视频片段'],
-      [/路径\s*.+?\s*过滤后无任何合规视频/, envBad ? 'FFmpeg / FFprobe 不可用' : '没有符合分辨率/时长要求的视频'],
+      // ⚠ 两个分支都要留：新文案（里没有可用素材）+ 旧文案（过滤后无任何合规视频）——
+      //   历史任务的日志里写的是旧句，去掉旧分支会让「重开旧任务」的原因归类失效。
+      [/路径\s*.+?\s*(过滤后无任何合规视频|里没有可用素材)/, envBad ? 'FFmpeg / FFprobe 不可用' : '没有可用素材（只认竖版 1080×1920 且有时长的视频）'],
       [/以下路径无法通过索引自动修复/, '存在无法解析的视频路径，请检查 TXT 配置'],
       [/水印必须是有效PNG文件/, '水印文件无效（必须为 PNG 图片）'],
       [/无有效视频文件夹/, '没有可用的视频文件夹'],
@@ -5769,8 +5928,9 @@ class Api {
         const first = this._canvasPreviewCache.keys().next();
         if (!first.done) this._canvasPreviewCache.delete(first.value);
       }
-      // 磁盘兜底：新产物已即删，这里只负责清掉**旧版本遗留**的 canvas-*.png（清空后即无事可做，开销可忽略）
-      this._canvasPreviewTrimAsync(outDir, 150);
+      // 磁盘兜底：新产物已即删，此目录**不应有任何文件**，故上限取 0 ——
+      // 既清掉旧版本遗留的 canvas-*.png（本机曾达 150 个 / 74 MB），清空后也无需再管（开销可忽略）。
+      this._canvasPreviewTrimAsync(outDir, 0);
       // ⚠ verb 用 RUN（info）：VERB_LVL 把 UI 映射为 error 级，而预览是**正常**操作 ——
       //   用 UI 会让每次预览都进 error 日志与 30 天 error 索引
       this._lg('RUN', 'canvas.preview', '画布合成预览 · ' + pvW + '×' + pvH + ' · ' + (Date.now() - startedAt) + 'ms'

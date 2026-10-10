@@ -859,6 +859,78 @@
         toast('清理失败：' + ((e && e.message) || e), true);
       });
     });
+    // 「数据目录」清理（A6）：扫描 → 勾选 → 清理。
+    // 不可清项照样列出来（灰显 + 原因）—— 让用户知道它们为什么还在，免得以为「没清干净」。
+    var ddList = document.getElementById('dataDirList');
+    var bDDScan = document.getElementById('btnDataDirScan');
+    var bDDClean = document.getElementById('btnDataDirClean');
+    function ddRender(r) {
+      if (!ddList) return;
+      ddList.textContent = '';
+      var its = (r && r.items) || [];
+      var head = document.createElement('div');
+      head.className = 'form-group__desc';
+      head.textContent = '可清理 ' + fmtNum((r && r.cleanableCount) || 0) + ' 项 · '
+        + fmtSize((r && r.cleanableBytes) || 0) + (r && r.dir ? '　' + r.dir : '');
+      ddList.appendChild(head);
+      its.forEach(function (it) {
+        if (!it) return;
+        var n = it.count || 0;
+        if (!it.cleanable && !n) return;                 // 既不可清又没东西：不占版面
+        var lb = document.createElement('label');
+        lb.className = 'opt-check';
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.setAttribute('data-dd-key', String(it.key || ''));
+        cb.checked = !!(it.cleanable && n);
+        cb.disabled = !it.cleanable || !n;
+        lb.appendChild(cb);
+        var bx = document.createElement('span'); bx.className = 'opt-check__box'; lb.appendChild(bx);
+        var tx = document.createElement('span');
+        tx.textContent = (it.label || it.key) + '　' + (n ? fmtNum(n) + ' 项 · ' + fmtSize(it.bytes) : '无')
+          + (it.cleanable ? '' : '（保留：' + (it.reason || '—') + '）');
+        lb.appendChild(tx);
+        ddList.appendChild(lb);
+        if (it.desc) {
+          var d = document.createElement('div');
+          d.className = 'form-group__desc';
+          d.style.marginLeft = '22px';
+          d.textContent = it.desc;
+          ddList.appendChild(d);
+        }
+      });
+      ddList.style.display = '';
+    }
+    if (bDDScan && api && api.data_dir_scan) bDDScan.addEventListener('click', function () {
+      bDDScan.disabled = true;
+      api.data_dir_scan().then(function (r) {
+        bDDScan.disabled = false;
+        ddRender(r);
+      }).catch(function (e) {
+        bDDScan.disabled = false;
+        toast('读取数据目录失败：' + ((e && e.message) || e), true);
+      });
+    });
+    if (bDDClean && api && api.data_dir_clean) bDDClean.addEventListener('click', function () {
+      if (!ddList) return;
+      var keys = [];
+      ddList.querySelectorAll('input[data-dd-key]').forEach(function (c) {
+        if (c.checked && !c.disabled) keys.push(c.getAttribute('data-dd-key'));
+      });
+      if (!keys.length) { toast('没有勾选任何可清理项', true); return; }
+      bDDClean.disabled = true;
+      bDDClean.textContent = '清理中…';
+      api.data_dir_clean(keys).then(function (r) {
+        bDDClean.disabled = false;
+        bDDClean.textContent = '清理勾选项';
+        toast('已清理：移除 ' + ((r && r.removed) || 0) + ' 项，释放 ' + fmtSize((r && r.freed) || 0), 'ok');
+        ddRender(r);
+      }).catch(function (e) {
+        bDDClean.disabled = false;
+        bDDClean.textContent = '清理勾选项';
+        toast('清理失败：' + ((e && e.message) || e), true);
+      });
+    });
     // 「缓存管理」：偏好单选触发保存（off=0 / auto=天数）；天数下拉始终可改
     var iCacheKeep2 = document.getElementById('cacheKeepDays');
     var cacheRadios = document.querySelectorAll('input[name="cachePolicy"]');

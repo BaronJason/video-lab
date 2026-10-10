@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld('txapi', {
   cache_info: () => invoke('cache_info'),
   cache_stats: () => invoke('cache_stats'),
   clean_caches: () => invoke('clean_caches'),
+  data_dir_scan: () => invoke('data_dir_scan'),                 // A6 数据目录清理：扫描可清项
+  data_dir_clean: (keys) => invoke('data_dir_clean', keys),    // A6 数据目录清理：执行（进回收站）
   cancel_precheck: () => invoke('cancel_precheck'),
   get_autostart: () => invoke('get_autostart'),
   set_autostart: (en) => invoke('set_autostart', !!en),

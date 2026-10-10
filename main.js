@@ -1923,6 +1923,9 @@ function buildHttpExtraRoutes() {
     // is_portable 保留原语义（IS_PORTABLE，仅表达 electron-builder portable target 形态）。
     get_runtime: () => ({ is_portable: IS_PORTABLE, portable_dist: isPortableDistribution(), version: APP_VERSION }),
     get_app_version: () => APP_VERSION,
+    // A6 数据目录清理（HTTP 侧同样开放，便于浏览器与脚本调用；扫描为只读，清理一律进回收站）
+    data_dir_scan: () => api.dataDirScan(),
+    data_dir_clean: (args) => api.dataDirClean(args && args[0]),
     // 返回带 token 的浏览器访问地址（含真实 token）；HTTP 侧需要自身已带 token 才能调用（本机防护），
     // Electron 本体侧 ipcMain 无需 token —— 用于设置页/开发测试获取链接
     get_browser_url: () => {
@@ -1971,6 +1974,8 @@ function registerIpc() {
   ipcMain.handle('cache_info', () => api.cacheInfo());
   ipcMain.handle('cache_stats', () => api.cacheStats());
   ipcMain.handle('clean_caches', () => api.cleanCaches());
+  ipcMain.handle('data_dir_scan', () => api.dataDirScan());                    // A6 数据目录清理：扫描可清项
+  ipcMain.handle('data_dir_clean', (e, keys) => api.dataDirClean(keys));       // A6 数据目录清理：执行（进回收站）
   ipcMain.handle('list_logs', (e, project, name, versionPath) => api.listLogs(project, name, versionPath));
   ipcMain.handle('search_logs', (e, query) => api.searchLogs(query));
   ipcMain.handle('get_log_content', (e, fromPath, configName) => api.logContent(fromPath, configName));

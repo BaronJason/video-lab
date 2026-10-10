@@ -4239,6 +4239,9 @@ class Api {
   _removeTaskArtifacts(task) {
     // 产物即将被移除 → 让成片存在性结论立即失效（内存 + verify_cache；否则界面仍按旧结论显示）
     this._invalidateHasOutput(task && task.id);
+    // A5（数据目录自维护）：快照是「任务专属 TXT 副本」，只在任务启动前用于还原配置。
+    // 产物既已移除、任务记录即将消失，快照即成孤儿 → 直接删除（无用户价值，不必进回收站）。
+    try { fs.unlinkSync(this._txtSnapPath(task && task.id)); } catch (e2) { /* 无快照或已清都无妨 */ }
     // 一律移入回收站（可还原），不做永久删除
     const rm = (p) => { try { if (p && fs.existsSync(p)) this._recycleFile(p); } catch (e2) {} };
     // 1) 日志中列出的成片
@@ -4985,6 +4988,12 @@ class Api {
           }
           task.status = status;
           task.paused = false;
+          // A5（数据目录自维护）：任务到终态且**全部成功**时，提交快照已无用 ——
+          // 它只在任务「启动前」用于还原 TXT（解决排队期配置被覆盖/被同目录任务搬走）。
+          // 失败 / 停止 / 暂停 / 中断一律保留：它们还要「继续制作」，届时仍需按快照还原配置。
+          if (status === 'done') {
+            try { fs.unlinkSync(this._txtSnapPath(task.id)); } catch (e) { /* 无快照或已清都无妨 */ }
+          }
           // 终态进度补满（仅成功）：进度条在「clip / clipTarget」分支显示的是**最后一个成片的编码进度**，
           // 而编码收尾帧的 time 几乎必然略小于时长（实测停在 89% / 95%）——任务已全部完成，
           // 这个半截进度只会让人误会"没做完"。error / stopped / paused 保留真实进度（供续跑判断）。
@@ -5695,6 +5704,7 @@ class Api {
     if ((this._canvasPreviewRunning || 0) >= 2) return { ok: false, error: 'BUSY' };
     this._canvasPreviewRunning = (this._canvasPreviewRunning || 0) + 1;
     const startedAt = Date.now();
+    let previewFiles = [];   // A4：本轮生成的 PNG，finally 统一删除（成功与失败都不留残留）
     try {
       const outDir = path.join(this.storageDir || '', 'preview');
       await fs.promises.mkdir(outDir, { recursive: true });
@@ -5734,13 +5744,18 @@ class Api {
       const toData = (f) => {
         try { return 'data:image/png;base64,' + fs.readFileSync(f).toString('base64'); } catch (e) { return ''; }
       };
+      // A4（数据目录自维护）：三张 PNG 是「生成 base64 的中间产物」，不是需要留存的缓存 ——
+      // 前端拿 base64 渲染（tool.js 用它赋 img.src），从不读文件路径（原 files 字段前端零使用）；
+      // 唯一的“缓存”是下方内存 Map（重启即空、存的是 base64 而非路径）。
+      // 故**读完即删**（finally 统一清理，成功与失败路径都不留残留），目录永不增长。
+      // 同参数再次请求会命中内存缓存、不重跑 ffmpeg；缓存被淘汰则重跑并再次即删。
+      previewFiles = [outC, outB, outR];
       const result = {
         composed: toData(outC),
         bgOnly: toData(outB),
         raw: toData(outR),
         previewScale: scale,
         previewW: pvW, previewH: pvH,
-        files: { composed: outC, bgOnly: outB, raw: outR },
         meta: Object.assign({}, plan.meta, {
           at: at, duration: cInfo.duration || 0,
           bgTotal: bgTotal, bgIndex: bgIndexUsed,
@@ -5754,7 +5769,7 @@ class Api {
         const first = this._canvasPreviewCache.keys().next();
         if (!first.done) this._canvasPreviewCache.delete(first.value);
       }
-      // 磁盘产物上限（超出按 mtime 淘汰，避免长期堆积）
+      // 磁盘兜底：新产物已即删，这里只负责清掉**旧版本遗留**的 canvas-*.png（清空后即无事可做，开销可忽略）
       this._canvasPreviewTrimAsync(outDir, 150);
       // ⚠ verb 用 RUN（info）：VERB_LVL 把 UI 映射为 error 级，而预览是**正常**操作 ——
       //   用 UI 会让每次预览都进 error 日志与 30 天 error 索引
@@ -5770,6 +5785,8 @@ class Api {
       return { ok: false, error: '预览渲染失败：' + msg };
     } finally {
       this._canvasPreviewRunning = Math.max(0, (this._canvasPreviewRunning || 1) - 1);
+      // A4：读完 base64 即删（成功与失败路径都不留残留；文件不存在/已被清也无妨）
+      for (const f of previewFiles) { try { fs.unlinkSync(f); } catch (e) { /* 忽略 */ } }
     }
   }
 

@@ -527,16 +527,21 @@ async function run(ctx, env = process.env) {
   };
 
   // ── TXT 输入校验 ──
+  // ⚠ 失败文案面向**普通用户**：只讲「怎么了 + 怎么办」，禁止出现「环境变量 / 脚本 / 手动输入」等
+  //   技术措辞（用户不会用命令行，写出来只会让人以为是自己操作错了）。
   const txtCandidate = stripQuotes(cfg.txt).replace(/^"|"$/g, '');
   let txtFilePath = '';
+  if (!txtCandidate) {
+    return fail('未选择配置文件：请在主窗口选择配置 TXT 后重新开始制作', 'TXT输入');
+  }
   try {
-    if (txtCandidate && fs.statSync(txtCandidate).isFile() && path.extname(txtCandidate).toLowerCase() === '.txt') {
+    if (fs.statSync(txtCandidate).isFile() && path.extname(txtCandidate).toLowerCase() === '.txt') {
       txtFilePath = txtCandidate;
-      logger.info(`✅ 已通过 REPLICA_TXT 指定TXT文件: ${path.basename(txtFilePath)}`);
+      logger.info(`✅ 配置文件：${path.basename(txtFilePath)}`);
     }
   } catch (e) { txtFilePath = ''; }
   if (!txtFilePath) {
-    return fail('未通过环境变量 REPLICA_TXT 提供 TXT 文件（脚本由 Video Lab 驱动，不再支持手动输入）', 'TXT输入');
+    return fail(`配置文件不可用：${txtCandidate}（可能已被移动、重命名或删除，请在主窗口重新选择配置后开始制作）`, 'TXT输入');
   }
 
   const txtDir = path.dirname(txtFilePath);
@@ -578,9 +583,11 @@ async function run(ctx, env = process.env) {
     allLines = fs.readFileSync(txtFilePath, 'utf8').replace(/^\uFEFF/, '')
       .split(/\r?\n/).map((l) => l.trim()).filter((l) => /\S/.test(l));
   } catch (e) {
-    return fail(`读取 TXT 失败：${e.message}`, 'TXT输入');
+    // 原始系统错误（如 ENOENT/权限）只进日志供排查，用户可见文案不暴露英文技术细节
+    logger.error('TXT输入', '读取配置失败（底层错误）：' + e.message);
+    return fail('读取配置失败：文件可能已损坏或无法访问，请重新选择配置 TXT 后开始制作', 'TXT输入');
   }
-  if (allLines.length < 2) return fail('TXT至少需要1个文件夹+1个水印', 'TXT输入');
+  if (allLines.length < 2) return fail('配置内容不完整：至少需要 1 个文件夹和 1 个水印，请检查配置 TXT 的内容', 'TXT输入');
 
   const watermark = stripQuotes(allLines[allLines.length - 1]);
   const excludePaths = [];
@@ -859,7 +866,7 @@ async function run(ctx, env = process.env) {
   logger.info('');
   logger.info('设置生成数量');
   if (cfg.count == null || cfg.count <= 0) {
-    return fail('未通过环境变量 BATCH_COUNT 指定生成数量（脚本由 Video Lab 驱动）', '生成数量');
+    return fail('未设置生成数量：请在主窗口设置份数后重新开始制作', '生成数量');
   }
   const totalOutput = cfg.count;
   logger.info(`已通过 BATCH_COUNT 指定生成数量: ${totalOutput}`);
@@ -869,7 +876,7 @@ async function run(ctx, env = process.env) {
     logger.info('');
     logger.info('设置分组数');
     if (cfg.group == null) {
-      return fail('未通过环境变量 BATCH_GROUP 指定分组数（脚本由 Video Lab 驱动）', '分组数');
+      return fail('未设置分组数：请在主窗口设置分组后重新开始制作', '分组数');
     }
     groupCount = cfg.group;
     logger.info(`已通过 BATCH_GROUP 指定分组数: ${groupCount}`);

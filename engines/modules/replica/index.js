@@ -643,10 +643,12 @@ async function run(ctx, env = process.env) {
   const fail = (msg, step) => { logger.diag('fail', { step: String(step || ''), msg: String(msg || '').slice(0, 300) }); logger.error(step, msg); return 1; };
 
   // ── 输入 TXT ──
-  if (!cfg.txt) return fail('未通过环境变量 REPLICA_TXT 提供日志 TXT 文件（脚本由 Video Lab 驱动，不再支持手动输入）', '日志TXT输入');
+  // ⚠ 失败文案面向**普通用户**：只讲「怎么了 + 怎么办」，禁止出现「环境变量 / 脚本 / 手动输入」等
+  //   技术措辞（用户不会用命令行，写出来只会让人以为是自己操作错了）。
+  if (!cfg.txt) return fail('未选择复刻日志：请在主窗口选择日志 TXT 后重新开始制作', '日志TXT输入');
   let txtPath = stripQuotes(cfg.txt);
-  if (!exists(txtPath)) return fail('未通过环境变量 REPLICA_TXT 提供日志 TXT 文件（脚本由 Video Lab 驱动，不再支持手动输入）', '日志TXT输入');
-  logger.info(`✅ 已通过 REPLICA_TXT 指定TXT文件: ${path.basename(txtPath)}`);
+  if (!exists(txtPath)) return fail(`复刻日志不可用：${txtPath}（可能已被移动、重命名或删除，请在主窗口重新选择日志后开始制作）`, '日志TXT输入');
+  logger.info(`✅ 复刻日志：${path.basename(txtPath)}`);
 
   // ── 输出根目录：REPLICA_OUTPUT_DIR 优先，否则由 TXT 路径推导 ──
   const txtDir = path.dirname(txtPath);
@@ -672,9 +674,11 @@ async function run(ctx, env = process.env) {
   try {
     allLines = fs.readFileSync(txtPath, 'utf8').split(/\r?\n/).map((s) => s.trim()).filter((s) => /\S/.test(s));
   } catch (e) {
-    return fail(`读取日志 TXT 失败：${e.message}`, '日志TXT输入');
+    // 原始系统错误（如 ENOENT/权限）只进日志供排查，用户可见文案不暴露英文技术细节
+    logger.error('日志TXT输入', '读取复刻日志失败（底层错误）：' + e.message);
+    return fail('读取复刻日志失败：文件可能已损坏或无法访问，请重新选择日志后开始制作', '日志TXT输入');
   }
-  if (!/使用片段列表：/.test(allLines.join('\n'))) return fail('不是日志格式TXT，请使用视频复刻日志文件', '日志TXT输入');
+  if (!/使用片段列表：/.test(allLines.join('\n'))) return fail('不是有效的复刻日志：请选择本软件复刻任务生成的日志文件', '日志TXT输入');
 
   let jobs = parseJobs(allLines);
   if (jobs.length === 0) return fail('未从日志中解析出任何成片', '日志复刻-解析');
@@ -782,7 +786,7 @@ async function run(ctx, env = process.env) {
   let mode = 0;
   if (cfg.mode === '1') mode = 1;
   else if (cfg.mode === '2') mode = 2;
-  else return fail('未通过环境变量 REPLICA_MODE 指定复刻模式（脚本由 Video Lab 驱动）', '复刻模式');
+  else return fail('未选择复刻模式：请在主窗口选择原片复刻或去重复刻后重新开始制作', '复刻模式');
   const modeName = mode === 1 ? '原片复刻' : '去重复刻';
   // 去重复刻：候选池 = 原配置素材池（+ 日志中片段目录补充）。第 1 段恒定不动，其余段**原位**
   // 换新片段（顺序不变），候选优先来自配置声明的素材目录。

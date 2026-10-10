@@ -6193,7 +6193,7 @@ class Api {
     let task;
     if (t.type === 'batch') {
       // 配置 TXT 在首次运行时已被移入成片目录作为正本（引擎与 PS1 同语义），
-      // 续跑必须按成片目录重定位，否则旧路径已失效 → 引擎报「未通过环境变量 REPLICA_TXT 提供 TXT 文件」
+      // 续跑必须按成片目录重定位，否则旧路径已失效 → 引擎报「配置文件不可用（可能已被移动、重命名或删除）」
       const relocated = this._locateBatchConfig(src, t);
       if (relocated) { src = relocated; env.REPLICA_TXT = relocated; }
       // batch：只重做失败成片对应的「序号」，其余逻辑（命名/分组）仍按原始 BATCH_COUNT/BATCH_GROUP 计算；
@@ -6390,7 +6390,7 @@ class Api {
   //   ③ 按「提交时刻 + 配置名」确定性推算目录（覆盖标记缺失/被清理的极端情形）；
   //   ④ 原 TXT 所在目录（配置未被移走的常规路径）。
   // ⚠ 四个来源都要查：只查 ①④ 时，非 done 任务 t.outDir 缺失 → 找不到被引擎移入输出目录的
-  //   TXT 正本 → 软暂停「继续」续跑会报「未通过环境变量 REPLICA_TXT 提供 TXT 文件」，
+  //   TXT 正本 → 软暂停「继续」续跑会报「配置文件不可用（可能已被移动、重命名或删除）」，
   //   而「先停止再续跑」却正常（停止态能命中 ④ 或恰好还留有 t.outDir）。补齐后两条路径行为一致。
   _findArchivedConfig(oldPath, t) {
     const cur = String(oldPath || '');

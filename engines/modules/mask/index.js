@@ -136,7 +136,7 @@ async function run(ctx, env = process.env) {
 
   // ── 参数校验（与 PS1 顺序、文案一致） ──
   if (!cfg.rawDirs.length || !cfg.outputDir.trim()) {
-    return fail('缺少原片文件夹或输出目录环境变量', '参数校验');
+    return fail('未选择原片文件夹或输出目录：请在主窗口重新选择后开始制作', '参数校验');
   }
   if ((cfg.mode === 1 || cfg.mode === 3) && !cfg.maskDirs.length && !cfg.masks.length) {
     return fail(`缺少遮罩（模式 ${cfg.mode} 需要：遮罩目录或 .mov 文件）`, '参数校验');

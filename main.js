@@ -249,11 +249,25 @@ function _writePortableOrigin(migrated) {
     }, null, 2), 'utf8');
   } catch (e) { _migLog('线索写入失败（不影响使用）：' + ((e && e.message) || e)); }
 }
-// ── 启动期执行（仅此处；开发形态与安装形态一律跳过）──
+// ⚠ 闸门判据修正（2026-10-10 实测）：**便携包是"安装形态原料（win-unpacked）原样压 zip"**，
+// 它带着 resources\app-update.yml → `IS_PORTABLE` 恒为 false（走安装形态分支）。
+// 若用 IS_PORTABLE 当闸门，真实便携用户的搬迁**永不触发**（我此前的人造测试掩盖了这一点）。
+// 可靠区分点 = **安装痕迹**：setup(NSIS) 安装会在程序目录放 Uninstall*.exe，zip 解压出来的没有。
+// 故闸门为「数据落在程序目录 + 该目录无 Uninstall*.exe」——零注册表开销、不误伤 setup 用户。
+function _looksLikeUninstalledCopy(dir) {
+  try {
+    const st = fs.statSync(dir);
+    if (!st.isDirectory()) return false;
+    return !fs.readdirSync(dir).some(function (n) { return /^uninstall.*\.exe$/i.test(n); });
+  } catch (e) { return false; }
+}
+// ── 启动期执行（仅此处；开发形态与已安装形态一律跳过）──
 try {
-  if (app.isPackaged && IS_PORTABLE && path.resolve(configFile) === path.resolve(programConfigPath())) {
-    // A1 静默搬迁（便携形态且数据落在程序目录）
-    const done = _adoptDirAsDataRoot(path.dirname(programConfigPath()));
+  const _progDir = path.dirname(programConfigPath());
+  if (app.isPackaged && path.resolve(configFile) === path.resolve(programConfigPath())
+    && _looksLikeUninstalledCopy(_progDir)) {
+    // A1 静默搬迁（数据落在程序目录，且该目录不像 setup 安装现场）
+    const done = _adoptDirAsDataRoot(_progDir);
     if (done) configFile = appdataConfigPath();   // 本次会话起即用 appdata（storageDir 随之派生）
     // A2 留线索（顺序不可颠倒：先搬迁完成，再写线索，migrated 才准确）
     _writePortableOrigin(done);

@@ -175,12 +175,111 @@ const SETTINGS_DB = 'settings.db';
 const CACHE_DB = 'cache.db';
 const storageDir = () => path.dirname(configFilePath());
 
+// ═══ 过渡版 2.5.1：便携数据静默搬迁 + 留线索 + 接管标记 ═══
+// 见《弃用便携包与旧仓库-过渡方案》§3.1 与 §九 A1~A3。
+// 目的：把「数据位置」与「用户用哪个版本」解耦 —— 数据迁到 %APPDATA% 后，无论下次启动便携版还是安装版，
+//       resolveConfigLocation() 的 mtime 仲裁都会选 appdata。
+// ⚠ 复核补充 1（关键）：复制完成后必须把源侧三库改名 `*.migrated` —— 否则本次会话继续读写源侧，
+//   mtime 反超 appdata → 下次启动仲裁选回源侧并删掉 appdata 副本 → 搬迁自我回滚且不再重试。
+// 触发条件严格（便携形态 + 数据当前在程序目录）；非便携/已迁用户只做几次 existsSync，开销可忽略；
+// 真正搬迁仅在「便携版首次启动」发生一次（复制为幂等操作）。
+const _migrateNotes = [];   // runLog 就绪前（搬迁在本句之后、runLog.init 之前）暂存，稍后补写
+function _migLog(msg) { try { console.log('[migrate] ' + msg); } catch (e) {} _migrateNotes.push(String(msg)); }
+// 复制 srcDir 的三库（含 sqlite 的 -wal/-shm）与 log\ 到 dstDir；成功判据 = dst 侧出现 config.json
+function _migCopyData(srcDir, dstDir) {
+  fs.mkdirSync(dstDir, { recursive: true });
+  for (const n of ['config.json', SETTINGS_DB, CACHE_DB]) {
+    for (const suf of ['', '-wal', '-shm']) {
+      const src = path.join(srcDir, n + suf);
+      try { if (fs.existsSync(src)) fs.copyFileSync(src, path.join(dstDir, n + suf)); } catch (e) {}
+    }
+  }
+  try {
+    const srcLog = path.join(srcDir, 'log');
+    if (fs.existsSync(srcLog) && fs.statSync(srcLog).isDirectory()) {
+      const dstLog = path.join(dstDir, 'log');
+      fs.mkdirSync(dstLog, { recursive: true });
+      for (const f of fs.readdirSync(srcLog)) {
+        try { fs.copyFileSync(path.join(srcLog, f), path.join(dstLog, f)); } catch (e) {}
+      }
+    }
+  } catch (e) {}
+  return fs.existsSync(path.join(dstDir, 'config.json'));
+}
+// 把 srcDir 接管为数据源：复制到 appdata → 改 config_storage → 源侧改名 → touch mtime。返回是否完成搬迁
+function _adoptDirAsDataRoot(srcDir) {
+  const appdDir = path.dirname(appdataConfigPath());
+  const appdCfg = appdataConfigPath();
+  if (!srcDir || path.resolve(srcDir) === path.resolve(appdDir)) return false;   // 源即目标
+  if (!fs.existsSync(path.join(srcDir, 'config.json'))) return false;            // 源无引导文件
+  if (fs.existsSync(appdCfg)) { _migLog('appdata 侧已有数据，跳过搬迁（保护既有数据）'); return false; }
+  if (!_migCopyData(srcDir, appdDir)) { _migLog('复制未完成，保持原状下次再试'); return false; }
+  // ① appdata 那份的 config_storage 写 'appdata'
+  try {
+    const j = JSON.parse(fs.readFileSync(appdCfg, 'utf8').replace(/^\uFEFF/, ''));
+    j.config_storage = 'appdata';
+    fs.writeFileSync(appdCfg, JSON.stringify(j, null, 2), 'utf8');
+  } catch (e) {}
+  // ② 源侧三库改名 *.migrated（复核补充 1：改名非删除，可回滚取证；源侧从此无 config.json → 仲裁必选 appdata）
+  for (const n of ['config.json', SETTINGS_DB, CACHE_DB]) {
+    for (const suf of ['', '-wal', '-shm']) {
+      const src = path.join(srcDir, n + suf);
+      try { if (fs.existsSync(src)) fs.renameSync(src, src + '.migrated'); } catch (e) {}
+    }
+  }
+  // ③ touch appdata 的 config.json（保证其 mtime 不早于源文件，仲裁必选它）
+  try { const now = new Date(); fs.utimesSync(appdCfg, now, now); } catch (e) {}
+  _migLog('已接管数据：' + srcDir + ' → ' + appdDir);
+  return true;
+}
+// 留线索：%LOCALAPPDATA%\Video Lab\portable-origin.json
+// 刻意不放数据目录内 —— 数据目录可能被删/迁，线索要独立存活；供 NSIS 安装包与后续排查使用。
+function _writePortableOrigin(migrated) {
+  try {
+    const dir = path.join(process.env.LOCALAPPDATA || app.getPath('appData'), 'Video Lab');
+    fs.mkdirSync(dir, { recursive: true });
+    const f = path.join(dir, 'portable-origin.json');
+    let old = {};
+    try { old = JSON.parse(fs.readFileSync(f, 'utf8').replace(/^\uFEFF/, '')); } catch (e) {}
+    fs.writeFileSync(f, JSON.stringify({
+      portableDir: path.dirname(programConfigPath()),
+      version: app.getVersion(),
+      at: Date.now(),
+      migrated: (migrated === true) || (old && old.migrated === true),
+    }, null, 2), 'utf8');
+  } catch (e) { _migLog('线索写入失败（不影响使用）：' + ((e && e.message) || e)); }
+}
+// ── 启动期执行（仅此处；开发形态与安装形态一律跳过）──
+try {
+  if (app.isPackaged && IS_PORTABLE && path.resolve(configFile) === path.resolve(programConfigPath())) {
+    // A1 静默搬迁（便携形态且数据落在程序目录）
+    const done = _adoptDirAsDataRoot(path.dirname(programConfigPath()));
+    if (done) configFile = appdataConfigPath();   // 本次会话起即用 appdata（storageDir 随之派生）
+    // A2 留线索（顺序不可颠倒：先搬迁完成，再写线索，migrated 才准确）
+    _writePortableOrigin(done);
+  }
+  // A3 接管标记：NSIS 在"未搬迁就装 Setup"时会写下 pending-takeover.json（含原便携目录）
+  try {
+    const tf = path.join(process.env.LOCALAPPDATA || app.getPath('appData'), 'Video Lab', 'pending-takeover.json');
+    if (fs.existsSync(tf)) {
+      const tk = JSON.parse(fs.readFileSync(tf, 'utf8').replace(/^\uFEFF/, ''));
+      const src = String((tk && tk.portableDir) || '');
+      if (src && fs.existsSync(path.join(src, 'config.json')) && !fs.existsSync(appdataConfigPath())) {
+        if (_adoptDirAsDataRoot(src)) configFile = appdataConfigPath();
+      }
+      fs.unlinkSync(tf);   // 一次性：无论是否接手，标记用完即删
+    }
+  } catch (e) { _migLog('接管标记处理失败（不影响使用）：' + ((e && e.message) || e)); }
+} catch (e) { _migLog('搬迁流程异常（已忽略，不影响使用）：' + ((e && e.message) || e)); }
+
 // ── 运行日志（排查用，保留 7 天）──
 // 任务记录 / 任务标记 / 成片产物都可能被清除或删除，一旦清除就只剩"反推"。
 // 本日志独立留存、任何清除操作都不触碰它 —— 它是事后唯一还在的证据。
 // 位置与三库同级：<storageDir>\log\app-YYYY-MM-DD.log
 const runLog = require(path.join(resolveEnginesDir(), 'base', 'runlog.js'));
 runLog.init(path.join(storageDir(), 'log'));
+// 搬迁发生在 runLog 初始化之前（见上方"便携数据静默搬迁"）：就绪后补写，保证排查有据
+try { _migrateNotes.forEach(function (m) { runLog.sys('app.migrate', m, {}); }); } catch (e) {}
 const _pruned = runLog.pruneOld();
 const _bootLogReady = bootMs();
 runLog.sys('app.start',

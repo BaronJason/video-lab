@@ -84,7 +84,8 @@
       "shortcutName": "Video Lab",
       "deleteAppDataOnUninstall": false,
       "differentialPackage": false,
-      "artifactName": "Video-Lab-${version}-x64-Setup.${ext}"
+      "artifactName": "Video-Lab-${version}-x64-Setup.${ext}",
+      "include": "build/installer.nsh"
     }
   },
   "devDependencies": {

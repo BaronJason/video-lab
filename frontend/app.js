@@ -3292,11 +3292,14 @@
       if (later) later.textContent = custom.later || '取消';
       if (now) now.textContent = custom.now || '确定';
     } else if (_bannerState === 'downloaded') {
-      var setupMode = state.isPortable === false; // setup 安装版：重启并安装；便携版：打开更新文件
-      if (title) title.textContent = '更新包下载完成';
-      if (desc) desc.textContent = setupMode ? '是否立即重启并安装？' : '更新包已下载完成，请右键托盘图标退出应用后解压覆盖';
+      // A7：两种形态都走「安装并重启」—— 后端 apply_update 按形态分流：
+      //   便携分发 → 搬迁 + 线索 + 退出 + 拉起安装程序（改用安装版，设置与数据自动保留）
+      //   安装版   → electron-updater 静默升级安装并重启
+      var portableDist = state.portableDist === true;
+      if (title) title.textContent = '更新文件已就绪';
+      if (desc) desc.textContent = portableDist ? '将改用安装版，设置与数据保持不变' : '是否立即重启并安装？';
       if (later) later.textContent = '取消';
-      if (now) now.textContent = setupMode ? '重启并安装' : '打开更新文件';
+      if (now) now.textContent = portableDist ? '安装更新并重启' : '重启并安装';
     } else {
       if (title) title.textContent = '发现新版本 v' + ((info && info.latest) || '');
       if (desc) desc.textContent = '当前版本 v' + ((info && info.current) || '') + ' · 点击立即更新获取最新功能';
@@ -3357,16 +3360,15 @@
       }
       now.disabled = true;
       if (_bannerState === 'downloaded') {
-        if (state.isPortable === false) {
-          // setup 安装版：electron-updater 静默升级安装并重启
-          setStatus('正在重启并安装更新…');
-          if (!gp.apply_update) { now.disabled = false; return; }
-          gp.apply_update().catch(function () { now.disabled = false; setStatus('启动更新失败'); });
-        } else {
-          // 便携版：打开资源管理器并选中更新包，用户自行关闭应用后解压覆盖
-          if (!gp.reveal_update_file) { now.disabled = false; return; }
-          gp.reveal_update_file().catch(function () { now.disabled = false; setStatus('打开更新文件失败'); });
-        }
+        // A7：两种形态统一走 apply_update —— 后端按形态分流：
+        //   便携分发 → 搬迁 + 线索 + 退出 + 拉起安装程序（改用安装版，设置与数据自动保留）
+        //   安装版   → electron-updater 静默升级安装并重启
+        // （旧版便携形态此处仅打开资源管理器、让用户自行解压覆盖，已废弃）
+        setStatus('正在准备安装更新…');
+        if (!gp.apply_update) { now.disabled = false; return; }
+        gp.apply_update().then(function (r) {
+          if (r && r.ok === false) { now.disabled = false; setStatus((r && r.error) || '启动更新失败'); }
+        }).catch(function () { now.disabled = false; setStatus('启动更新失败'); });
       } else {
         // 第一步：仅下载更新包（连接服务器阶段先给提示，随后出现 0% 进度条）
         setStatus('正在连接更新服务器…');
@@ -3597,7 +3599,11 @@
     }
     // 运行时形态（便携/setup），决定「下载完成」后是打开更新文件还是重启并安装
     if (getApi().get_runtime) {
-      getApi().get_runtime().then(function (r) { state.isPortable = !!(r && r.is_portable); }).catch(function () { state.isPortable = true; });
+      // portableDist 决定「更新文件已就绪」时的按钮与说明（后端 apply_update 才是权威的形态分流方）
+      getApi().get_runtime().then(function (r) {
+        state.portableDist = !!(r && r.portable_dist);
+        state.isPortable = !!(r && r.is_portable);
+      }).catch(function () { state.portableDist = true; state.isPortable = true; });
     }
     if (!getApi()) { $('statusLeft').textContent = '后端不可用（未检测到桥接 API）'; return; }
     checkEnv(); buildDateBranches(); buildCenterBottom(); buildRightPanel(); refreshData(false, '正在检测工作路径文件，请稍候…');

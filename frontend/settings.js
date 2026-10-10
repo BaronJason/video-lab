@@ -722,7 +722,7 @@
           if (!info) { setStatus('检查更新失败', false); return; }
           if (info.busy) { setStatus('已有更新操作进行中，请稍候', true); return; }
           if (info.hasUpdate) {
-            if (info.noAsset) { setStatus('发现新版本 v' + info.latest + '，但发布缺少便携包，请改用' + (pref.update_source === 'github' ? 'GitCode' : 'GitHub') + '源再试', false); return; }
+            if (info.noAsset) { setStatus('发现新版本 v' + info.latest + '，但这次发布缺少安装文件：可稍后再试，或在设置里换一个更新源（当前' + (pref.update_source === 'github' ? 'GitHub' : 'GitCode') + '）', false); return; }
             if (info.autoDownload) setStatus('发现新版本 v' + info.latest + '，已自动开始下载，进度见主窗口状态栏', true);
             else showUpdateConfirm(info);
           }

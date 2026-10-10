@@ -261,6 +261,14 @@ function _looksLikeUninstalledCopy(dir) {
     return !fs.readdirSync(dir).some(function (n) { return /^uninstall.*\.exe$/i.test(n); });
   } catch (e) { return false; }
 }
+// 「便携分发形态」判据（供更新链路使用）：只认「程序目录无 Uninstall*.exe」。
+// ⚠ 刻意**不**包含「数据是否还在程序目录」—— 搬迁完成后数据已在 appdata，但程序目录的性质没变，
+//   更新时仍应下载 Setup 安装包（否则便携版会去找便携包 zip，而 2.5.1 起不再发布该资产）。
+// ⚠ 也不能用 IS_PORTABLE：真实便携包（win-unpacked 压 zip）自带 app-update.yml，该值为 false。
+function isPortableDistribution() {
+  if (!app.isPackaged) return false;
+  return _looksLikeUninstalledCopy(projectDir());
+}
 // ── 启动期执行（仅此处；开发形态与已安装形态一律跳过）──
 try {
   const _progDir = path.dirname(programConfigPath());
@@ -272,12 +280,20 @@ try {
     // A2 留线索（顺序不可颠倒：先搬迁完成，再写线索，migrated 才准确）
     _writePortableOrigin(done);
   }
-  // A3 接管标记：NSIS 在"未搬迁就装 Setup"时会写下 pending-takeover.json（含原便携目录）
+  // A3 接管标记：安装程序（NSIS，见 build/installer.nsh）在"未搬迁就装 Setup"时写下 pending-takeover.json。
+  // ⚠ 安装程序刻意只写"信号"不解析 JSON（避免两套实现漂移）→ 源目录若不在标记里，回退读线索文件。
   try {
-    const tf = path.join(process.env.LOCALAPPDATA || app.getPath('appData'), 'Video Lab', 'pending-takeover.json');
+    const ldir = path.join(process.env.LOCALAPPDATA || app.getPath('appData'), 'Video Lab');
+    const tf = path.join(ldir, 'pending-takeover.json');
     if (fs.existsSync(tf)) {
       const tk = JSON.parse(fs.readFileSync(tf, 'utf8').replace(/^\uFEFF/, ''));
-      const src = String((tk && tk.portableDir) || '');
+      let src = String((tk && tk.portableDir) || '');
+      if (!src) {
+        try {
+          const og = JSON.parse(fs.readFileSync(path.join(ldir, 'portable-origin.json'), 'utf8').replace(/^\uFEFF/, ''));
+          src = String((og && og.portableDir) || '');
+        } catch (e2) { _migLog('标记无源目录且线索不可读（跳过接管）：' + ((e2 && e2.message) || e2)); }
+      }
       if (src && fs.existsSync(path.join(src, 'config.json')) && !fs.existsSync(appdataConfigPath())) {
         if (_adoptDirAsDataRoot(src)) configFile = appdataConfigPath();
       }
@@ -1250,15 +1266,23 @@ async function checkForUpdate(opts) {
     const tagRaw = String(data.tag_name || '');   // 原始 tag（含 v 前缀）—— 拼附件地址必须用它
     const tag = tagRaw.replace(/^v/i, '');        // 纯版本号：用于版本比较与界面展示
     const assets = Array.isArray(data.assets) ? data.assets : [];
-    // 优先匹配正式便携包资产（Video-Lab-<版本>-x64-Portable.zip）；
-    // GitCode / GitHub 均会自动附带源码归档（如 v1.4.6.zip），须排除以免误下载源码包
+    // GitCode / GitHub 均会自动附带源码归档（如 v1.4.6.zip），须排除以免误下载源码包。
+    //
+    // A4（2026-10-10「弃用便携包与旧仓库·过渡方案」§九）：**便携分发形态改为下载 Setup 安装包**
+    //   —— 2.5.1 起不再把便携包当作升级目标，便携版用户升级即改用安装版（设置与数据由静默搬迁保留）。
+    //   形态判定用 isPortableDistribution()（== 程序目录无 Uninstall*.exe），不用 IS_PORTABLE（见其注释）。
+    //   非便携分发形态保持旧规则找便携包，以免影响既有发布兼容期行为。
     // 历史分卷兼容：老版本（≤2.5.0）发布在 Gitee 时因单附件 100MB 限制，便携包曾按
     // xxx.zip.001/.002 分卷上传；GitCode 附件上限宽裕、今后不再分卷，此处保留识别能力以兼容旧资产
+    const portableDist = isPortableDistribution();
+    const setupRe = /^Video-Lab-.*-x64-Setup\.exe$/i;
     const portableRe = /^Video-Lab-.*-x64-Portable\.zip$/i;
     const partRe = /^(Video-Lab-.*-x64-Portable\.zip)\.(\d{3,})$/i;
-    let asset = assets.find((a) => portableRe.test(String(a.name || ''))) || null;
+    let asset = portableDist
+      ? (assets.find((a) => setupRe.test(String(a.name || ''))) || null)
+      : (assets.find((a) => portableRe.test(String(a.name || ''))) || null);
     let parts = [];
-    if (!asset) {
+    if (!asset && !portableDist) {
       const group = new Map();
       for (const a of assets) {
         const m = partRe.exec(String(a.name || ''));
@@ -1275,30 +1299,36 @@ async function checkForUpdate(opts) {
     // release 资产的 digest 为 sha256:<hex>，作为下载完整性校验依据（分卷组一般无 digest）
     const sha256 = (asset && asset.digest && String(asset.digest).replace(/^sha256:/i, '')) || '';
     const hasUpdate = cmpVersion(tag, APP_VERSION) > 0;
+    // assetName：资产原名，下载落地即用它（A5 需据此定位 Setup 安装程序并拉起）
+    const assetName = asset ? String(asset.name || '') : '';
     const info = {
       ok: true, current: APP_VERSION, latest: tag || '', hasUpdate,
       url: asset ? asset.browser_download_url : (parts.length ? parts[0].url : ''),
       size: asset ? asset.size : parts.reduce((s, p) => s + (p.size || 0), 0),
-      parts, sha256, error: ''
+      parts, sha256, assetName, error: ''
     };
     // 完整性校验依据补齐：GitCode 的 release 资产不带 digest / size（实测 2026-10-10）→
-    // 回退读同 release 内的 portable-info.yml（发布时生成，含便携包 size + sha256），供下载后校验。
+    // 回退读同 release 内的校验依据文件（发布时生成，含安装包 size + sha256），供下载后校验。
+    // A4：文件名优先 update-info.yml（新；Setup 的 size+sha256），不可用时回退旧名 portable-info.yml
+    //   —— 兼容已发布的历史 Release，老资产仍能拿到校验依据。
     // ⚠ 两源地址形式不同：GitHub 用 releases/latest/download；**GitCode 必须带 tag**
     //   （实测 GitCode 的 latest/download 会返回 HTML 页面而非文件）。
     if (asset && !info.sha256) {
-      try {
-        const piUrl = currentUpdateSource() === 'github'
-          ? 'https://github.com/' + GITHUB_REPO + '/releases/latest/download/portable-info.yml'
-          : 'https://gitcode.com/' + GITCODE_REPO + '/releases/download/' + tagRaw + '/portable-info.yml';
-        const pi = await netGet(piUrl, 8000);
-        if (pi.status === 200) {
+      for (const nm of ['update-info.yml', 'portable-info.yml']) {
+        try {
+          const piUrl = currentUpdateSource() === 'github'
+            ? 'https://github.com/' + GITHUB_REPO + '/releases/latest/download/' + nm
+            : 'https://gitcode.com/' + GITCODE_REPO + '/releases/download/' + tagRaw + '/' + nm;
+          const pi = await netGet(piUrl, 8000);
+          if (pi.status !== 200) { writeUpdateLog('校验依据 ' + nm + ' 不可用（HTTP ' + pi.status + '），试下一个'); continue; }
           const txt = pi.body.toString('utf-8');
           const mh = /(?:^|\n)sha256:\s*([0-9a-f]{64})/i.exec(txt);
           const ms = /(?:^|\n)size:\s*(\d+)/.exec(txt);
-          if (mh) { info.sha256 = mh[1].toLowerCase(); writeUpdateLog('已从 portable-info.yml 取得 sha256（资产无 digest 时回退）'); }
+          if (mh) { info.sha256 = mh[1].toLowerCase(); writeUpdateLog('已从 ' + nm + ' 取得 sha256（资产无 digest 时回退）'); }
           if (ms && !info.size) info.size = parseInt(ms[1], 10) || 0;
-        }
-      } catch (e) { writeUpdateLog('portable-info.yml 读取失败（仅少一层校验依据，不影响更新）：' + ((e && e.message) || e)); }
+          break;   // 该文件可用即止（同 release 内两个文件内容同源，无必要再试旧名）
+        } catch (e) { writeUpdateLog(nm + ' 读取失败（仅少一层校验依据，不影响更新）：' + ((e && e.message) || e)); }
+      }
     }
     lastUpdateInfo = info;
     writeUpdateLog('检查成功：current=' + APP_VERSION + ' latest=v' + tag + ' hasUpdate=' + hasUpdate + ' (' + (Date.now() - t0) + 'ms)');
@@ -1319,7 +1349,8 @@ async function checkForUpdate(opts) {
       } else {
         // 发现新版本但资产不全：同样要回执，否则设置页状态停在「正在检查更新…」不收敛
         if (!silent) sendToSettings('check_update_result', Object.assign({}, info, { noAsset: true }));
-        if (!silent && notifyMain) sendToMain('update_none', Object.assign({}, info, { message: '发现新版本，但 Release 缺少便携包' }));
+        // 文案不写死资产类型：便携分发找 Setup、其他形态找便携包，普通用户也不必知道资产叫什么
+        if (!silent && notifyMain) sendToMain('update_none', Object.assign({}, info, { message: '发现新版本，但发布缺少安装文件' }));
       }
     } else {
       if (!silent) sendToSettings('check_update_result', info);
@@ -1353,7 +1384,10 @@ function sha256File(filePath) {
 async function downloadUpdate(info, onProgress, onStatus) {
   const dir = projectDir();
   try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
-  const zipPath = path.join(dir, 'Video-Lab-' + String(info.latest || '').replace(/^v/i, '') + '-x64-Portable.zip');
+  // 落地文件名：A4 起便携分发下载的是 Setup.exe，故按资产原名落地；无 assetName（分卷场景）时按便携包名，供拼回
+  const ver = String(info.latest || '').replace(/^v/i, '');
+  const dlName = String(info.assetName || '') || ('Video-Lab-' + ver + '-x64-Portable.zip');
+  const zipPath = path.join(dir, dlName);
   // Gitee 分卷：逐卷下载到 zipPath.partXXX 后拼回完整 zip
   if (info.parts && info.parts.length > 0) return downloadUpdateParts(info, zipPath, onProgress, onStatus);
   const t0 = Date.now();
@@ -1559,8 +1593,10 @@ async function startUpdate() {
   try {
     // 操作一开始就给前端反馈（立即出现 0% 状态栏进度，避免"点了没反应"）
     sendToMain('update_downloading', Object.assign({}, lastUpdateInfo || {}, { percent: 0 }));
-    // setup 安装版：走 electron-updater 下载 setup 安装包；便携版保持下方 zip 下载逻辑
-    if (!IS_PORTABLE) {
+    // 安装形态：走 electron-updater 下载 setup 安装包。
+    // 便携分发形态（解压即用，判定见 isPortableDistribution —— 不可用 IS_PORTABLE，真实便携包该值为 false）：
+    //   走下方自研下载 —— A4 起下载的是 Setup.exe，随后由 portableApplyUpdate 完成「搬迁 + 线索 + 退出 + 拉起安装程序」。
+    if (!isPortableDistribution()) {
       sendToMain('update_status', '正在连接更新服务器…');
       return await runSetupStartUpdate();
     }
@@ -1579,8 +1615,9 @@ async function startUpdate() {
       return { ok: false, error: '暂无可用更新' };
     }
     if (!info.url) {
-      sendToMain('update_error', { message: 'Release 缺少便携包资产' });
-      return { ok: false, error: 'Release 缺少便携包资产' };
+      // 文案中性（便携分发找 Setup、其他形态找便携包）：说清现象 + 下一步，不提资产名
+      sendToMain('update_error', { message: '发布缺少安装文件，请稍后再试' });
+      return { ok: false, error: '发布缺少安装文件' };
     }
     const dl = await downloadUpdate(info, (p) => sendToMain('update_downloading', Object.assign({}, info, { percent: p })), (text) => sendToMain('update_status', text));
     if (!dl.ok) {
@@ -1595,12 +1632,51 @@ async function startUpdate() {
     updateBusy = false;
   }
 }
-// 用户点击「立即安装」（两步式第二步，需 UPDATE_ENABLED）：仅 setup 安装版经 electron-updater；
-// 便携版的更新包由用户自行解压覆盖，故此处直接给出指引
+// A5（2026-10-10「弃用便携包与旧仓库·过渡方案」§九）：便携分发形态的「下载并安装」。
+// 时序不可颠倒：① 确保搬迁完成（复制到 appdata + 源侧三库改名 .migrated 防 mtime 反超）
+//   → ② 写线索 → ③ 应用退出 → ④ 拉起已校验的 Setup.exe（便携用户借此平稳转成安装版）。
+// 这样无论安装程序是否走完整流程，用户数据都已在新位置：装完打开新版即见旧设置（零操作无感）。
+function portableApplyUpdate() {
+  if (!lastDownload || !lastDownload.zipPath || !fs.existsSync(lastDownload.zipPath)) {
+    return { ok: false, error: '更新文件不存在，请重新下载后再试' };
+  }
+  const setupPath = lastDownload.zipPath;
+  // ① 搬迁（数据已在 appdata 时 _adoptDirAsDataRoot 自行跳过 —— 幂等，不算失败）
+  let migrated = false;
+  try {
+    if (path.resolve(configFile) === path.resolve(programConfigPath())) {
+      migrated = _adoptDirAsDataRoot(projectDir());
+      if (migrated) configFile = appdataConfigPath();   // 本次会话起即用 appdata
+    } else {
+      migrated = true;   // 数据此前已在 appdata：线索里 migrated 记 true（NSIS 据此免写接管标记）
+    }
+  } catch (e) { _migLog('安装前搬迁异常（不阻断安装）：' + ((e && e.message) || e)); }
+  // ② 留线索（幂等；NSIS 安装时读它决定是否写 pending-takeover.json）
+  _writePortableOrigin(migrated);
+  sendToMain('update_status', '正在启动安装程序…');
+  // ③④ 先安排拉起、再退出：cmd /c start 让 Setup 独立于本进程（参数由 Node 转义，含空格路径安全）
+  try {
+    const child = require('child_process').spawn('cmd.exe', ['/c', 'start', '', setupPath], {
+      detached: true, stdio: 'ignore', windowsHide: true,
+    });
+    child.unref();
+  } catch (e) {
+    writeUpdateLog('拉起安装程序失败：' + ((e && e.message) || e));
+    return { ok: false, error: '启动安装程序失败，请手动打开更新文件' };
+  }
+  writeUpdateLog('已安排安装程序启动，应用即将退出：' + setupPath);
+  isQuitting = true;   // 守卫"最小化到托盘"等退出拦截，确保真的退出让安装程序接手
+  setTimeout(function () { try { app.exit(0); } catch (e) { app.quit(); } }, 600);
+  return { ok: true, installing: true };
+}
+// 用户点击「立即安装」（两步式第二步，需 UPDATE_ENABLED）：
+//   便携分发形态 → 搬迁 + 线索 + 退出 + 拉起 Setup（改用安装版，设置与数据自动保留）；
+//   安装形态 → electron-updater 静默升级安装并重启。
 async function applyUpdate() {
   if (!UPDATE_ENABLED) return { ok: false, error: '自动更新已停用' };
+  if (isPortableDistribution()) return portableApplyUpdate();
   if (!IS_PORTABLE) return setupApplyUpdate(); // setup 安装版：electron-updater 静默升级安装并重启
-  return { ok: false, error: '便携版请先「打开更新文件」，关闭应用后自行解压覆盖' };
+  return { ok: false, error: '更新文件已就绪，请关闭应用后手动安装' };
 }
 
 // HTTP 服务器 extraRoutes：涉及 main.js 内部状态（config/loadConfig/saveConfig 等）的路由
@@ -1794,7 +1870,9 @@ function buildHttpExtraRoutes() {
         return { ok: true };
       } catch (e) { return { ok: false, error: String(e) }; }
     },
-    get_runtime: () => ({ is_portable: IS_PORTABLE, version: APP_VERSION }),
+    // portable_dist = 便携分发形态（解压即用）—— 更新链路据此决定「下载 Setup 并就地转安装版」；
+    // is_portable 保留原语义（IS_PORTABLE，仅表达 electron-builder portable target 形态）。
+    get_runtime: () => ({ is_portable: IS_PORTABLE, portable_dist: isPortableDistribution(), version: APP_VERSION }),
     get_app_version: () => APP_VERSION,
     // 返回带 token 的浏览器访问地址（含真实 token）；HTTP 侧需要自身已带 token 才能调用（本机防护），
     // Electron 本体侧 ipcMain 无需 token —— 用于设置页/开发测试获取链接
@@ -2090,8 +2168,9 @@ function registerIpc() {
     if (httpServerInfo && httpServerInfo.broadcastAll) httpServerInfo.broadcastAll('settings_saved', cfg);
     return { ok: true, config_moved: configMoved };
   });
-  // 运行时形态（便携 zip / setup 安装版），供前端决定「下载完成」后的按钮动作
-  ipcMain.handle('get_runtime', () => ({ is_portable: IS_PORTABLE, version: APP_VERSION }));
+  // 运行时形态（便携分发 / setup 安装版），供前端决定「更新文件就绪」后的按钮动作与说明
+  // portable_dist 见 isPortableDistribution()：便携包解压即用也是它（IS_PORTABLE 对真实便携包为 false）
+  ipcMain.handle('get_runtime', () => ({ is_portable: IS_PORTABLE, portable_dist: isPortableDistribution(), version: APP_VERSION }));
   // 返回带 token 的浏览器访问地址（含真实 token）；HTTP 侧需要自身已带 token 才能调用（本机防护），
   // Electron 本体侧 ipcMain 无需 token —— 用于设置页/开发测试获取链接
   ipcMain.handle('get_browser_url', () => {

@@ -1134,7 +1134,8 @@ async function checkForUpdate(opts) {
     }
     if (!res) throw new Error(accelErr || '检查更新失败');
     const data = JSON.parse(res.body.toString('utf-8'));
-    const tag = String(data.tag_name || '').replace(/^v/i, '');
+    const tagRaw = String(data.tag_name || '');   // 原始 tag（含 v 前缀）—— 拼附件地址必须用它
+    const tag = tagRaw.replace(/^v/i, '');        // 纯版本号：用于版本比较与界面展示
     const assets = Array.isArray(data.assets) ? data.assets : [];
     // 优先匹配正式便携包资产（Video-Lab-<版本>-x64-Portable.zip）；
     // GitCode / GitHub 均会自动附带源码归档（如 v1.4.6.zip），须排除以免误下载源码包
@@ -1167,6 +1168,25 @@ async function checkForUpdate(opts) {
       size: asset ? asset.size : parts.reduce((s, p) => s + (p.size || 0), 0),
       parts, sha256, error: ''
     };
+    // 完整性校验依据补齐：GitCode 的 release 资产不带 digest / size（实测 2026-10-10）→
+    // 回退读同 release 内的 portable-info.yml（发布时生成，含便携包 size + sha256），供下载后校验。
+    // ⚠ 两源地址形式不同：GitHub 用 releases/latest/download；**GitCode 必须带 tag**
+    //   （实测 GitCode 的 latest/download 会返回 HTML 页面而非文件）。
+    if (asset && !info.sha256) {
+      try {
+        const piUrl = currentUpdateSource() === 'github'
+          ? 'https://github.com/' + GITHUB_REPO + '/releases/latest/download/portable-info.yml'
+          : 'https://gitcode.com/' + GITCODE_REPO + '/releases/download/' + tagRaw + '/portable-info.yml';
+        const pi = await netGet(piUrl, 8000);
+        if (pi.status === 200) {
+          const txt = pi.body.toString('utf-8');
+          const mh = /(?:^|\n)sha256:\s*([0-9a-f]{64})/i.exec(txt);
+          const ms = /(?:^|\n)size:\s*(\d+)/.exec(txt);
+          if (mh) { info.sha256 = mh[1].toLowerCase(); writeUpdateLog('已从 portable-info.yml 取得 sha256（资产无 digest 时回退）'); }
+          if (ms && !info.size) info.size = parseInt(ms[1], 10) || 0;
+        }
+      } catch (e) { writeUpdateLog('portable-info.yml 读取失败（仅少一层校验依据，不影响更新）：' + ((e && e.message) || e)); }
+    }
     lastUpdateInfo = info;
     writeUpdateLog('检查成功：current=' + APP_VERSION + ' latest=v' + tag + ' hasUpdate=' + hasUpdate + ' (' + (Date.now() - t0) + 'ms)');
     if (hasUpdate) {

@@ -668,7 +668,7 @@
         backup_auto_clean: !!($('backupAutoClean') && $('backupAutoClean').checked),
         backup_keep_days: parseInt(($('backupKeepDays') && $('backupKeepDays').value) || '7', 10) || 7,
         close_behavior: cbEl ? cbEl.value : 'tray',
-        update_source: srcEl ? srcEl.value : 'gitee',
+        update_source: srcEl ? srcEl.value : 'gitcode',
         update_mode: umEl ? umEl.value : 'notify',
         config_storage: storageEl ? storageEl.value : 'program',
         http_port: parseInt($('httpPort').value, 10) || 9527,
@@ -711,10 +711,10 @@
       var srcNow = document.querySelector('input[name="updateSource"]:checked');
       var modeNow = document.querySelector('input[name="updateMode"]:checked');
       var pref = {
-        update_source: srcNow ? srcNow.value : 'gitee',
+        update_source: srcNow ? srcNow.value : 'gitcode',
         update_mode: modeNow ? modeNow.value : 'notify'
       };
-      var srcLabel = pref.update_source === 'github' ? 'GitHub' : '码云（Gitee）';
+      var srcLabel = pref.update_source === 'github' ? 'GitHub' : 'GitCode';
       setStatus('正在检查更新…', true);
       var applyPref = (api && api.apply_update_pref) ? api.apply_update_pref(pref) : Promise.resolve(null);
       applyPref.catch(function () { return null; }).then(function () {
@@ -722,7 +722,7 @@
           if (!info) { setStatus('检查更新失败', false); return; }
           if (info.busy) { setStatus('已有更新操作进行中，请稍候', true); return; }
           if (info.hasUpdate) {
-            if (info.noAsset) { setStatus('发现新版本 v' + info.latest + '，但发布缺少便携包，请改用' + (pref.update_source === 'github' ? '码云（Gitee）' : 'GitHub') + '源再试', false); return; }
+            if (info.noAsset) { setStatus('发现新版本 v' + info.latest + '，但发布缺少便携包，请改用' + (pref.update_source === 'github' ? 'GitCode' : 'GitHub') + '源再试', false); return; }
             if (info.autoDownload) setStatus('发现新版本 v' + info.latest + '，已自动开始下载，进度见主窗口状态栏', true);
             else showUpdateConfirm(info);
           }

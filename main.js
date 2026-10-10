@@ -966,13 +966,17 @@ api.onVersionsChanged = sendVersionsChangedToAll;
 // setup 安装版：electron-updater 静默升级安装并重启
 const UPDATE_ENABLED = true;
 const GITHUB_REPO = 'HirannU-OVO/video-lab';
-const GITEE_REPO = 'hirannu/video-lab';
+// 国内仓库已由 Gitee 迁至 GitCode（仓库路径与 GitHub 同名，仅域名不同）
+const GITCODE_REPO = 'HirannU-OVO/video-lab';
 const UPDATE_API_URL = 'https://api.github.com/repos/' + GITHUB_REPO + '/releases/latest';
-// 码云 release 检查地址（GitHub 同款 API 结构：tag_name + assets[]）
-const GITEE_API_URL = 'https://gitee.com/api/v5/repos/' + GITEE_REPO + '/releases/latest';
-// 当前更新源（跟随设置 update_source，动态切换 GitHub / 码云）
+// GitCode release 检查地址（与 Gitee 同款 API 结构：tag_name + assets[]；
+// 读接口匿名可用、无需令牌，实测 2026-10-10；⚠ assets 无 size 字段，大小为 0 时须走兜底）
+const GITCODE_API_URL = 'https://api.gitcode.com/api/v5/repos/' + GITCODE_REPO + '/releases/latest';
+// 当前更新源（跟随设置 update_source，动态切换 GitHub / GitCode）
+// ⚠ 历史配置里的 'gitee' 一律按 'gitcode' 处理 —— Gitee 已停止更新（最后一版停在 2.5.0），
+//   若沿用旧值继续走 Gitee，老用户将永远收不到新版本。
 function currentUpdateSource() {
-  return (loadConfig().update_source === 'github') ? 'github' : 'gitee';
+  return (loadConfig().update_source === 'github') ? 'github' : 'gitcode';
 }
 // 更新源/更新方式即时落盘：设置页「检查更新」按界面当前选中值执行，
 // 避免「切了仓库没保存就检查」时静默沿用旧值（用户看到的与实际的必须一致）。
@@ -981,8 +985,10 @@ function applyUpdatePref(pref) {
   const cfg = loadConfig();
   let changed = false;
   if (pref && typeof pref === 'object') {
-    if (pref.update_source === 'github' || pref.update_source === 'gitee') {
-      if (cfg.update_source !== pref.update_source) { cfg.update_source = pref.update_source; changed = true; }
+    // 兼容历史值 'gitee'（老配置）：落库统一规范为 'gitcode'
+    if (pref.update_source === 'github' || pref.update_source === 'gitcode' || pref.update_source === 'gitee') {
+      const next = pref.update_source === 'github' ? 'github' : 'gitcode';
+      if (cfg.update_source !== next) { cfg.update_source = next; changed = true; }
     }
     if (pref.update_mode === 'auto' || pref.update_mode === 'notify') {
       if (cfg.update_mode !== pref.update_mode) { cfg.update_mode = pref.update_mode; changed = true; }
@@ -996,10 +1002,10 @@ function applyUpdatePref(pref) {
   }
   return { ok: true, changed, update_source: currentUpdateSource(), update_mode: cfg.update_mode === 'auto' ? 'auto' : 'notify' };
 }
-// 根据更新源生成检查地址：码云直连不打加速前缀，GitHub 走原加速链
+// 根据更新源生成检查地址：GitCode 直连不打加速前缀，GitHub 走原加速链
 function updateCheckUrls() {
   if (currentUpdateSource() === 'github') return accelUrls(UPDATE_API_URL);
-  return [GITEE_API_URL];
+  return [GITCODE_API_URL];
 }
 // GitHub 加速前缀链：许多机器直连 GitHub 慢/不稳，更新检查与下载按序尝试各加速站（实测
 // gh-proxy.com 最快），全部不可达最后回退直连；增删/换加速站只需改 UPDATE_PROXIES
@@ -1131,9 +1137,9 @@ async function checkForUpdate(opts) {
     const tag = String(data.tag_name || '').replace(/^v/i, '');
     const assets = Array.isArray(data.assets) ? data.assets : [];
     // 优先匹配正式便携包资产（Video-Lab-<版本>-x64-Portable.zip）；
-    // Gitee / GitHub 会自动附带源码归档（如 v1.4.6.zip），须排除以免误下载源码包
-    // Gitee 分卷场景：便携 zip 超 100MB 上传不了，按 xxx.zip.001/.002 分卷上传，
-    // 无单包时收集同组全部分卷（序号连续、≥2 卷）供下载后拼回完整 zip
+    // GitCode / GitHub 均会自动附带源码归档（如 v1.4.6.zip），须排除以免误下载源码包
+    // 历史分卷兼容：老版本（≤2.5.0）发布在 Gitee 时因单附件 100MB 限制，便携包曾按
+    // xxx.zip.001/.002 分卷上传；GitCode 附件上限宽裕、今后不再分卷，此处保留识别能力以兼容旧资产
     const portableRe = /^Video-Lab-.*-x64-Portable\.zip$/i;
     const partRe = /^(Video-Lab-.*-x64-Portable\.zip)\.(\d{3,})$/i;
     let asset = assets.find((a) => portableRe.test(String(a.name || ''))) || null;
@@ -1538,7 +1544,7 @@ function buildHttpExtraRoutes() {
         auto_check_update: c.auto_check_update !== false,
         check_update_daily: c.check_update_daily === true,
         check_update_hour: (() => { const h = parseInt(c.check_update_hour, 10); return (h >= 0 && h <= 23) ? h : 9; })(),
-        update_source: c.update_source === 'github' ? 'github' : 'gitee',
+        update_source: c.update_source === 'github' ? 'github' : 'gitcode',
         update_mode: c.update_mode === 'auto' ? 'auto' : 'notify',
         config_storage: c.config_storage === 'appdata' ? 'appdata' : 'program',
         config_path_program: path.dirname(programConfigPath()),
@@ -1578,7 +1584,7 @@ function buildHttpExtraRoutes() {
         if (typeof s.autostart === 'boolean') cfg.autostart = s.autostart;
       mergeAppSettings(cfg, s);   // 与软件端 IPC 路径共用同一份合入逻辑
         if (s.close_behavior === 'exit' || s.close_behavior === 'tray') cfg.close_behavior = s.close_behavior;
-        if (s.update_source === 'github' || s.update_source === 'gitee') cfg.update_source = s.update_source;
+        if (s.update_source === 'github' || s.update_source === 'gitcode' || s.update_source === 'gitee') cfg.update_source = s.update_source === 'github' ? 'github' : 'gitcode';
         if (s.update_mode === 'auto' || s.update_mode === 'notify') cfg.update_mode = s.update_mode;
         if (s.http_port !== undefined && s.http_port !== null) { const p = parseInt(s.http_port, 10); if (p > 0 && p < 65536) cfg.http_port = p; }
         if (typeof s.http_token === 'string') { const tk = s.http_token.trim(); if (tk.length >= 8 && tk.length <= 64) cfg.http_token = tk; }
@@ -1870,7 +1876,7 @@ function registerIpc() {
       auto_check_update: c.auto_check_update !== false,
       check_update_daily: c.check_update_daily === true,
       check_update_hour: (() => { const h = parseInt(c.check_update_hour, 10); return (h >= 0 && h <= 23) ? h : 9; })(),
-      update_source: c.update_source === 'github' ? 'github' : 'gitee',
+      update_source: c.update_source === 'github' ? 'github' : 'gitcode',
       update_mode: c.update_mode === 'auto' ? 'auto' : 'notify',
       config_storage: c.config_storage === 'appdata' ? 'appdata' : 'program',
       config_path_program: path.dirname(programConfigPath()),   // 显示目录（含引导文件与三库）
@@ -1907,7 +1913,7 @@ function registerIpc() {
       if (s.check_update_hour !== undefined && s.check_update_hour !== null) { const h = parseInt(s.check_update_hour, 10); if (h >= 0 && h <= 23) cfg.check_update_hour = h; }
       if (typeof s.autostart === 'boolean') cfg.autostart = s.autostart;
       if (s.close_behavior === 'exit' || s.close_behavior === 'tray') cfg.close_behavior = s.close_behavior;
-      if (s.update_source === 'github' || s.update_source === 'gitee') cfg.update_source = s.update_source;
+      if (s.update_source === 'github' || s.update_source === 'gitcode' || s.update_source === 'gitee') cfg.update_source = s.update_source === 'github' ? 'github' : 'gitcode';
       if (s.update_mode === 'auto' || s.update_mode === 'notify') cfg.update_mode = s.update_mode;
       if (s.http_port !== undefined && s.http_port !== null) { const p = parseInt(s.http_port, 10); if (p > 0 && p < 65536) cfg.http_port = p; }
       if (typeof s.http_token === 'string') { const tk = s.http_token.trim(); if (tk.length >= 8 && tk.length <= 64) cfg.http_token = tk; }

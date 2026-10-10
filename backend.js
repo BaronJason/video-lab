@@ -90,7 +90,7 @@ const DEFAULT_CONFIG = {
   auto_check_update: true,    // 启动时自动检查更新
   check_update_daily: false,  // 每日定时检查更新（整点触发，需 app 保持运行）
   check_update_hour: 9,       // 每日定时检查更新时间（24 小时制整点 0-23，默认 9）
-  update_source: 'gitee',     // 更新源：gitee=码云 release / github=GitHub release，默认码云
+  update_source: 'gitcode',   // 更新源：gitcode=GitCode release / github=GitHub release，默认 GitCode
   update_mode: 'notify',      // 更新方式：notify=有新版本仅提醒（默认）/ auto=自动检查并下载
   config_storage: 'program',  // 配置文件保存位置：program=程序所在目录 / appdata=%APPDATA%\Video Lab
   http_port: 9527,            // 浏览器访问端口（0-65535，默认 9527）

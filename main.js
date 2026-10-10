@@ -1305,30 +1305,28 @@ async function checkForUpdate(opts) {
       ok: true, current: APP_VERSION, latest: tag || '', hasUpdate,
       url: asset ? asset.browser_download_url : (parts.length ? parts[0].url : ''),
       size: asset ? asset.size : parts.reduce((s, p) => s + (p.size || 0), 0),
-      parts, sha256, assetName, error: ''
+      parts, sha256, sha512: '', assetName, error: ''
     };
     // 完整性校验依据补齐：GitCode 的 release 资产不带 digest / size（实测 2026-10-10）→
-    // 回退读同 release 内的校验依据文件（发布时生成，含安装包 size + sha256），供下载后校验。
-    // A4：文件名优先 update-info.yml（新；Setup 的 size+sha256），不可用时回退旧名 portable-info.yml
-    //   —— 兼容已发布的历史 Release，老资产仍能拿到校验依据。
+    // **便携分发**（唯一走自研下载的形态：下 Setup.exe）从**同 release 的 latest.yml** 取 sha512。
+    // ⚠ 不再自造 update-info.yml —— Setup 的校验依据 latest.yml 里本来就有（用户 2026-10-10 指出）；
+    //   它缺的 size 由下载层兜底：netDownload 用响应头 Content-Length 作总长度，进度不受影响。
+    // ⚠ 也不再读 portable-info.yml（2.5.1 开发期间临时引入）：它当初是为「便携版下载便携包」补依据，
+    //   而 A4 起便携分发改下 Setup、非便携分发直接走 electron-updater（不来自研下载），该分支已无消费者。
     // ⚠ 两源地址形式不同：GitHub 用 releases/latest/download；**GitCode 必须带 tag**
     //   （实测 GitCode 的 latest/download 会返回 HTML 页面而非文件）。
-    if (asset && !info.sha256) {
-      for (const nm of ['update-info.yml', 'portable-info.yml']) {
-        try {
-          const piUrl = currentUpdateSource() === 'github'
-            ? 'https://github.com/' + GITHUB_REPO + '/releases/latest/download/' + nm
-            : 'https://gitcode.com/' + GITCODE_REPO + '/releases/download/' + tagRaw + '/' + nm;
-          const pi = await netGet(piUrl, 8000);
-          if (pi.status !== 200) { writeUpdateLog('校验依据 ' + nm + ' 不可用（HTTP ' + pi.status + '），试下一个'); continue; }
-          const txt = pi.body.toString('utf-8');
-          const mh = /(?:^|\n)sha256:\s*([0-9a-f]{64})/i.exec(txt);
-          const ms = /(?:^|\n)size:\s*(\d+)/.exec(txt);
-          if (mh) { info.sha256 = mh[1].toLowerCase(); writeUpdateLog('已从 ' + nm + ' 取得 sha256（资产无 digest 时回退）'); }
-          if (ms && !info.size) info.size = parseInt(ms[1], 10) || 0;
-          break;   // 该文件可用即止（同 release 内两个文件内容同源，无必要再试旧名）
-        } catch (e) { writeUpdateLog(nm + ' 读取失败（仅少一层校验依据，不影响更新）：' + ((e && e.message) || e)); }
-      }
+    if (portableDist && asset && !info.sha512) {
+      const base = currentUpdateSource() === 'github'
+        ? 'https://github.com/' + GITHUB_REPO + '/releases/latest/download/'
+        : 'https://gitcode.com/' + GITCODE_REPO + '/releases/download/' + tagRaw + '/';
+      try {
+        const lr = await netGet(base + 'latest.yml', 8000);
+        if (lr.status === 200) {
+          const got = parseLatestYml(lr.body.toString('utf-8'), assetName);
+          if (got && got.sha512) { info.sha512 = got.sha512; writeUpdateLog('已从 latest.yml 取得 sha512（资产无 digest 时回退）'); }
+          else writeUpdateLog('latest.yml 内未找到与本资产匹配的 sha512');
+        } else writeUpdateLog('latest.yml 不可用（HTTP ' + lr.status + '），本次无哈希依据');
+      } catch (e) { writeUpdateLog('latest.yml 读取失败（仅少一层校验依据，不影响更新）：' + ((e && e.message) || e)); }
     }
     lastUpdateInfo = info;
     writeUpdateLog('检查成功：current=' + APP_VERSION + ' latest=v' + tag + ' hasUpdate=' + hasUpdate + ' (' + (Date.now() - t0) + 'ms)');
@@ -1379,6 +1377,45 @@ function sha256File(filePath) {
     stream.on('error', reject);
   });
 }
+// 计算文件 sha512（base64）—— 与 electron-builder 生成的 latest.yml 里的 sha512 同格式，可直接字符串比对
+function sha512Base64File(filePath) {
+  return new Promise((resolve, reject) => {
+    const crypto = require('crypto');
+    const hash = crypto.createHash('sha512');
+    const stream = fs.createReadStream(filePath);
+    stream.on('data', (d) => hash.update(d));
+    stream.on('end', () => resolve(hash.digest('base64')));
+    stream.on('error', reject);
+  });
+}
+// 解析 electron-builder 生成的 latest.yml，取指定文件名的 sha512（base64）。
+// 结构形如：
+//   version: 2.5.0
+//   files:
+//     - url: Video-Lab-2.5.0-x64-Setup.exe
+//       sha512: xxxx==
+//   path: Video-Lab-2.5.0-x64-Setup.exe
+//   sha512: xxxx==
+// 按行解析（不引入 yaml 依赖）：先按 `- url:` 分组，再取组内 sha512；wantName 命中优先，
+// 否则退回「任意带 sha512 的条目」；顶层 sha512 作为最后兜底。
+function parseLatestYml(txt, wantName) {
+  const out = [];
+  let cur = null;
+  for (const ln of String(txt || '').split(/\r?\n/)) {
+    let m = /^\s*-\s*url:\s*(\S+)/.exec(ln);
+    if (m) { cur = { url: m[1], sha512: '' }; out.push(cur); continue; }
+    m = /^\s*sha512:\s*(\S+)/.exec(ln);
+    if (m) {
+      if (cur && !cur.sha512) cur.sha512 = m[1];
+      else if (!cur) out.push({ url: '', sha512: m[1] });   // 顶层 sha512（files 为空时）
+    }
+  }
+  if (wantName) {
+    const hit = out.find((x) => x.url === wantName && x.sha512);
+    if (hit) return hit;
+  }
+  return out.find((x) => x.sha512) || null;
+}
 // 下载最新便携包到程序根目录（便携版：用户自行关闭应用后解压覆盖）。
 // 支持断点续传 + 自动重试（共 4 次尝试）：网络中断保留部分文件续传，哈希校验失败清空重下
 async function downloadUpdate(info, onProgress, onStatus) {
@@ -1413,11 +1450,17 @@ async function downloadUpdate(info, onProgress, onStatus) {
       if (!dl) throw new Error(accelErr || '下载失败');
       if (dl.complete) return { ok: true, zipPath };
       const size = (() => { try { return fs.statSync(zipPath).size; } catch (e) { return 0; } })();
-      // 完整性：优先 sha256（release 资产 digest），无则退回字节数比对
-      if (info.sha256) {
+      // 完整性：sha512（latest.yml，便携分发下 Setup）与 sha256（release digest 或 portable-info.yml）取其一；
+      // 两者都没有才退回字节数比对（下载层已用 Content-Length 兜底总长度）
+      if (info.sha512 || info.sha256) {
         if (onStatus) onStatus('正在校验更新包完整性…');
-        const actual = await sha256File(zipPath);
-        if (actual !== String(info.sha256).toLowerCase()) throw new Error('哈希校验失败：期望 ' + String(info.sha256).slice(0, 12) + '… 实际 ' + actual.slice(0, 12) + '…');
+        if (info.sha512) {
+          const a512 = await sha512Base64File(zipPath);
+          if (a512 !== String(info.sha512)) throw new Error('哈希校验失败：期望 ' + String(info.sha512).slice(0, 12) + '… 实际 ' + a512.slice(0, 12) + '…');
+        } else {
+          const actual = await sha256File(zipPath);
+          if (actual !== String(info.sha256).toLowerCase()) throw new Error('哈希校验失败：期望 ' + String(info.sha256).slice(0, 12) + '… 实际 ' + actual.slice(0, 12) + '…');
+        }
       } else if (info.size && size !== info.size) {
         throw new Error('下载大小不匹配：' + size + '/' + info.size);
       }
@@ -1477,10 +1520,16 @@ async function downloadUpdateParts(info, zipPath, onProgress, onStatus) {
       for (const part of parts) { try { fs.unlinkSync(partDst(part)); } catch (e) {} }
       const size = (() => { try { return fs.statSync(zipPath).size; } catch (e) { return 0; } })();
       if (total && size !== total) throw new Error('分卷合并后大小不匹配：' + size + '/' + total);
-      if (info.sha256) {
+      // 分卷场景只出现在便携包（latest.yml 不含它）→ 正常只有 sha256；此处一并兼容 sha512 以防万一
+      if (info.sha512 || info.sha256) {
         if (onStatus) onStatus('正在校验更新包完整性…');
-        const actual = await sha256File(zipPath);
-        if (actual !== String(info.sha256).toLowerCase()) throw new Error('哈希校验失败：期望 ' + String(info.sha256).slice(0, 12) + '… 实际 ' + actual.slice(0, 12) + '…');
+        if (info.sha512) {
+          const a512 = await sha512Base64File(zipPath);
+          if (a512 !== String(info.sha512)) throw new Error('哈希校验失败：期望 ' + String(info.sha512).slice(0, 12) + '… 实际 ' + a512.slice(0, 12) + '…');
+        } else {
+          const actual = await sha256File(zipPath);
+          if (actual !== String(info.sha256).toLowerCase()) throw new Error('哈希校验失败：期望 ' + String(info.sha256).slice(0, 12) + '… 实际 ' + actual.slice(0, 12) + '…');
+        }
       }
       writeUpdateLog('分卷下载合并完成：' + size + ' 字节，校验通过（尝试 ' + attempt + '/4，' + (Date.now() - t0) + 'ms）');
       return { ok: true, zipPath };

@@ -455,7 +455,7 @@
       e.stopPropagation();
       var cur = card.__task || t;
       if (cur.status === 'paused') confirmResume(cur);
-      else confirmPause(cur);
+      else confirmPause(cur, e.currentTarget);
     });
     // 已结束任务单行删除：已完成/已停止任务弹出与清除按钮同款的清除方式弹窗
     header.querySelector('.task-card__del').addEventListener('click', function (e) {
@@ -957,11 +957,19 @@
     });
   }
 
-  function confirmPause(t) {
-    call('pause_task', t.id).then(function (r) {
-      if (!r || !r.ok) { toast('暂停失败：' + ((r && r.error) || '未知错误'), true); return; }
-      if (r.soft) toast('当前成片完成后暂停，剩余部分可「继续任务」续跑');
-    }).catch(function (e) { toast('暂停失败：' + e.message, true); });
+  // 暂停是不可逆地打断当前推进（运行时为软暂停：当前成片完成后才停），故先做二次确认
+  function confirmPause(t, anchor) {
+    var running = t.status === 'running';
+    var msg = running
+      ? '任务「' + (t.title || t.id) + '」将在当前成片完成后暂停，剩余成片稍后可用「继续任务」续跑。'
+      : '任务「' + (t.title || t.id) + '」将从执行队列移出，稍后可用「继续任务」恢复。';
+    confirmPopover({ title: '暂停任务', message: msg, okLabel: '暂停' }, anchor).then(function (ok) {
+      if (!ok) return;
+      call('pause_task', t.id).then(function (r) {
+        if (!r || !r.ok) { toast('暂停失败：' + ((r && r.error) || '未知错误'), true); return; }
+        if (r.soft) toast('当前成片完成后暂停，剩余部分可「继续任务」续跑');
+      }).catch(function (e) { toast('暂停失败：' + e.message, true); });
+    });
   }
 
   function confirmResume(t) {

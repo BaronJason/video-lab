@@ -3240,9 +3240,11 @@ class Api {
     try {
       if (Array.isArray(t.failedIndices) && t.failedIndices.length) {
         task.failedIndices = t.failedIndices.filter((n) => Number.isInteger(n) && n > 0).slice();
+        task._inheritedFailIndices = task.failedIndices.length;
       }
       if (Array.isArray(t.failedVideos) && t.failedVideos.length) {
         task.failedVideos = t.failedVideos.slice();
+        task._inheritedFailVideos = task.failedVideos.length;
       }
       // ── 本批进度视角：续跑任务本次只做 N 片，但卡片要能同时表达「本批」的完成度 ──
       // batchTotal    = 本批总量（整批要出的片数；续跑不改变它）
@@ -4966,6 +4968,16 @@ class Api {
             task.failReason = '';
             task.resumeIdx = 1;
             task.log.push('[软暂停生效] 当前成片已完成并保留，任务转入暂停队列第 1 位；点击「继续任务」接续]');
+          }
+          // 续跑补做成功：摘掉继承来的失败记录（引擎本次新报的失败保留）——
+          // 那些记录的是上一次的缺口，本次已补回；留着会让任务被判成 error 并提示「继续制作」，
+          // 把用户引向无意义的反复续跑
+          if (code === 0 && task._inheritedFailVideos > 0) {
+            task.failedVideos = (task.failedVideos || []).slice(task._inheritedFailVideos);
+            task.failedIndices = (task.failedIndices || []).slice(task._inheritedFailIndices || 0);
+            task._inheritedFailVideos = 0;
+            task._inheritedFailIndices = 0;
+            if (!task.failedVideos.length) task.failReason = '';
           }
           if (code === 0 && Array.isArray(task.failedVideos) && task.failedVideos.length && (task.type === 'replica' || task.type === 'mask' || task.type === 'batch')) {
             status = 'error';

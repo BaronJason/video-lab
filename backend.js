@@ -2434,16 +2434,28 @@ class Api {
       cleanableBytes: cl.reduce((s, it) => s + it.bytes, 0),
     };
   }
-  // 执行清理：一律进回收站（可还原，遵循项目硬约束）；清完重新扫描，返回最新状态
-  dataDirClean(keys) {
-    const want = Array.isArray(keys) ? keys.map(String) : [];
+  // 执行清理：一律进回收站（可还原，遵循项目硬约束）；清完重新扫描，返回最新状态。
+  // ⚠ 刻意**不用** `_recycleFile`：它为了"让原路径立刻消失"会先把文件改名成 `*.bak`，而送站是异步的 ——
+  //   后果有二：① 紧接的复扫仍会看到那个 `*.bak`（又被当成「配置备份残留」列出来，读数不准）；
+  //   ② 送站失败时残渣会永久留在目录里，下次扫描继续列出，形成清不掉的死循环。
+  //   这里直接对**原路径**送站并 **await 真实结果**：成功才算移除，失败则保留原文件（下次仍可重试），
+  //   既不产生改名残渣，也不静默永久删除。
+  async dataDirClean(keys) {
+    // 容错：单个键也可以直接传字符串（避免"参数形状不对 → 静默清 0 项"的哑失败）
+    const want = (Array.isArray(keys) ? keys : (keys === undefined || keys === null ? [] : [keys])).map(String);
     const scan = this.dataDirScan();
     const picked = scan.items.filter((it) => want.indexOf(it.key) >= 0 && it.cleanable && it.files.length);
     let removed = 0, freed = 0;
     for (const it of picked) {
       for (const f of it.files) {
+        if (!fs.existsSync(f)) continue;
         const sz = this._ddSize(f);
-        if (this._recycleFile(f)) { removed++; freed += sz; }
+        let ok = false;
+        try {
+          const el = require('electron');
+          if (el && el.shell && typeof el.shell.trashItem === 'function') { await el.shell.trashItem(f); ok = true; }
+        } catch (e) { ok = false; }   // 送站失败：保留原文件，绝不静默永久删除
+        if (ok) { removed++; freed += sz; }
       }
     }
     // 空目录顺手收掉：只收 preview —— txt-snap 里可能还有在跑任务的快照，绝不能整个动
@@ -2456,7 +2468,10 @@ class Api {
         '清理数据目录 · 移除 ' + removed + ' 项 · 释放 ' + this._humanSize(freed),
         { keys: picked.map((it) => it.key), removed, freed });
     } catch (e) {}
-    return Object.assign({ ok: true, removed, freed }, this.dataDirScan());
+    // wanted 一并回传：调用方据此区分「没勾选任何项」与「勾了但都被保护/已不存在」——
+    // 后者若默不作声，就成了又一次静默失败。
+    const after = this.dataDirScan();
+    return Object.assign({ ok: true, removed, freed, wanted: want.length }, after);
   }
 
   // 启动后空闲期的失效清理：**入队**（不分冷热），由空闲队列串行 + 自适应节流执行；

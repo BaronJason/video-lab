@@ -923,7 +923,12 @@
       api.data_dir_clean(keys).then(function (r) {
         bDDClean.disabled = false;
         bDDClean.textContent = '清理勾选项';
-        toast('已清理：移除 ' + ((r && r.removed) || 0) + ' 项，释放 ' + fmtSize((r && r.freed) || 0), 'ok');
+        // 一项都没动就说清楚原因，别让「清理成功」的吐司掩盖静默失败
+        if (!r || !r.removed) {
+          toast('没有可清理的内容：勾选项可能已被清理，或处于保留状态（在跑任务的快照 / 在用组件）', true);
+        } else {
+          toast('已清理：移除 ' + r.removed + ' 项，释放 ' + fmtSize(r.freed || 0), 'ok');
+        }
         ddRender(r);
       }).catch(function (e) {
         bDDClean.disabled = false;

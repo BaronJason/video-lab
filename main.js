@@ -1925,7 +1925,11 @@ function buildHttpExtraRoutes() {
     get_app_version: () => APP_VERSION,
     // A6 数据目录清理（HTTP 侧同样开放，便于浏览器与脚本调用；扫描为只读，清理一律进回收站）
     data_dir_scan: () => api.dataDirScan(),
-    data_dir_clean: (args) => api.dataDirClean(args && args[0]),
+    // HTTP 侧参数是「按位置展开的数组」→ 键清单须写成 [["a","b"]]。
+    // ⚠ 但直白的 ["a","b"] 极易写出（实测就栽在这：args[0] 拿到字符串 → Array.isArray 不成立
+    //   → 静默清 0 项、界面无任何反馈）。故两种写法都接受，宁可容错，不要静默失败。
+    data_dir_clean: (args) => api.dataDirClean(
+      Array.isArray(args) && Array.isArray(args[0]) ? args[0] : args),
     // 返回带 token 的浏览器访问地址（含真实 token）；HTTP 侧需要自身已带 token 才能调用（本机防护），
     // Electron 本体侧 ipcMain 无需 token —— 用于设置页/开发测试获取链接
     get_browser_url: () => {
